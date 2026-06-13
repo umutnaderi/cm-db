@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Championship Manager DB Browser</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Old database viewer</p>
+          <h1>Championship Manager DB</h1>
+        </div>
+        <div class="database-tools">
+          <label class="database-picker">
+            <span>Database</span>
+            <select id="databaseSelect" disabled>
+              <option>Loading databases...</option>
+            </select>
+          </label>
+          <div class="status" id="status">Loading database...</div>
+        </div>
+      </header>
+
+      <section class="controls" aria-label="Search filters">
+        <label>
+          <span>Name or surname</span>
+          <input id="nameSearch" type="search" placeholder="Francesco Totti">
+        </label>
+        <label>
+          <span>Club</span>
+          <select id="clubFilter">
+            <option value="">All clubs</option>
+          </select>
+        </label>
+        <label>
+          <span>League</span>
+          <select id="leagueFilter">
+            <option value="">All leagues</option>
+          </select>
+        </label>
+        <label>
+          <span>Nation</span>
+          <select id="nationFilter">
+            <option value="">All nations</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="summary" aria-label="Database summary">
+        <div>
+          <span id="playerCount">-</span>
+          <p>staff records</p>
+        </div>
+        <div>
+          <span id="clubCount">-</span>
+          <p>clubs</p>
+        </div>
+        <div>
+          <span id="leagueCount">-</span>
+          <p>leagues</p>
+        </div>
+        <div>
+          <span id="nationCount">-</span>
+          <p>nations</p>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="results" aria-label="Search results">
+          <div class="results-head">
+            <h2>Players and Staff</h2>
+            <span id="resultCount">0 shown</span>
+          </div>
+          <div id="resultsList" class="results-list"></div>
+        </aside>
+
+        <article class="profile" id="profile">
+          <div class="empty-state">
+            Select a record to view the CM-style profile.
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

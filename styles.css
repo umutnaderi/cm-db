@@ -14,6 +14,21 @@
   font-weight: 400;
 }
 
+@font-face {
+  font-family: "Comfortaa";
+  src: url("Comfortaa-Bold.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Agenor Neue";
+  src: url("AgenorNeue-Regular.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
 :root {
   color-scheme: dark;
   --page: #111312;
@@ -114,10 +129,15 @@ h1 {
 
 .database-picker select {
   min-height: 36px;
-  font-family: "Orpheis", "Madeleina Sans", sans-serif;
+  font-family: "Agenor Neue", sans-serif;
+    font-weight: 400;
   letter-spacing: 0.06em;
 }
 
+#resultCount {
+  font-family: "Agenor Neue", sans-serif;
+  font-weight: 400;
+}
 .controls {
   display: grid;
   grid-template-columns: 1.25fr 1fr 1fr 1fr;
@@ -172,8 +192,9 @@ select:focus {
 .summary span {
   display: inline;
   color: var(--text);
+  font-family: "Agenor Neue", sans-serif;
   font-size: 0.95rem;
-  font-weight: 900;
+  font-weight: 400;
 }
 
 .summary p {
@@ -291,7 +312,9 @@ select:focus {
 }
 
 .profile-player-name {
-  font-weight: 1000;
+  font-family: "Comfortaa", sans-serif;
+    font-weight: 700;
+    font-size: 1.7rem;
 }
 
 .profile-club-name {
@@ -304,6 +327,7 @@ select:focus {
   right: 0;
   display: inline-flex;
   gap: 5px;
+  top: 36px;
 }
 
 .season-link {
@@ -313,7 +337,8 @@ select:focus {
   border-radius: 5px;
   color: var(--accent-2);
   cursor: pointer;
-  font-family: "Orpheis", sans-serif;
+  font-family: "Agenor Neue", sans-serif;
+    font-weight: 400;
   font-size: 0.7rem;
   line-height: 1;
 }
@@ -323,6 +348,14 @@ select:focus {
   color: var(--text);
 }
 
+.season-link.is-current,
+.season-link.is-current:hover {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #111512;
+  cursor: default;
+  opacity: 1;
+}
 .profile-full-name {
   color: var(--accent-2);
   font-size: 0.78rem;
@@ -342,6 +375,9 @@ select:focus {
   border-bottom: 1px solid var(--line-soft);
 }
 
+.staff-tabs {
+  grid-template-columns: 1fr;
+}
 .tabs button {
   padding: 10px 8px;
   background: transparent;
@@ -381,6 +417,9 @@ select:focus {
   gap: 0;
 }
 
+.staff-facts {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .fact,
 .rep-box {
   min-width: 0;
@@ -408,8 +447,36 @@ select:focus {
   color: var(--text);
 }
 
+.fact-filter {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  padding: 0;
+  overflow-wrap: anywhere;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
+.fact-filter:hover,
+.fact-filter:focus-visible {
+  color: var(--accent-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.fact-filter:focus-visible {
+  outline: 1px solid var(--accent-2);
+  outline-offset: 3px;
+}
+
 .international-fact strong {
-  font-family: "Madeleina Sans", sans-serif;
+  font-family: "Agenor Neue", sans-serif;
+    font-weight: 400;
 }
 
 .reputation {
@@ -437,9 +504,10 @@ select:focus {
 .rep-box strong {
   display: block;
   margin-top: 4px;
-  color: var(--accent);
-  font-family: "Orpheis", "Madeleina Sans", sans-serif;
+  color: var(--muted);
+    font-family: "Agenor Neue", sans-serif;
   font-size: 1rem;
+  font-weight: 400;
 }
 
 .history-view {
@@ -463,7 +531,9 @@ select:focus {
 
 .history-heading span {
   color: var(--muted);
+  font-family: "Agenor Neue", sans-serif;
   font-size: 0.76rem;
+  font-weight: 400;
 }
 
 .history-table-wrap {
@@ -494,11 +564,16 @@ select:focus {
 
 .history-table .history-number {
   width: 76px;
-  font-family: "Orpheis", "Madeleina Sans", sans-serif;
+  font-family: "Agenor Neue", sans-serif;
+    font-weight: 400;
   letter-spacing: 0.06em;
   text-align: right;
 }
 
+.history-table tbody td:first-child {
+  font-family: "Agenor Neue", sans-serif;
+  font-weight: 400;
+}
 .history-table tbody tr:hover {
   background: rgba(255, 255, 255, 0.025);
 }
@@ -647,6 +722,28 @@ select:focus {
   background: #c2841a;
 }
 
+.position-marker.weak {
+  background: #b44f10;
+}
+
+.position-marker.awkward {
+  background: #b0210b;
+  opacity: 0.3;
+}
+
+.position-marker.very-awkward {
+  background: #831c2a;
+  opacity: 0.2;
+}
+
+.position-marker.free-role-marker {
+  z-index: 6;
+  border-color: rgba(9, 16, 11, 0.82);
+  font-family: "Agenor Neue", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  opacity: 1;
+}
 .position-marker.ghost {
   z-index: 0;
   width: 19px;
@@ -667,6 +764,116 @@ select:focus {
     0 2px 8px rgba(0, 0, 0, 0.55);
 }
 
+.position-tooltip::before,
+.position-tooltip::after {
+  position: absolute;
+  z-index: 20;
+  left: 50%;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.position-tooltip::before {
+  top: calc(100% + 3px);
+  width: 0;
+  height: 0;
+  border: 5px solid transparent;
+  border-bottom-color: rgba(8, 11, 9, 0.94);
+  content: "";
+  transform: translate(-50%, -3px);
+}
+
+.position-tooltip::after {
+  top: calc(100% + 13px);
+  width: max-content;
+  max-width: 210px;
+  padding: 6px 9px;
+  background: rgba(8, 11, 9, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  color: #fff;
+  content: attr(data-info);
+  font-family: "Agenor Neue", sans-serif;
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+  transform: translate(-50%, -5px);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.42);
+}
+
+.position-tooltip.tooltip-align-left::before,
+.position-tooltip.tooltip-align-left::after {
+  left: -6px;
+  transform: translate(0, -5px);
+}
+
+.position-tooltip.tooltip-align-left::before {
+  left: 8px;
+}
+
+.position-tooltip.tooltip-align-right::before,
+.position-tooltip.tooltip-align-right::after {
+  right: -6px;
+  left: auto;
+  transform: translate(0, -5px);
+}
+
+.position-tooltip.tooltip-align-right::before {
+  right: 8px;
+}
+
+.position-tooltip.tooltip-above::before {
+  top: auto;
+  bottom: calc(100% + 3px);
+  border-top-color: rgba(8, 11, 9, 0.94);
+  border-bottom-color: transparent;
+  transform: translate(-50%, 3px);
+}
+
+.position-tooltip.tooltip-above::after {
+  top: auto;
+  bottom: calc(100% + 13px);
+  transform: translate(-50%, 5px);
+}
+
+.position-tooltip.tooltip-above.tooltip-align-left::before,
+.position-tooltip.tooltip-above.tooltip-align-left::after,
+.position-tooltip.tooltip-above.tooltip-align-right::before,
+.position-tooltip.tooltip-above.tooltip-align-right::after {
+  transform: translate(0, 5px);
+}
+
+.position-tooltip:hover,
+.position-tooltip:focus-visible {
+  z-index: 21;
+  outline: none;
+}
+
+.position-tooltip:hover::before,
+.position-tooltip:hover::after,
+.position-tooltip:focus-visible::before,
+.position-tooltip:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.position-tooltip.tooltip-align-left:hover::before,
+.position-tooltip.tooltip-align-left:hover::after,
+.position-tooltip.tooltip-align-right:hover::before,
+.position-tooltip.tooltip-align-right:hover::after,
+.position-tooltip.tooltip-align-left:focus-visible::before,
+.position-tooltip.tooltip-align-left:focus-visible::after,
+.position-tooltip.tooltip-align-right:focus-visible::before,
+.position-tooltip.tooltip-align-right:focus-visible::after {
+  transform: translate(0, 0);
+}
+
 .pitch-caption {
   display: flex;
   justify-content: center;
@@ -682,8 +889,9 @@ select:focus {
 
 .position-legend {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 16px;
+  gap: 7px 14px;
   margin-top: 7px;
   color: var(--muted);
   font-size: 0.7rem;
@@ -713,6 +921,17 @@ select:focus {
   background: #f59e0b;
 }
 
+.legend-dot.weak {
+  background: #ee7084;
+}
+
+.legend-dot.awkward {
+  background: #c8263f;
+}
+
+.legend-dot.very-awkward {
+  background: #45131a;
+}
 .position-values {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -791,8 +1010,9 @@ select:focus {
 
 .foot-option strong {
   color: var(--text);
-  font-family: "Orpheis", "Madeleina Sans", sans-serif;
+  font-family: "Agenor Neue", sans-serif;
   font-size: 0.95rem;
+  font-weight: 400;
 }
 
 .boot-badge {
@@ -804,16 +1024,28 @@ select:focus {
   border-radius: 50%;
 }
 
-.foot-option.strong .boot-badge {
-  color: #22c55e;
+.foot-option.natural .boot-badge {
+  color: #0ff166;
 }
 
-.foot-option.usable .boot-badge {
-  color: #d6c514;
+.foot-option.accomplished .boot-badge {
+  color: #53dfba;
+}
+
+.foot-option.limited .boot-badge {
+  color: #c2841a;
 }
 
 .foot-option.weak .boot-badge {
-  color: #59615c;
+  color: #b44f10;
+}
+
+.foot-option.awkward .boot-badge {
+  color: #b0210b;
+}
+
+.foot-option.very-awkward .boot-badge {
+  color: #831c2a;
 }
 
 .boot {
@@ -878,16 +1110,28 @@ select:focus {
   border-radius: 2px;
 }
 
-.foot-swatch.strong {
-  background: #22c55e;
+.foot-swatch.natural {
+  background: #0ff166;
 }
 
-.foot-swatch.usable {
-  background: #f59e0b;
+.foot-swatch.accomplished {
+  background: #53dfba;
+}
+
+.foot-swatch.limited {
+  background: #c2841a;
 }
 
 .foot-swatch.weak {
-  background: #59615c;
+  background: #b44f10;
+}
+
+.foot-swatch.awkward {
+  background: #b0210b;
+}
+
+.foot-swatch.very-awkward {
+  background: #831c2a;
 }
 
 .attribute-columns {
@@ -896,6 +1140,11 @@ select:focus {
   gap: 28px;
 }
 
+.staff-attribute-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 28px;
+}
 .attribute-group {
   min-width: 0;
 }
@@ -952,7 +1201,7 @@ select:focus {
   gap: 8px;
   min-height: 25px;
   align-items: center;
-  font-size: 0.84rem;
+  font-size: 0.9rem;
 }
 
 .rating span {
@@ -962,8 +1211,8 @@ select:focus {
 
 .rating strong {
   color: var(--accent-2);
-  font-family: "Orpheis", "Madeleina Sans", sans-serif;
-  font-weight: 900;
+  font-family: "Agenor Neue", sans-serif;
+    font-weight: 400;
   text-align: right;
 }
 
@@ -1010,6 +1259,7 @@ select:focus {
 
   .facts,
   .attribute-columns,
+                .staff-attribute-grid,
   .hidden-attribute-grid,
   .position-layout,
   .reputation {
@@ -1028,6 +1278,7 @@ select:focus {
   .workspace,
   .facts,
   .attribute-columns,
+                .staff-attribute-grid,
   .hidden-attribute-grid,
   .position-layout,
   .reputation {

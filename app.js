@@ -10,7 +10,7 @@ const TABLE_FILES = {
   nations: "nation.dat"
 };
 
-const PLAYER_ATTRIBUTE_LABELS = [
+const MODERN_PLAYER_ATTRIBUTE_LABELS = [
   "Acceleration",
   "Aggression",
   "Agility",
@@ -53,6 +53,16 @@ const PLAYER_ATTRIBUTE_LABELS = [
   "Versatility",
   "Vision",
   "Work Rate"
+];
+
+const CM4_EXTRA_ATTRIBUTE_LABELS = [
+  "First Touch",
+  "Eccentricity"
+];
+
+const PLAYER_ATTRIBUTE_LABELS = [
+  ...MODERN_PLAYER_ATTRIBUTE_LABELS,
+  ...CM4_EXTRA_ATTRIBUTE_LABELS,
 ];
 
 const POSITION_LABELS = [
@@ -110,6 +120,7 @@ const ATTRIBUTE_GROUPS = [
       "Crossing",
       "Dribbling",
       "Finishing",
+      "First Touch",
       "Free Kicks",
       "Heading",
       "Long Shots",
@@ -148,6 +159,7 @@ const ATTRIBUTE_GROUPS = [
       "Pace",
       "Stamina",
       "Strength",
+      "Eccentricity",
       "Handling",
       "One On Ones",
       "Reflexes"
@@ -160,7 +172,79 @@ const HIDDEN_ATTRIBUTE_LABELS = [
   "Dirtiness",
   "Important Matches",
   "Versatility",
-  "Injury Proneness"
+  "Injury Proneness",
+  "Adaptability",
+  "Ambition",
+  "Determination",
+  "Controversy",
+  "Loyalty",
+  "Pressure",
+  "Professionalism",
+  "Sportsmanship",
+  "Temperament",
+];
+
+const CM4_MENTAL_ATTRIBUTE_LABELS = [
+  "Adaptability",
+  "Ambition",
+  "Controversy",
+  "Loyalty",
+  "Pressure",
+  "Professionalism",
+  "Sportsmanship",
+  "Temperament",
+];
+
+const MODERN_MENTAL_ATTRIBUTE_LABELS = [
+  "Adaptability",
+  "Ambition",
+  "Determination",
+  "Loyalty",
+  "Pressure",
+  "Professionalism",
+  "Sportsmanship",
+  "Temperament",
+];
+
+const NON_PLAYING_ATTRIBUTE_LABELS = [
+  "Attacking",
+  "Business",
+  "Coaching",
+  "Coaching Goalkeepers",
+  "Coaching Technique",
+  "Directness",
+  "Discipline",
+  "Free Roles",
+  "Interference",
+  "Judging Ability",
+  "Judging Potential",
+  "Man Handling",
+  "Marking",
+  "Motivating",
+  "Offside",
+  "Patience",
+  "Physiotherapy",
+  "Pressing",
+  "Resources",
+  "Tactics",
+  "Youngsters",
+];
+
+const STAFF_JOB_LABELS = [
+  "Not set",
+  "Chairman",
+  "Managing Director",
+  "General Manager",
+  "Director of Football",
+  "Manager",
+  "Assistant Manager",
+  "Coach",
+  "Scout",
+  "Physio",
+  "Player",
+  "Player/Manager",
+  "Player/Assistant Manager",
+  "Player/Coach",
 ];
 
 const PITCH_ROLE_NAMES = {
@@ -180,6 +264,8 @@ const PITCH_ROLE_NAMES = {
   AML: "Attacking Midfielder - Left",
   AMC: "Attacking Midfielder - Centre",
   AMR: "Attacking Midfielder - Right",
+  LW: "Left Winger",
+  RW: "Right Winger",
   ST: "Striker - Centre"
 };
 
@@ -198,11 +284,13 @@ const PITCH_ROWS = {
   defensiveMidfield: 54,
   defence: 68,
   sweeper: 82,
-  goalkeeper: 96
+  goalkeeper: 94
 };
 
 const PITCH_SLOTS = [
+  { label: "LW", x: PITCH_LANES.left, y: PITCH_ROWS.striker },
   { label: "ST", x: PITCH_LANES.centre, y: PITCH_ROWS.striker },
+  { label: "RW", x: PITCH_LANES.right, y: PITCH_ROWS.striker },
   { label: "AML", x: PITCH_LANES.left, y: PITCH_ROWS.attackingMidfield },
   { label: "AMC", x: PITCH_LANES.centre, y: PITCH_ROWS.attackingMidfield },
   { label: "AMR", x: PITCH_LANES.right, y: PITCH_ROWS.attackingMidfield },
@@ -315,8 +403,12 @@ function configureDatabaseLayout(buffer, staffFileSize) {
     110: 97,
     157: 145
   }[staffRecordSize];
+  const nonPlayingDetailOffset = {
+    110: 105,
+    157: 153,
+  }[staffRecordSize];
 
-  if (!playerDetailOffset) {
+  if (!playerDetailOffset || !nonPlayingDetailOffset) {
     throw new Error(`Unsupported staff record size: ${staffRecordSize}`);
   }
 
@@ -325,13 +417,22 @@ function configureDatabaseLayout(buffer, staffFileSize) {
       count: baseStaff.count,
       size: staffRecordSize
     },
+    nonPlayingDetailSection: {
+      start: playerSection.start,
+      count: playerSection.count,
+      size: Math.round(
+        (detailSection.start - playerSection.start) / playerSection.count,
+      ),
+    },
     playerDetailSection: {
       start: detailSection.start,
       count: detailSection.count,
       size: Math.round((detailSectionEnd - detailSection.start) / detailSection.count)
     },
     staffFieldLayout: {
-      playerDetailOffset
+      playerDetailOffset,
+      nonPlayingDetailOffset,
+      jobOffset: 61,
     }
   };
 }
@@ -382,13 +483,18 @@ function parseDb1(buffer) {
     recordOffset += length;
   }
 
+  const recordStarts = [schemaOffset + 6, schemaOffset + 2];
+  const recordStart = recordStarts.find(
+    (candidate) => (buffer.byteLength - candidate) % recordOffset === 0,
+  ) ?? schemaOffset + 6;
+
   return {
     buffer,
     view,
     fieldsByName: new Map(fields.map((field) => [field.name, field])),
-    recordStart: schemaOffset + 6,
+    recordStart,
     recordSize: recordOffset,
-    count: Math.floor((buffer.byteLength - schemaOffset - 6) / recordOffset)
+    count: Math.floor((buffer.byteLength - recordStart) / recordOffset)
   };
 }
 
@@ -410,11 +516,28 @@ function readDb1Value(database, rowIndex, fieldName) {
   }
 
   if (field.length === 2) {
-    const value = database.view.getUint8(offset) * 100 + database.view.getUint8(offset + 1);
+    const value = database.view.getUint8(offset) * 128 + database.view.getUint8(offset + 1);
     return value <= 200 ? value : -1;
   }
 
   return database.view.getUint32(offset, true);
+}
+
+function readDb1Base128Value(database, rowIndex, fieldName) {
+  const field = database.fieldsByName.get(fieldName);
+
+  if (!field) {
+    return null;
+  }
+
+  const offset = database.recordStart + rowIndex * database.recordSize + field.offset;
+  let value = 0;
+
+  for (let index = 0; index < field.length; index += 1) {
+    value = value * 128 + database.view.getUint8(offset + index);
+  }
+
+  return value;
 }
 
 function parseLegacyDate(value) {
@@ -437,8 +560,9 @@ function legacyPositionValue(value) {
   return value >= 2 ? 20 : value === 1 ? 14 : 0;
 }
 
-function prepareLegacyDatabase(playersBuffer, teamsBuffer) {
-  const playersDatabase = parseDb1(playersBuffer);
+function prepareLegacyDatabase(playersBuffers, teamsBuffer, managersBuffer = null) {
+  const playerBuffers = Array.isArray(playersBuffers) ? playersBuffers : [playersBuffers];
+  const playerDatabases = playerBuffers.map(parseDb1);
   const teamsDatabase = parseDb1(teamsBuffer);
   const leaguesByName = new Map();
   const nationsByName = new Map();
@@ -464,8 +588,12 @@ function prepareLegacyDatabase(playersBuffer, teamsBuffer) {
   };
 
   for (let index = 0; index < teamsDatabase.count; index += 1) {
-    const name = readDb1Value(teamsDatabase, index, "UK Long Name");
-    const shortName = readDb1Value(teamsDatabase, index, "UK Short Name");
+    const name =
+      readDb1Value(teamsDatabase, index, "UK Long Name") ||
+      readDb1Value(teamsDatabase, index, "Long Name");
+    const shortName =
+      readDb1Value(teamsDatabase, index, "UK Short Name") ||
+      readDb1Value(teamsDatabase, index, "Short Name");
 
     if (!name && !shortName) {
       continue;
@@ -493,103 +621,197 @@ function prepareLegacyDatabase(playersBuffer, teamsBuffer) {
   });
 
   const attributeMap = {
-    Aggression: "Aggression",
-    "Big-Occasion": "Important Matches",
-    Consistency: "Consistency",
-    Determination: "Determination",
-    Dirtyness: "Dirtiness",
-    Dribbling: "Dribbling",
-    Flair: "Flair",
-    Heading: "Heading",
-    Influence: "Leadership",
-    "Inj Prone": "Injury Proneness",
-    Marking: "Marking",
-    "Off the ball": "Off the Ball",
-    Pace: "Pace",
-    Passing: "Passing",
-    Positioning: "Positioning",
-    "Set Pieces": "Free Kicks",
-    Shooting: "Finishing",
-    Stamina: "Stamina",
-    Strength: "Strength",
-    Tackling: "Tackling",
-    Technique: "Technique"
+    Adaptability: ["Adaptability"],
+    Aggression: ["Aggression"],
+    "Big-Occasion": ["Important Matches"],
+    Character: ["Ambition", "Professionalism", "Sportsmanship"],
+    Consistency: ["Consistency"],
+    Creativity: ["Vision"],
+    Determination: ["Determination"],
+    Dirtyness: ["Dirtiness"],
+    Dribbling: ["Dribbling"],
+    Flair: ["Flair"],
+    Heading: ["Heading", "Jumping"],
+    Influence: ["Leadership"],
+    "Inj Prone": ["Injury Proneness"],
+    Intelligence: ["Decisions"],
+    Marking: ["Marking"],
+    "Off the ball": ["Off the Ball"],
+    Pace: ["Pace", "Acceleration"],
+    Passing: ["Passing"],
+    Positioning: ["Positioning"],
+    "Set Pieces": ["Free Kicks", "Corners"],
+    Shooting: ["Finishing", "Long Shots"],
+    Stamina: ["Stamina"],
+    Strength: ["Strength"],
+    Tackling: ["Tackling"],
+    Technique: ["Technique"],
   };
   const staff = [];
 
-  for (let index = 0; index < playersDatabase.count; index += 1) {
-    const firstName = readDb1Value(playersDatabase, index, "First Name");
-    const secondName = readDb1Value(playersDatabase, index, "Second Name");
-    const displayName = [firstName, secondName].filter(Boolean).join(" ");
+  for (const playersDatabase of playerDatabases) {
+    for (let index = 0; index < playersDatabase.count; index += 1) {
+      const firstName = readDb1Value(playersDatabase, index, "First Name");
+      const secondName = readDb1Value(playersDatabase, index, "Second Name");
+      const displayName = [firstName, secondName].filter(Boolean).join(" ");
 
-    if (!displayName) {
-      continue;
-    }
-
-    const nationName = readDb1Value(playersDatabase, index, "Nation");
-    const nationRecord = nation(nationName);
-    const clubName = readDb1Value(playersDatabase, index, "Current Club");
-    const club = clubsByName.get(normalizeSearchText(clubName));
-    const attributes = PLAYER_ATTRIBUTE_LABELS.map((label) => ({ label, value: null }));
-
-    Object.entries(attributeMap).forEach(([legacyLabel, label]) => {
-      const attribute = attributes.find((item) => item.label === label);
-
-      if (attribute) {
-        attribute.value = readDb1Value(playersDatabase, index, legacyLabel);
+      if (!displayName) {
+        continue;
       }
-    });
 
-    const ratings = {
-      squadNumber: 0,
-      currentAbility: readDb1Value(playersDatabase, index, "Ability"),
-      potentialAbility: readDb1Value(playersDatabase, index, "Potential"),
-      homeReputation: readDb1Value(playersDatabase, index, "Reputation"),
-      currentReputation: readDb1Value(playersDatabase, index, "Reputation"),
-      worldReputation: readDb1Value(playersDatabase, index, "Reputation"),
-      positions: [
-        ["Goalkeeper", "Goalkeeper"],
-        ["Sweeper", "Sweeper"],
-        ["Defender", "Defence"],
-        ["Def Midfielder", "Anchor"],
-        ["Midfielder", "Midfield"],
-        ["Att Midfielder", "Support"],
-        ["Attacker", "Attack"],
-        ["Wing back", null]
-      ].map(([label, legacyLabel]) => ({
-        label,
-        value: legacyLabel ? legacyPositionValue(readDb1Value(playersDatabase, index, legacyLabel)) : 0
-      })),
-      sides: [
-        ["Right side", "Right Sided"],
-        ["Left side", "Left Sided"],
-        ["Central", "Central"],
-        ["Free role", null]
-      ].map(([label, legacyLabel]) => ({
-        label,
-        value: legacyLabel ? legacyPositionValue(readDb1Value(playersDatabase, index, legacyLabel)) : 0
-      })),
-      attributes
-    };
+      const nationName = readDb1Value(playersDatabase, index, "Nation");
+      const nationRecord = nation(nationName);
+      const clubName =
+        readDb1Value(playersDatabase, index, "Current Club") ||
+        readDb1Value(playersDatabase, index, "Club");
+      const club = clubsByName.get(normalizeSearchText(clubName));
+      const attributes = [
+        ...PLAYER_ATTRIBUTE_LABELS,
+        "Adaptability",
+        "Ambition",
+        "Determination",
+        "Professionalism",
+        "Sportsmanship",
+      ].map((label) => ({ label, value: null }));
 
-    staff.push({
-      id: index,
-      firstName,
-      secondName,
-      commonName: "",
-      displayName,
-      birthDate: parseLegacyDate(readDb1Value(playersDatabase, index, "Date of Birth")),
-      internationalApps: readDb1Value(playersDatabase, index, "Caps"),
-      internationalGoals: readDb1Value(playersDatabase, index, "Goals"),
-      nationId: nationRecord?.id ?? null,
-      nation: nationName,
-      clubId: club?.id ?? null,
-      club: club?.name || clubName,
-      leagueId: club?.leagueId ?? null,
-      league: club?.league || "",
-      ratings,
-      searchText: createSearchText([displayName, club?.name || clubName, club?.league, nationName])
-    });
+      Object.entries(attributeMap).forEach(([legacyLabel, labels]) => {
+        const value = readDb1Value(playersDatabase, index, legacyLabel);
+
+        labels.forEach((label) => {
+          const attribute = attributes.find((item) => item.label === label);
+
+          if (attribute) {
+            attribute.value = value;
+          }
+        });
+      });
+
+      const ratings = {
+        squadNumber: 0,
+        currentAbility: readDb1Value(playersDatabase, index, "Ability"),
+        potentialAbility: readDb1Value(playersDatabase, index, "Potential"),
+        homeReputation: readDb1Value(playersDatabase, index, "Reputation"),
+        currentReputation: readDb1Value(playersDatabase, index, "Reputation"),
+        worldReputation: readDb1Value(playersDatabase, index, "Reputation"),
+        positions: [
+          ["Goalkeeper", "Goalkeeper"],
+          ["Sweeper", "Sweeper"],
+          ["Defender", "Defence"],
+          ["Def Midfielder", "Anchor"],
+          ["Midfielder", "Midfield"],
+          ["Att Midfielder", "Support"],
+          ["Attacker", "Attack"],
+          ["Wing back", null],
+        ].map(([label, legacyLabel]) => ({
+          label,
+          value: legacyLabel
+            ? legacyPositionValue(
+                readDb1Value(playersDatabase, index, legacyLabel),
+              )
+            : 0,
+        })),
+        sides: [
+          ["Right side", "Right Sided"],
+          ["Left side", "Left Sided"],
+          ["Central", "Central"],
+          ["Free role", null],
+        ].map(([label, legacyLabel]) => ({
+          label,
+          value: legacyLabel
+            ? legacyPositionValue(
+                readDb1Value(playersDatabase, index, legacyLabel),
+              )
+            : 0,
+        })),
+        attributes,
+      };
+
+      staff.push({
+        id: staff.length,
+        stableId: readDb1Base128Value(playersDatabase, index, "Unique ID"),
+        firstName,
+        secondName,
+        commonName: "",
+        displayName,
+        birthDate: parseLegacyDate(
+          readDb1Value(playersDatabase, index, "Date of Birth") ||
+            readDb1Value(playersDatabase, index, "Birth Date"),
+        ),
+        internationalApps: readDb1Value(playersDatabase, index, "Caps"),
+        internationalGoals: readDb1Value(playersDatabase, index, "Goals"),
+        nationId: nationRecord?.id ?? null,
+        nation: nationName,
+        clubId: club?.id ?? null,
+        club: club?.name || clubName,
+        leagueId: club?.leagueId ?? null,
+        league: club?.league || "",
+        ratings,
+        searchText: createSearchText([
+          displayName,
+          club?.name || clubName,
+          club?.league,
+          nationName,
+        ]),
+      });
+    }
+  }
+
+  if (managersBuffer) {
+    const managersDatabase = parseDb1(managersBuffer);
+
+    for (let index = 0; index < managersDatabase.count; index += 1) {
+      const firstName = readDb1Value(managersDatabase, index, "First Name");
+      const secondName = readDb1Value(managersDatabase, index, "Second Name");
+      const displayName = [firstName, secondName].filter(Boolean).join(" ");
+
+      if (!displayName) {
+        continue;
+      }
+
+      const nationName = readDb1Value(managersDatabase, index, "Nation");
+      const nationRecord = nation(nationName);
+      const clubName =
+        readDb1Value(managersDatabase, index, "M/Club") ||
+        readDb1Value(managersDatabase, index, "M/Int");
+      const club = clubsByName.get(normalizeSearchText(clubName));
+
+      staff.push({
+        id: staff.length,
+        stableId: null,
+        firstName,
+        secondName,
+        commonName: "",
+        displayName,
+        birthDate: null,
+        internationalApps: 0,
+        internationalGoals: 0,
+        nationId: nationRecord?.id ?? null,
+        nation: nationName,
+        clubId: club?.id ?? null,
+        club: club?.name || clubName,
+        leagueId: club?.leagueId ?? null,
+        league: club?.league || "",
+        jobId: 5,
+        job: "Manager",
+        ratings: null,
+        nonPlayingRatings: {
+          currentAbility: readDb1Value(managersDatabase, index, "Ability"),
+          potentialAbility: readDb1Value(managersDatabase, index, "Ability"),
+          homeReputation: readDb1Value(managersDatabase, index, "Reputation"),
+          currentReputation: readDb1Value(managersDatabase, index, "Reputation"),
+          worldReputation: readDb1Value(managersDatabase, index, "Reputation"),
+          attributes: [],
+        },
+        mentalAttributes: [],
+        searchText: createSearchText([
+          displayName,
+          club?.name || clubName,
+          club?.league,
+          nationName,
+          "manager",
+        ]),
+      });
+    }
   }
 
   return {
@@ -663,7 +885,7 @@ function parsePlayerDetails(buffer, playerDetailSection) {
   for (let index = 0; index < playerDetailSection.count; index += 1) {
     const offset = playerDetailSection.start + index * playerDetailSection.size;
     const id = readInt(view, offset);
-    const attributes = PLAYER_ATTRIBUTE_LABELS.map((label, attributeIndex) => ({
+    const attributes = MODERN_PLAYER_ATTRIBUTE_LABELS.map((label, attributeIndex) => ({
       label,
       value: view.getUint8(offset + 27 + attributeIndex)
     }));
@@ -691,6 +913,35 @@ function parsePlayerDetails(buffer, playerDetailSection) {
       positions,
       sides,
       attributes
+    };
+  }
+
+  return records;
+}
+
+function parseNonPlayingDetails(buffer, section) {
+  const view = dataView(buffer);
+  const records = [];
+
+  for (let index = 0; index < section.count; index += 1) {
+    const offset = section.start + index * section.size;
+    const id = readInt(view, offset);
+
+    if (id < 0) {
+      continue;
+    }
+
+    records[id] = {
+      id,
+      currentAbility: view.getUint16(offset + 4, true),
+      potentialAbility: view.getUint16(offset + 6, true),
+      homeReputation: view.getUint16(offset + 8, true),
+      currentReputation: view.getUint16(offset + 10, true),
+      worldReputation: view.getUint16(offset + 12, true),
+      attributes: NON_PLAYING_ATTRIBUTE_LABELS.map((label, attributeIndex) => ({
+        label,
+        value: view.getUint8(offset + 14 + attributeIndex),
+      })),
     };
   }
 
@@ -767,6 +1018,7 @@ function parseStaff(
   clubs,
   nations,
   playerDetails,
+  nonPlayingDetails,
   staffSection,
   staffFieldLayout
 ) {
@@ -790,10 +1042,30 @@ function parseStaff(
     const clubId = positiveId(readInt(view, offset + 57), clubs.length);
     const club = clubId === null ? null : clubs[clubId];
     const playerDetailId = positiveId(readInt(view, offset + staffFieldLayout.playerDetailOffset), playerDetails.length);
-    const ratings = playerDetailId === null ? null : playerDetails[playerDetailId];
+    const nonPlayingDetailId = positiveId(
+      readInt(view, offset + staffFieldLayout.nonPlayingDetailOffset),
+      nonPlayingDetails.length,
+    );
+    const playerRatings =
+      playerDetailId === null ? null : playerDetails[playerDetailId];
+    const nonPlayingRatings =
+      nonPlayingDetailId === null ? null : nonPlayingDetails[nonPlayingDetailId];
+    const mentalAttributes = MODERN_MENTAL_ATTRIBUTE_LABELS.map(
+      (label, mentalIndex) => ({
+        label,
+        value: view.getUint8(offset + 86 + mentalIndex),
+      }),
+    );
+    const ratings = playerRatings
+      ? {
+          ...playerRatings,
+          attributes: [...playerRatings.attributes, ...mentalAttributes],
+        }
+      : null;
     const birthDate = dayOfYearToDate(view.getUint16(offset + 16, true), view.getUint16(offset + 18, true));
     const internationalApps = view.getUint8(offset + 34);
     const internationalGoals = view.getUint8(offset + 35);
+    const jobId = view.getUint8(offset + staffFieldLayout.jobOffset);
 
     staff.push({
       id,
@@ -810,8 +1082,21 @@ function parseStaff(
       club: club?.name || "",
       leagueId: club?.leagueId ?? null,
       league: club?.league || "",
+      jobId,
+      job: STAFF_JOB_LABELS[jobId] || `Job ${jobId}`,
       ratings,
-      searchText: createSearchText([displayName, firstName, secondName, commonName, club?.name, club?.league, nations[nationId]?.name])
+      nonPlayingRatings,
+      mentalAttributes,
+      searchText: createSearchText([
+        displayName,
+        firstName,
+        secondName,
+        commonName,
+        club?.name,
+        club?.league,
+        nations[nationId]?.name,
+        STAFF_JOB_LABELS[jobId],
+      ])
     });
   }
 
@@ -848,6 +1133,154 @@ function cacheDatabase(databasePath, database) {
   }
 }
 
+function prepareCm4Database(payload) {
+  const clubs = payload.clubs.map(([id, name, leagueId, league]) => ({
+    id,
+    name,
+    shortName: name,
+    nationId: null,
+    leagueId: leagueId || null,
+    nation: "",
+    league: league || "",
+  }));
+  const leagues = (payload.leagues || []).map(([id, name]) => ({ id, name }));
+  const nations = payload.nations.map(([id, name]) => ({
+    id,
+    name,
+    shortName: name,
+  }));
+  const clubsById = new Map(clubs.map((club) => [club.id, club]));
+  const nationsById = new Map(nations.map((nation) => [nation.id, nation]));
+  const isVersionTwo = payload.version >= 2;
+  const staff = payload.staff.map((row) => {
+    const clubId = row[10] || null;
+    const nationId = row[9] || null;
+    const club = clubsById.get(clubId);
+    const nation = nationsById.get(nationId);
+    const flags = isVersionTwo ? row[11] : 1;
+    const jobCode = isVersionTwo ? row[12] : -1;
+    const playerRow = isVersionTwo ? row[13] : row.slice(11);
+    const nonPlayingRow = isVersionTwo ? row[14] : null;
+    const hasPlayerRatings = Boolean(flags & 1) && playerRow;
+    const hasNonPlayingRatings = Boolean(flags & 2) && nonPlayingRow;
+    const person = {
+      id: row[0],
+      stableId: row[0],
+      firstName: row[1],
+      secondName: row[2],
+      commonName: row[3],
+      displayName: row[4],
+      birthDate: dayOfYearToDate(row[5], row[6]),
+      internationalApps: row[7],
+      internationalGoals: row[8],
+      nationId,
+      nation: nation?.name || "",
+      clubId,
+      club: club?.name || "",
+      leagueId: club?.leagueId ?? null,
+      league: club?.league || "",
+      jobId: hasNonPlayingRatings ? jobCode : 10,
+      job: hasNonPlayingRatings ? "Non-player" : "Player",
+      searchText: createSearchText([
+        row[4],
+        row[1],
+        row[2],
+        row[3],
+        club?.name,
+        club?.league,
+        nation?.name,
+        hasNonPlayingRatings ? "non-player staff manager coach scout physio" : "player",
+      ]),
+    };
+
+    if (hasPlayerRatings) {
+      Object.defineProperty(person, "ratings", {
+        configurable: true,
+        get() {
+          const baseIndex = 5;
+          const ratings = {
+            squadNumber: 0,
+            currentAbility: playerRow[0],
+            potentialAbility: playerRow[1],
+            homeReputation: playerRow[2],
+            currentReputation: playerRow[3],
+            worldReputation: playerRow[4],
+            positions: POSITION_LABELS.map((label, index) => ({
+              label,
+              value: playerRow[baseIndex + index],
+            })),
+            sides: SIDE_LABELS.map((label, index) => ({
+              label,
+              value: playerRow[baseIndex + POSITION_LABELS.length + index],
+            })),
+            attributes: [
+              ...PLAYER_ATTRIBUTE_LABELS.map((label, index) => ({
+                label,
+                value:
+                  playerRow[
+                    baseIndex + POSITION_LABELS.length + SIDE_LABELS.length + index
+                  ],
+              })),
+              ...CM4_MENTAL_ATTRIBUTE_LABELS.map((label, index) => ({
+                label,
+                value:
+                  playerRow[
+                    baseIndex +
+                      POSITION_LABELS.length +
+                      SIDE_LABELS.length +
+                      PLAYER_ATTRIBUTE_LABELS.length +
+                      index
+                  ],
+              })),
+            ],
+          };
+
+          Object.defineProperty(person, "ratings", {
+            value: ratings,
+            enumerable: true,
+          });
+          return ratings;
+        },
+      });
+    } else {
+      person.ratings = null;
+    }
+
+    if (hasNonPlayingRatings) {
+      person.nonPlayingRatings = {
+        currentAbility: nonPlayingRow[0],
+        potentialAbility: nonPlayingRow[1],
+        homeReputation: nonPlayingRow[2],
+        currentReputation: nonPlayingRow[3],
+        worldReputation: nonPlayingRow[4],
+        attributes: NON_PLAYING_ATTRIBUTE_LABELS.map((label, index) => ({
+          label,
+          value: nonPlayingRow[5 + index],
+        })),
+      };
+      person.mentalAttributes = CM4_MENTAL_ATTRIBUTE_LABELS.map(
+        (label, index) => ({
+          label,
+          value: nonPlayingRow[5 + NON_PLAYING_ATTRIBUTE_LABELS.length + index],
+        }),
+      );
+    } else {
+      person.nonPlayingRatings = null;
+      person.mentalAttributes = [];
+    }
+
+    return person;
+  });
+
+  return {
+    staff,
+    clubs,
+    leagues,
+    nations,
+    histories: new Map(),
+  };
+}
+
 async function prepareDatabase(databasePath) {
   if (databaseCache.has(databasePath)) {
     const database = databaseCache.get(databasePath);
@@ -860,12 +1293,44 @@ async function prepareDatabase(databasePath) {
   }
 
   const loadPromise = (async () => {
+    if (state.databaseFormats.get(databasePath) === "cm4") {
+      const response = await fetch(
+        `/api/cm4?database=${encodeURIComponent(databasePath)}`,
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || `Could not load ${databasePath}`);
+      }
+
+      const database = prepareCm4Database(await response.json());
+      cacheDatabase(databasePath, database);
+      return database;
+    }
+
     if (state.databaseFormats.get(databasePath) === "cm2") {
       const [playersBuffer, teamsBuffer] = await Promise.all([
         fetchBuffer(databaseFileUrl(databasePath, "PLAYERS.DB1")),
         fetchBuffer(databaseFileUrl(databasePath, "TMDATA.DB1"))
       ]);
       const database = prepareLegacyDatabase(playersBuffer, teamsBuffer);
+      cacheDatabase(databasePath, database);
+      return database;
+    }
+
+    if (state.databaseFormats.get(databasePath) === "cm2early") {
+      const [playersOneBuffer, playersTwoBuffer, teamsBuffer, managersBuffer] =
+        await Promise.all([
+          fetchBuffer(databaseFileUrl(databasePath, "PLDATA1.DB1")),
+          fetchBuffer(databaseFileUrl(databasePath, "PLDATA2.DB1")),
+          fetchBuffer(databaseFileUrl(databasePath, "TMDATA.DB1")),
+          fetchBuffer(databaseFileUrl(databasePath, "MGDATA.DB1")),
+        ]);
+      const database = prepareLegacyDatabase(
+        [playersOneBuffer, playersTwoBuffer],
+        teamsBuffer,
+        managersBuffer,
+      );
       cacheDatabase(databasePath, database);
       return database;
     }
@@ -890,6 +1355,10 @@ async function prepareDatabase(databasePath) {
     const nations = parseNamedRecords(nationsBuffer, 290);
     const clubs = parseClubs(clubsBuffer, leagues, nations);
     const histories = parseStaffHistory(staffHistoryBuffer, clubs);
+    const nonPlayingDetails = parseNonPlayingDetails(
+      staffBuffer,
+      layout.nonPlayingDetailSection,
+    );
     const playerDetails = parsePlayerDetails(staffBuffer, layout.playerDetailSection);
     const staff = parseStaff(
       staffBuffer,
@@ -899,6 +1368,7 @@ async function prepareDatabase(databasePath) {
       clubs,
       nations,
       playerDetails,
+      nonPlayingDetails,
       layout.staffSection,
       layout.staffFieldLayout
     );
@@ -1066,7 +1536,16 @@ function renderResults() {
     row.innerHTML = `
       <span class="result-name">${escapeHtml(person.displayName)}</span>
       ${showFullName ? `<span class="result-full-name">${escapeHtml(fullName)}</span>` : ""}
-      <span class="result-meta">${escapeHtml([person.club || "No club", person.league, person.nation].filter(Boolean).join(" | "))}</span>
+      <span class="result-meta">${escapeHtml(
+        [
+          person.club || "No club",
+          person.nonPlayingRatings ? person.job : "",
+          person.league,
+          person.nation,
+        ]
+          .filter(Boolean)
+          .join(" | "),
+      )}</span>
     `;
     row.addEventListener("click", () => {
       state.selectedId = person.id;
@@ -1117,11 +1596,17 @@ function renderProfile() {
     return;
   }
 
-  const primaryRole = person.ratings ? buildPitchRoles(person.ratings)[0] : null;
+  const showNonPlayingProfile = Boolean(
+    person.nonPlayingRatings && (!person.ratings || person.jobId !== 10),
+  );
+  const primaryRole =
+    !showNonPlayingProfile && person.ratings
+      ? buildPitchRoles(person.ratings)[0]
+      : null;
   const subtitle = [
     formatDate(person.birthDate),
     person.nation || "Unknown nation",
-    primaryRole?.longLabel
+    showNonPlayingProfile ? person.job : primaryRole?.longLabel
   ].filter(Boolean).join(" - ");
   const fullName = getFullName(person);
   const showFullName = hasDistinctFullName(person);
@@ -1138,32 +1623,122 @@ function renderProfile() {
       ${showFullName ? `<p class="profile-full-name">${escapeHtml(fullName)}</p>` : ""}
       <p class="born-line">${escapeHtml(subtitle)}</p>
     </div>
+    ${
+      showNonPlayingProfile
+        ? `
+    <div class="tabs staff-tabs" role="tablist" aria-label="Staff view">
+      <button type="button" class="is-active" aria-selected="true">Staff Profile</button>
+    </div>
+    `
+        : `
     <div class="tabs" role="tablist" aria-label="Player views">
       <button type="button" data-profile-tab="profile" class="${state.activeTab === "profile" ? "is-active" : ""}" aria-selected="${state.activeTab === "profile"}">Profile</button>
       <button type="button" data-profile-tab="history" class="${state.activeTab === "history" ? "is-active" : ""}" aria-selected="${state.activeTab === "history"}">History</button>
     </div>
-    ${state.activeTab === "history" ? renderHistory(person) : `
+    `
+    }
+    ${
+      showNonPlayingProfile
+        ? renderNonPlayingProfile(person)
+        : state.activeTab === "history"
+        ? renderHistory(person)
+        : `
     <div class="profile-body" role="tabpanel">
       <section class="facts" aria-label="Profile facts">
-        ${fact("Club", person.club || "No club")}
-        ${fact("League", person.league || "Unknown")}
-        ${fact("Nation", person.nation || "Unknown")}
+        ${filterFact("Club", person.club || "No club", "club", person.club ? person.clubId : null)}
+        ${filterFact("League", person.league || "Unknown", "league", person.league ? person.leagueId : null)}
+        ${filterFact("Nation", person.nation || "Unknown", "nation", person.nation ? person.nationId : null)}
         ${fact("Caps", String(person.internationalApps), "international-fact")}
         ${fact("Goals", String(person.internationalGoals), "international-fact")}
-        ${fact("Squad No.", person.ratings?.squadNumber ? String(person.ratings.squadNumber) : "-")}
+        ${fact(
+          "Squad No.",
+          person.ratings?.squadNumber
+            ? String(person.ratings.squadNumber)
+            : "-",
+          "international-fact",
+        )}
       </section>
       ${renderReputation(person.ratings)}
       ${renderAttributes(person.ratings)}
       ${renderPositionPanel(person.ratings)}
     </div>
-    `}
+    `
+    }
   `;
 
   renderSeasonLinks(person);
 }
 
+function renderNonPlayingProfile(person) {
+  const ratings = person.nonPlayingRatings;
+
+  if (!ratings) {
+    return '<div class="empty-state">No non-playing ability record.</div>';
+  }
+
+  const baseMentalValues = person.mentalAttributes || [];
+
+  return `
+    <div class="profile-body staff-profile-body" role="tabpanel">
+      <section class="facts staff-facts" aria-label="Staff facts">
+        ${filterFact("Club", person.club || "No club", "club", person.club ? person.clubId : null)}
+        ${filterFact("League", person.league || "Unknown", "league", person.league ? person.leagueId : null)}
+        ${filterFact("Nation", person.nation || "Unknown", "nation", person.nation ? person.nationId : null)}
+        ${fact("Job", person.job || "Not set")}
+      </section>
+      ${renderReputation(ratings)}
+      ${
+        ratings.attributes.length
+          ? `
+      <section class="profile-section staff-attributes-section" aria-label="Non-playing attributes">
+        <div class="staff-attribute-grid">
+          ${ratings.attributes
+            .map(
+              (item) => `
+            <div class="rating">
+              <span>${escapeHtml(item.label)}</span>
+              <strong class="${attributeColorClass(item.value)}">${escapeHtml(
+                ratingValue(item.value),
+              )}</strong>
+            </div>
+          `,
+            )
+            .join("")}
+        </div>
+      </section>
+      `
+          : ""
+      }
+      ${
+        baseMentalValues.some((item) => Number.isFinite(item.value))
+          ? `
+      <details class="hidden-attributes">
+        <summary>Mental Traits</summary>
+        <div class="hidden-attribute-grid">
+          ${baseMentalValues
+            .map(
+              (item) => `
+            <div class="rating">
+              <span>${escapeHtml(item.label)}</span>
+              <strong class="${attributeColorClass(item.value)}">${escapeHtml(
+                ratingValue(item.value),
+              )}</strong>
+            </div>
+          `,
+            )
+            .join("")}
+        </div>
+      </details>
+      `
+          : ""
+      }
+    </div>
+  `;
+}
+
 function playerSeasonCacheKey(person) {
   return [
+    person.stableId ?? "",
     normalizeSearchText([person.firstName, person.secondName].filter(Boolean).join(" ")),
     normalizeSearchText(person.commonName),
     person.birthDate?.dayOfYear,
@@ -1174,7 +1749,7 @@ function playerSeasonCacheKey(person) {
 async function renderSeasonLinks(person) {
   const container = elements.profile.querySelector("[data-season-links]");
 
-  if (!container || !person.birthDate) {
+  if (!container) {
     return;
   }
 
@@ -1186,9 +1761,12 @@ async function renderSeasonLinks(person) {
       const params = new URLSearchParams({
         fullName: [person.firstName, person.secondName].filter(Boolean).join(" "),
         commonName: person.commonName,
-        dayOfYear: String(person.birthDate.dayOfYear),
-        year: String(person.birthDate.year)
+        dayOfYear: String(person.birthDate?.dayOfYear ?? -1),
+        year: String(person.birthDate?.year ?? 0)
       });
+      if (Number.isInteger(person.stableId)) {
+        params.set("stableId", String(person.stableId));
+      }
       const response = await fetch(`/api/player-seasons?${params}`);
 
       if (!response.ok) {
@@ -1206,23 +1784,45 @@ async function renderSeasonLinks(person) {
     return;
   }
 
-  const otherSeasons = matches
-    .filter((match) => match.database !== state.databasePath)
+  const seasons = matches
+    .concat(
+      matches.some((match) => match.database === state.databasePath)
+        ? []
+        : [{
+            id: person.id,
+            database: state.databasePath,
+            label: state.databasePath.replace(/\s+dat$/i, ""),
+          }],
+    )
     .sort((a, b) => seasonStartYear(a.label) - seasonStartYear(b.label));
 
   container.replaceChildren();
-  otherSeasons.forEach((match) => {
+  seasons.forEach((match) => {
+    const isCurrent = match.database === state.databasePath;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "season-link";
-    button.dataset.seasonPath = match.database;
-    button.dataset.staffId = String(match.id);
+    button.className = `season-link${isCurrent ? " is-current" : ""}`;
+
+    if (isCurrent) {
+      button.disabled = true;
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.dataset.seasonPath = match.database;
+      button.dataset.staffId = String(match.id);
+    }
+
     button.textContent = match.label;
-    button.title = `View this player in ${match.label}`;
+    button.title = isCurrent
+      ? `Currently viewing ${match.label}`
+      : `View this person in ${match.label}`;
     container.append(button);
   });
 
-  preloadDatabases(otherSeasons.map((match) => match.database));
+  preloadDatabases(
+    seasons
+      .filter((match) => match.database !== state.databasePath)
+      .map((match) => match.database),
+  );
 }
 
 function seasonStartYear(label) {
@@ -1235,6 +1835,25 @@ function fact(label, value, className = "") {
     <div class="fact${className ? ` ${className}` : ""}">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
+    </div>
+  `;
+}
+
+function filterFact(label, value, filterType, filterValue) {
+  if (filterValue === null || filterValue === undefined || !value) {
+    return fact(label, value);
+  }
+
+  return `
+    <div class="fact">
+      <span>${escapeHtml(label)}</span>
+      <button
+        type="button"
+        class="fact-filter"
+        data-fact-filter="${escapeHtml(filterType)}"
+        data-filter-value="${escapeHtml(filterValue)}"
+        title="Filter results by ${escapeHtml(value)}"
+      >${escapeHtml(value)}</button>
     </div>
   `;
 }
@@ -1316,40 +1935,80 @@ function renderReputation(ratings) {
   `;
 }
 
+function pitchRatingLevel(value) {
+  if (value >= 18) {
+    return { className: "natural", label: "Natural" };
+  }
+  if (value >= 15) {
+    return { className: "accomplished", label: "Playable" };
+  }
+  if (value >= 12) {
+    return { className: "limited", label: "Limited" };
+  }
+  if (value >= 9) {
+    return { className: "weak", label: "Weak" };
+  }
+  if (value >= 6) {
+    return { className: "awkward", label: "Awkward" };
+  }
+  return { className: "very-awkward", label: "Very awkward" };
+}
+
 function buildPitchRoles(ratings) {
   const positions = Object.fromEntries(ratings.positions.map((item) => [item.label, item.value]));
   const sides = Object.fromEntries(ratings.sides.map((item) => [item.label, item.value]));
   const roles = [];
-  const usable = (value) => value >= 10;
-  const addRole = (label, value, x, y) => {
-    if (!usable(value)) {
+  const useDefenderWingBackFallback = /^97-98(?:\s+dat)?$/i.test(
+    state.databasePath.trim(),
+  );
+  const rated = (value) => value >= 2;
+  const addRole = (label, value, x, y, derived = false, longLabel = null) => {
+    if (!rated(value)) {
       return;
     }
 
+    const level = pitchRatingLevel(value);
     roles.push({
       label,
-      longLabel: PITCH_ROLE_NAMES[label] || label,
+      longLabel: longLabel || PITCH_ROLE_NAMES[label] || label,
       value,
       x,
       y,
-      level: value >= 20 ? "natural" : value >= 15 ? "accomplished" : "limited"
+      level: level.className,
+      levelLabel: level.label,
+      derived,
     });
   };
   const addSidedRoles = (positionLabel, roleLabels, y) => {
     const positionValue = positions[positionLabel];
 
-    if (!usable(positionValue)) {
+    if (!rated(positionValue)) {
       return;
     }
 
-    if (usable(sides["Left side"])) {
-      addRole(roleLabels.left, Math.min(positionValue, sides["Left side"]), PITCH_LANES.left, y);
+    if (rated(sides["Left side"])) {
+      addRole(
+        roleLabels.left,
+        Math.min(positionValue, sides["Left side"]),
+        PITCH_LANES.left,
+        y,
+      );
     }
-    if (usable(sides.Central)) {
-      addRole(roleLabels.centre, Math.min(positionValue, sides.Central), PITCH_LANES.centre, y);
+    if (rated(sides.Central)) {
+      addRole(
+        roleLabels.centre,
+        Math.min(positionValue, sides.Central),
+        PITCH_LANES.centre,
+        y,
+      );
     }
-    if (usable(sides["Right side"])) {
-      addRole(roleLabels.right, Math.min(positionValue, sides["Right side"]), PITCH_LANES.right, y);
+    if (rated(sides["Right side"])) {
+      addRole(
+        roleLabels.right,
+        Math.min(positionValue, sides["Right side"]),
+        PITCH_LANES.right,
+        y,
+      );
     }
   };
 
@@ -1357,12 +2016,33 @@ function buildPitchRoles(ratings) {
   addRole("SW", positions.Sweeper, PITCH_LANES.centre, PITCH_ROWS.sweeper);
   addSidedRoles("Defender", { left: "DL", centre: "DC", right: "DR" }, PITCH_ROWS.defence);
 
-  if (usable(positions["Wing back"])) {
-    if (usable(sides["Left side"])) {
-      addRole("WBL", Math.min(positions["Wing back"], sides["Left side"]), PITCH_LANES.wideLeft, PITCH_ROWS.defensiveMidfield);
+  const nativeWingBackValue = positions["Wing back"];
+  const wingBackValue = rated(nativeWingBackValue)
+    ? nativeWingBackValue
+    : useDefenderWingBackFallback
+      ? positions.Defender
+      : nativeWingBackValue;
+  const derivedWingBack =
+    !rated(nativeWingBackValue) && useDefenderWingBackFallback;
+
+  if (rated(wingBackValue)) {
+    if (rated(sides["Left side"])) {
+      addRole(
+        "WBL",
+        Math.min(wingBackValue, sides["Left side"]),
+        PITCH_LANES.wideLeft,
+        PITCH_ROWS.defensiveMidfield,
+        derivedWingBack,
+      );
     }
-    if (usable(sides["Right side"])) {
-      addRole("WBR", Math.min(positions["Wing back"], sides["Right side"]), PITCH_LANES.wideRight, PITCH_ROWS.defensiveMidfield);
+    if (rated(sides["Right side"])) {
+      addRole(
+        "WBR",
+        Math.min(wingBackValue, sides["Right side"]),
+        PITCH_LANES.wideRight,
+        PITCH_ROWS.defensiveMidfield,
+        derivedWingBack,
+      );
     }
   }
 
@@ -1370,11 +2050,46 @@ function buildPitchRoles(ratings) {
   addSidedRoles("Midfielder", { left: "ML", centre: "MC", right: "MR" }, PITCH_ROWS.midfield);
   addSidedRoles("Att Midfielder", { left: "AML", centre: "AMC", right: "AMR" }, PITCH_ROWS.attackingMidfield);
 
-  if (usable(positions.Attacker)) {
-    addRole("ST", positions.Attacker, PITCH_LANES.centre, PITCH_ROWS.striker);
+  if (rated(positions.Attacker)) {
+    const isForward =
+      positions.Attacker >= 18 && positions["Att Midfielder"] >= 18;
+
+    if (rated(sides["Left side"])) {
+      addRole(
+        "LW",
+        Math.min(positions.Attacker, sides["Left side"]),
+        PITCH_LANES.left,
+        PITCH_ROWS.striker,
+        false,
+        isForward ? "Forward - Left" : null,
+      );
+    }
+    addRole(
+      "ST",
+      positions.Attacker,
+      PITCH_LANES.centre,
+      PITCH_ROWS.striker,
+      false,
+      isForward ? "Forward - Centre" : "Striker - Centre",
+    );
+    if (rated(sides["Right side"])) {
+      addRole(
+        "RW",
+        Math.min(positions.Attacker, sides["Right side"]),
+        PITCH_LANES.right,
+        PITCH_ROWS.striker,
+        false,
+        isForward ? "Forward - Right" : null,
+      );
+    }
   }
 
-  return roles.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  return roles.sort(
+    (a, b) =>
+      b.value - a.value ||
+      Number(b.label === "ST") - Number(a.label === "ST") ||
+      a.label.localeCompare(b.label),
+  );
 }
 
 function renderPositionPanel(ratings) {
@@ -1386,6 +2101,9 @@ function renderPositionPanel(ratings) {
   const occupiedRoles = new Set(roles.map((role) => role.label));
   const ghostRoles = PITCH_SLOTS.filter((slot) => !occupiedRoles.has(slot.label));
   const primaryRole = roles[0];
+  const freeRoleValue =
+    ratings.sides.find((item) => item.label === "Free role")?.value ?? 0;
+  const freeRoleLevel = pitchRatingLevel(freeRoleValue);
 
   return `
     <section class="profile-section positions-section" aria-label="Positions and sides">
@@ -1396,40 +2114,88 @@ function renderPositionPanel(ratings) {
             <div class="pitch-circle"></div>
             <div class="pitch-box pitch-box-top"></div>
             <div class="pitch-box pitch-box-bottom"></div>
-            ${ghostRoles.map((role) => `
+            ${ghostRoles
+              .map(
+                (role) => `
               <div
                 class="position-marker ghost"
                 style="--x: ${role.x}%; --y: ${role.y}%"
                 title="${escapeHtml(PITCH_ROLE_NAMES[role.label])}"
               ></div>
-            `).join("")}
-            ${roles.map((role, index) => `
+            `,
+              )
+              .join("")}
+            ${roles
+              .map(
+                (role, index) => `
               <div
-                class="position-marker ${role.level}${index === 0 ? " is-primary" : ""}"
+                class="position-marker position-tooltip ${role.level}${
+                  index === 0 ? " is-primary" : ""
+                }${role.x <= 20 ? " tooltip-align-left" : ""}${
+                  role.x >= 80 ? " tooltip-align-right" : ""
+                }${role.y >= 68 ? " tooltip-above" : ""}"
                 style="--x: ${role.x}%; --y: ${role.y}%"
-                title="${escapeHtml(`${role.longLabel}: ${role.value}`)}"
+                data-info="${escapeHtml(
+                  `${role.longLabel} · ${role.levelLabel} · ${role.value}${
+                    role.derived ? " · Derived from Defender rating" : ""
+                  }`,
+                )}"
+                aria-label="${escapeHtml(
+                  `${role.longLabel}: ${role.levelLabel} (${role.value})`,
+                )}"
+                tabindex="0"
               ></div>
-            `).join("")}
+            `,
+              )
+              .join("")}
+            ${
+              freeRoleValue > 10
+                ? `
+              <div
+                class="position-marker position-tooltip free-role-marker tooltip-align-right ${freeRoleLevel.className}"
+                style="--x: 94%; --y: 8%"
+                data-info="${escapeHtml(
+                  `Free Role · ${freeRoleLevel.label} · ${freeRoleValue}`,
+                )}"
+                aria-label="${escapeHtml(`Free Role ${freeRoleValue}`)}"
+                tabindex="0"
+              >${escapeHtml("10")}</div>
+            `
+                : ""
+            }
           </div>
           <div class="pitch-caption">
-            <strong>${escapeHtml(primaryRole ? primaryRole.longLabel : "No recognised position")}</strong>
+            <strong>${escapeHtml(
+              primaryRole
+                ? `${primaryRole.longLabel}${
+                    primaryRole.value <= 5 ? ` - ${primaryRole.levelLabel}` : ""
+                  }`
+                : "No recognised position",
+            )}</strong>
           </div>
           <div class="position-legend">
-            <span><i class="legend-dot natural"></i>Natural 20</span>
-            <span><i class="legend-dot accomplished"></i>Playable 15-19</span>
-            <span><i class="legend-dot limited"></i>Limited 10-14</span>
+            <span><i class="legend-dot natural"></i>Natural 18-20</span>
+            <span><i class="legend-dot accomplished"></i>Playable 15-17</span>
+            <span><i class="legend-dot limited"></i>Limited 12-14</span>
+            <span><i class="legend-dot weak"></i>Weak 9-11</span>
+            <span><i class="legend-dot awkward"></i>Awkward 6-8</span>
+            <span><i class="legend-dot very-awkward"></i>Very awkward 2-5</span>
           </div>
         </div>
         <div class="position-details">
           <details class="position-ratings-toggle">
             <summary>Position ratings</summary>
             <div class="position-values">
-              ${[...ratings.positions, ...ratings.sides].map((item) => `
+              ${[...ratings.positions, ...ratings.sides]
+                .map(
+                  (item) => `
                 <div class="rating">
                   <span>${escapeHtml(item.label)}</span>
                   <strong>${escapeHtml(ratingValue(item.value))}</strong>
                 </div>
-              `).join("")}
+              `,
+                )
+                .join("")}
             </div>
           </details>
           ${renderFootStrength(ratings)}
@@ -1440,13 +2206,7 @@ function renderPositionPanel(ratings) {
 }
 
 function footStrengthLevel(value) {
-  if (value >= 15) {
-    return "strong";
-  }
-  if (value >= 10) {
-    return "usable";
-  }
-  return "weak";
+  return pitchRatingLevel(value).className;
 }
 
 function renderFootStrength(ratings) {
@@ -1474,9 +2234,12 @@ function renderFootStrength(ratings) {
         `).join("")}
       </div>
       <div class="foot-legend">
-        <span><i class="foot-swatch strong"></i>Strong 15-20</span>
-        <span><i class="foot-swatch usable"></i>Usable 10-14</span>
-        <span><i class="foot-swatch weak"></i>Weak 0-9</span>
+        <span><i class="foot-swatch natural"></i>Natural 18-20</span>
+        <span><i class="foot-swatch accomplished"></i>Playable 15-17</span>
+        <span><i class="foot-swatch limited"></i>Limited 12-14</span>
+        <span><i class="foot-swatch weak"></i>Weak 9-11</span>
+        <span><i class="foot-swatch awkward"></i>Awkward 6-8</span>
+        <span><i class="foot-swatch very-awkward"></i>Very awkward 2-5</span>
       </div>
     </div>
   `;
@@ -1535,6 +2298,27 @@ function bindEvents() {
   });
 
   elements.profile.addEventListener("click", (event) => {
+    const factFilter = event.target.closest("[data-fact-filter]");
+
+    if (factFilter) {
+      const filterElements = {
+        club: elements.clubFilter,
+        league: elements.leagueFilter,
+        nation: elements.nationFilter,
+      };
+      const targetFilter = filterElements[factFilter.dataset.factFilter];
+
+      if (targetFilter) {
+        elements.nameSearch.value = "";
+        elements.clubFilter.value = "";
+        elements.leagueFilter.value = "";
+        elements.nationFilter.value = "";
+        targetFilter.value = factFilter.dataset.filterValue;
+        applyFilters();
+      }
+      return;
+    }
+
     const seasonLink = event.target.closest("[data-season-path]");
 
     if (seasonLink) {

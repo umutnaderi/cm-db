@@ -1474,7 +1474,7 @@ async function selectDatabase(databasePath, selectedId = null) {
     state.activeTab = "profile";
     state.selectedId = selectedId !== null && state.staff.some((person) => person.id === selectedId)
       ? selectedId
-      : state.staff.find((person) => person.displayName.toLowerCase().includes("francesco totti"))?.id ?? state.staff[0]?.id ?? null;
+      : state.staff.find((person) => person.displayName.toLowerCase().includes("zinedine zidane"))?.id ?? state.staff[0]?.id ?? null;
     applyFilters();
     elements.status.textContent = "Database ready";
   } catch (error) {

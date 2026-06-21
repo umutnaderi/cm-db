@@ -321,7 +321,8 @@ const state = {
   databasePath: "",
   databasePaths: [],
   databaseFormats: new Map(),
-  seasonMatches: new Map()
+  seasonMatches: new Map(),
+  staticDeployment: false,
 };
 
 const elements = {
@@ -1112,7 +1113,7 @@ async function fetchBuffer(path) {
 }
 
 function databaseFileUrl(databasePath, fileName) {
-  return `/${databasePath.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(fileName)}`;
+  return `${databasePath.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(fileName)}`;
 }
 
 function cacheDatabase(databasePath, database) {
@@ -1297,9 +1298,9 @@ async function prepareDatabase(databasePath) {
       state.databaseFormats.get(databasePath) === "cm4" ||
       state.databaseFormats.get(databasePath) === "cm4root"
     ) {
-      const response = await fetch(
-        `/api/cm4?database=${encodeURIComponent(databasePath)}`,
-      );
+      const response = await fetch(state.staticDeployment
+        ? databaseFileUrl(databasePath, "cm4-cache.json")
+        : `/api/cm4?database=${encodeURIComponent(databasePath)}`);
 
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
@@ -1826,6 +1827,94 @@ function playerSeasonCacheKey(person) {
   ].join("|");
 }
 
+function isOneEditApart(left, right) {
+  if (left === right || Math.abs(left.length - right.length) > 1) {
+    return false;
+  }
+
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let edits = 0;
+
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+
+    edits += 1;
+    if (edits > 1) {
+      return false;
+    }
+
+    if (left.length > right.length) {
+      leftIndex += 1;
+    } else if (right.length > left.length) {
+      rightIndex += 1;
+    } else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+
+  return edits + left.length - leftIndex + right.length - rightIndex === 1;
+}
+
+function personIdentityNames(person) {
+  return [
+    [person.firstName, person.secondName].filter(Boolean).join(" "),
+    person.commonName,
+    person.displayName,
+  ].map(normalizeSearchText).filter(Boolean);
+}
+
+async function findStaticPlayerSeasons(person) {
+  const targetNames = personIdentityNames(person);
+  const targetYear = person.birthDate?.year ?? 0;
+  const targetDay = person.birthDate?.dayOfYear ?? -1;
+  const matches = [];
+
+  for (const databasePath of state.databasePaths) {
+    const database = await prepareDatabase(databasePath);
+    const candidates = database.staff.filter((candidate) => {
+      const candidateNames = personIdentityNames(candidate);
+      const hasExactName = targetNames.some((name) => candidateNames.includes(name));
+      const candidateYear = candidate.birthDate?.year ?? 0;
+      const candidateDay = candidate.birthDate?.dayOfYear ?? -1;
+
+      if (hasExactName && targetYear > 0 && candidateYear === targetYear) {
+        return targetDay < 0 || candidateDay < 0 || candidateDay === targetDay;
+      }
+
+      return hasExactName && (targetYear <= 0 || candidateYear <= 0);
+    });
+    let match = candidates.find((candidate) => candidate.ratings) || candidates[0];
+
+    if (!match && targetYear > 0) {
+      const fuzzyCandidates = database.staff.filter((candidate) => {
+        if ((candidate.birthDate?.year ?? 0) !== targetYear) {
+          return false;
+        }
+        return targetNames.some((name) =>
+          personIdentityNames(candidate).some((candidateName) =>
+            isOneEditApart(name, candidateName)));
+      });
+      match = fuzzyCandidates.length === 1 ? fuzzyCandidates[0] : null;
+    }
+
+    if (match) {
+      matches.push({
+        id: match.id,
+        database: databasePath,
+        label: databasePath.replace(/\s+dat$/i, ""),
+      });
+    }
+  }
+
+  return matches;
+}
+
 async function renderSeasonLinks(person) {
   const container = elements.profile.querySelector("[data-season-links]");
 
@@ -1838,22 +1927,27 @@ async function renderSeasonLinks(person) {
 
   if (!matches) {
     try {
-      const params = new URLSearchParams({
-        fullName: [person.firstName, person.secondName].filter(Boolean).join(" "),
-        commonName: person.commonName,
-        dayOfYear: String(person.birthDate?.dayOfYear ?? -1),
-        year: String(person.birthDate?.year ?? 0)
-      });
-      if (Number.isInteger(person.stableId)) {
-        params.set("stableId", String(person.stableId));
-      }
-      const response = await fetch(`/api/player-seasons?${params}`);
+      if (state.staticDeployment) {
+        matches = await findStaticPlayerSeasons(person);
+      } else {
+        const params = new URLSearchParams({
+          fullName: [person.firstName, person.secondName].filter(Boolean).join(" "),
+          commonName: person.commonName,
+          dayOfYear: String(person.birthDate?.dayOfYear ?? -1),
+          year: String(person.birthDate?.year ?? 0)
+        });
+        if (Number.isInteger(person.stableId)) {
+          params.set("stableId", String(person.stableId));
+        }
+        const response = await fetch(`/api/player-seasons?${params}`);
 
-      if (!response.ok) {
-        return;
+        if (!response.ok) {
+          return;
+        }
+
+        matches = await response.json();
       }
 
-      matches = await response.json();
       state.seasonMatches.set(cacheKey, matches);
     } catch {
       return;
@@ -2430,7 +2524,13 @@ function bindEvents() {
 async function init() {
   try {
     bindEvents();
-    const response = await fetch("/api/databases");
+    let response = await fetch("databases.json");
+
+    if (response.ok) {
+      state.staticDeployment = true;
+    } else {
+      response = await fetch("/api/databases");
+    }
 
     if (!response.ok) {
       throw new Error("Could not discover database folders");

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "96-97 dat",
+    "path": "96-97 dat",
+    "format": "cm2early"
+  },
+  {
+    "name": "97-98 dat",
+    "path": "97-98 dat",
+    "format": "cm2"
+  },
+  {
+    "name": "99-00 dat",
+    "path": "99-00 dat",
+    "format": "modern"
+  },
+  {
+    "name": "00-01 dat",
+    "path": "00-01 dat",
+    "format": "modern"
+  },
+  {
+    "name": "01-02 dat",
+    "path": "01-02 dat",
+    "format": "modern"
+  },
+  {
+    "name": "03-04 dat",
+    "path": "03-04 dat",
+    "format": "cm4"
+  }
+]

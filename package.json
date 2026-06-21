@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "cm4:cache": "node tools/cm4-cache.mjs"
+    "cm4:cache": "node tools/cm4-cache.mjs",
+    "pages:build": "node tools/build-pages.mjs"
   }
 }

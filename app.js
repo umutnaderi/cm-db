@@ -1595,6 +1595,57 @@ function reputationValue(value) {
   return String(value);
 }
 
+const NEGATIVE_POTENTIAL_RANGES = new Map([
+  [-10, [170, 200]],
+  [-9, [150, 180]],
+  [-8, [130, 160]],
+  [-7, [110, 140]],
+  [-6, [90, 120]],
+  [-5, [70, 100]],
+  [-4, [50, 80]],
+  [-3, [30, 60]],
+  [-2, [10, 40]],
+  [-1, [0, 20]],
+]);
+
+function normalizePotentialValue(value) {
+  if (!Number.isFinite(value)) {
+    return value;
+  }
+
+  return value > 32767 ? value - 65536 : value;
+}
+
+function potentialPresentation(value) {
+  const normalizedValue = normalizePotentialValue(value);
+  const range = NEGATIVE_POTENTIAL_RANGES.get(normalizedValue);
+
+  if (normalizedValue === -1 || normalizedValue === -2) {
+    return {
+      value: normalizedValue,
+      valueText: String(normalizedValue),
+      rangeText: "",
+      tierClass: " ability-tier ability-gold ability-animated",
+    };
+  }
+
+  if (!range) {
+    return {
+      value: normalizedValue,
+      valueText: reputationValue(normalizedValue),
+      rangeText: "",
+      tierClass: "",
+    };
+  }
+
+  return {
+    value: (range[0] + range[1]) / 2,
+    valueText: String(normalizedValue),
+    rangeText: `${range[0]}–${range[1]}`,
+    tierClass: "",
+  };
+}
+
 function abilityTierClass(value) {
   if (!Number.isFinite(value) || value < 0) {
     return "";
@@ -1944,22 +1995,24 @@ function renderReputation(ratings) {
     return "";
   }
 
+  const potential = potentialPresentation(ratings.potentialAbility);
   const items = [
-    ["Current", ratings.currentAbility, true],
-    ["Potential", ratings.potentialAbility, true],
-    ["Home Rep", ratings.homeReputation, false],
-    ["Current Rep", ratings.currentReputation, false],
-    ["World Rep", ratings.worldReputation, false],
+    ["Current", ratings.currentAbility, true, reputationValue(ratings.currentAbility), ""],
+    ["Potential", potential.value, true, potential.valueText, potential.rangeText, potential.tierClass],
+    ["Home Rep", ratings.homeReputation, false, reputationValue(ratings.homeReputation), ""],
+    ["Current Rep", ratings.currentReputation, false, reputationValue(ratings.currentReputation), ""],
+    ["World Rep", ratings.worldReputation, false, reputationValue(ratings.worldReputation), ""],
   ];
 
   return `
     <section class="reputation" aria-label="Ability and reputation">
       ${items
         .map(
-          ([label, value, isAbility]) => `
-        <div class="rep-box${isAbility ? abilityTierClass(value) : ""}">
+          ([label, value, isAbility, valueText, rangeText, tierClass]) => `
+        <div class="rep-box${isAbility ? tierClass || abilityTierClass(value) : ""}">
           <span>${escapeHtml(label)}</span>
-          <strong>${escapeHtml(reputationValue(value))}</strong>
+          <strong>${escapeHtml(valueText)}</strong>
+          ${rangeText ? `<small class="potential-range">${escapeHtml(rangeText)}</small>` : ""}
         </div>
       `,
         )

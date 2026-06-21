@@ -1,19 +1,20 @@
 # CM 03-04 cache extractor
 
-The CM 03-04 editor resolves the variable-length player and non-player records
-into a stable in-memory model. This tool reads that model once and writes the
-compact `cm4-cache.json` consumed by the web app.
+The native CM database loader resolves the variable-length player and
+non-player records into a stable in-memory model. This tool reads that model
+once and writes the compact `cm4-cache.json` consumed by the web app.
 
 The web app now runs this automatically the first time you select a CM4
-database, but the editor must still be open because CM4 resolves the database
-into memory.
+database, but the matching native loader must still be open because this
+database family resolves its records into memory.
 
-1. Open `cm data editor.exe`.
-2. Load the season's `server_db.dat`.
-3. Select the database in the web app.
+- For original CM4 / 02-03, open `cm4.exe` and load or start a game.
+- For CM 03-04, open `cm data editor.exe` and load the season's
+  `server_db.dat`.
+- Select the matching database in the web app.
 
 Manual fallback from the repo root:
 
 `npm run cm4:cache -- "03-04 dat"`
 
-The editor and extractor must run on the same Windows machine.
+The loader and extractor must run on the same Windows machine.

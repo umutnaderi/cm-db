@@ -1293,7 +1293,10 @@ async function prepareDatabase(databasePath) {
   }
 
   const loadPromise = (async () => {
-    if (state.databaseFormats.get(databasePath) === "cm4") {
+    if (
+      state.databaseFormats.get(databasePath) === "cm4" ||
+      state.databaseFormats.get(databasePath) === "cm4root"
+    ) {
       const response = await fetch(
         `/api/cm4?database=${encodeURIComponent(databasePath)}`,
       );
@@ -1485,15 +1488,19 @@ async function selectDatabase(databasePath, selectedId = null) {
 
 function applyFilters() {
   const query = normalizeSearchText(elements.nameSearch.value);
+  const queryTokens = query.split(" ").filter(Boolean);
   const clubId = elements.clubFilter.value;
   const leagueId = elements.leagueFilter.value;
   const nationId = elements.nationFilter.value;
 
   state.filtered = state.staff.filter((person) => {
-    return (!query || person.searchText.includes(query)) &&
+    return (
+      (!queryTokens.length ||
+        queryTokens.every((token) => person.searchText.includes(token))) &&
       (!clubId || String(person.clubId) === clubId) &&
       (!leagueId || String(person.leagueId) === leagueId) &&
-      (!nationId || String(person.nationId) === nationId);
+      (!nationId || String(person.nationId) === nationId)
+    );
   });
 
   if (!state.filtered.some((person) => person.id === state.selectedId)) {
@@ -1586,6 +1593,28 @@ function reputationValue(value) {
   }
 
   return String(value);
+}
+
+function abilityTierClass(value) {
+  if (!Number.isFinite(value) || value < 0) {
+    return "";
+  }
+  if (value >= 185) {
+    return " ability-tier ability-god ability-animated";
+  }
+  if (value >= 170) {
+    return " ability-tier ability-gold ability-animated";
+  }
+  if (value >= 150) {
+    return " ability-tier ability-gold";
+  }
+  if (value >= 140) {
+    return " ability-tier ability-silver ability-animated";
+  }
+  if (value >= 130) {
+    return " ability-tier ability-silver";
+  }
+  return " ability-tier ability-bronze";
 }
 
 function renderProfile() {
@@ -1916,21 +1945,25 @@ function renderReputation(ratings) {
   }
 
   const items = [
-    ["Current", ratings.currentAbility],
-    ["Potential", ratings.potentialAbility],
-    ["Home Rep", ratings.homeReputation],
-    ["Current Rep", ratings.currentReputation],
-    ["World Rep", ratings.worldReputation]
+    ["Current", ratings.currentAbility, true],
+    ["Potential", ratings.potentialAbility, true],
+    ["Home Rep", ratings.homeReputation, false],
+    ["Current Rep", ratings.currentReputation, false],
+    ["World Rep", ratings.worldReputation, false],
   ];
 
   return `
     <section class="reputation" aria-label="Ability and reputation">
-      ${items.map(([label, value]) => `
-        <div class="rep-box">
+      ${items
+        .map(
+          ([label, value, isAbility]) => `
+        <div class="rep-box${isAbility ? abilityTierClass(value) : ""}">
           <span>${escapeHtml(label)}</span>
           <strong>${escapeHtml(reputationValue(value))}</strong>
         </div>
-      `).join("")}
+      `,
+        )
+        .join("")}
     </section>
   `;
 }

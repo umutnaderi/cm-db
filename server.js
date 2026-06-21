@@ -45,6 +45,12 @@ const requiredCm4DatabaseFiles = [
   "db/people_db.dat"
 ];
 
+const requiredRootCm4DatabaseFiles = [
+  "server_db.dat",
+  "people_db.dat",
+  "lang_db.dat"
+];
+
 const decoder = new TextDecoder("windows-1252");
 const cm4ResponseCache = new Map();
 let playerSeasonCache = {
@@ -65,6 +71,9 @@ function listDatabases() {
             ? "cm2early"
           : requiredCm4DatabaseFiles.every((file) => existsSync(join(databasePath, file)))
             ? "cm4"
+            : requiredRootCm4DatabaseFiles.every((file) => existsSync(join(databasePath, file))) &&
+                existsSync(join(databasePath, "cm4-cache.json"))
+              ? "cm4root"
             : null;
       return format ? { name: entry.name, path: entry.name, format } : null;
     })
@@ -459,8 +468,14 @@ function buildDatabasePlayerIndex(database) {
     return buildEarlyLegacyPlayerIndex(database);
   }
 
-  if (database.format === "cm4") {
-    const payload = JSON.parse(readFileSync(join(root, database.path, "cm4-cache.json"), "utf8"));
+  if (database.format === "cm4" || database.format === "cm4root") {
+    const cachePath = join(root, database.path, "cm4-cache.json");
+
+    if (!existsSync(cachePath)) {
+      return createSeasonIndex();
+    }
+
+    const payload = JSON.parse(readFileSync(cachePath, "utf8"));
     const players = createSeasonIndex();
 
     payload.staff.forEach((row) => {
@@ -526,7 +541,7 @@ function databaseSignature(databases) {
       ? ["PLAYERS.DB1", "TMDATA.DB1"]
       : database.format === "cm2early"
         ? requiredEarlyLegacyDatabaseFiles
-      : database.format === "cm4"
+      : database.format === "cm4" || database.format === "cm4root"
         ? ["cm4-cache.json"].filter((file) => existsSync(join(databasePath, file)))
         : ["staff.dat", "first_names.dat", "second_names.dat", "common_names.dat"];
     return [
@@ -624,6 +639,9 @@ function getCm4Response(databasePath) {
 function needsCm4Cache(databasePath) {
   const databaseRoot = join(root, databasePath);
   const cachePath = join(databaseRoot, "cm4-cache.json");
+  const sourceFiles = existsSync(join(databaseRoot, "db", "server_db.dat"))
+    ? requiredCm4DatabaseFiles
+    : requiredRootCm4DatabaseFiles;
 
   if (!existsSync(cachePath)) {
     return true;
@@ -640,7 +658,7 @@ function needsCm4Cache(databasePath) {
   }
 
   const cacheTime = statSync(cachePath).mtimeMs;
-  return requiredCm4DatabaseFiles.some((file) => statSync(join(databaseRoot, file)).mtimeMs > cacheTime);
+  return sourceFiles.some((file) => statSync(join(databaseRoot, file)).mtimeMs > cacheTime);
 }
 
 function ensureCm4Cache(databasePath) {
@@ -671,8 +689,11 @@ function ensureCm4Cache(databasePath) {
       .filter(Boolean)
       .join("\n")
       .trim();
+    const loaderInstruction = existsSync(join(databaseRoot, "db", "client_db.dat"))
+      ? "Open CM Data Editor and load this database's server_db.dat."
+      : "Open Championship Manager 4 and load or start a game using this database.";
     throw new Error(
-      "Could not build the CM 03-04 cache. Open CM 03-04 Data Editor, load this database's server_db.dat, then select the database again." +
+      `Could not build the CM4-family cache. ${loaderInstruction} Then select the database again.` +
       (details ? `\n\n${details}` : "")
     );
   }
@@ -704,7 +725,11 @@ createServer((request, response) => {
 
   if (pathname === "/api/cm4") {
     const databasePath = requestUrl.searchParams.get("database") || "";
-    const database = listDatabases().find((item) => item.path === databasePath && item.format === "cm4");
+    const database = listDatabases().find(
+      (item) =>
+        item.path === databasePath &&
+        (item.format === "cm4" || item.format === "cm4root")
+    );
 
     if (!database) {
       response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -713,12 +738,13 @@ createServer((request, response) => {
     }
 
     try {
+      const payload = getCm4Response(database.path);
       response.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Content-Encoding": "gzip",
         "Cache-Control": "no-store"
       });
-      response.end(getCm4Response(database.path));
+      response.end(payload);
     } catch (error) {
       response.writeHead(409, {
         "Content-Type": "application/json; charset=utf-8",

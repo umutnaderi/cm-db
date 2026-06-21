@@ -10,13 +10,6 @@ const uint ProcessVmRead = 0x0010;
 const uint MemCommit = 0x1000;
 const uint PageGuard = 0x100;
 const uint PageNoAccess = 0x01;
-const uint PersonVtable = 0x006e52bc;
-const uint NonPlayingPersonVtable = 0x006eb3d4;
-const uint PlayingDataVtable = 0x006c6350;
-const uint NonPlayingDataVtable = 0x006c7104;
-const uint PersonDataVtable = 0x006c727c;
-const uint PersonNameVtable = 0x006c6dd4;
-
 if (args.Length != 2)
 {
     Console.Error.WriteLine("Usage: cm4-extract <database-directory> <output-json>");
@@ -25,20 +18,37 @@ if (args.Length != 2)
 
 var databaseDirectory = Path.GetFullPath(args[0]);
 var outputPath = Path.GetFullPath(args[1]);
-var serverPath = Path.Combine(databaseDirectory, "db", "server_db.dat");
-var clientPath = Path.Combine(databaseDirectory, "db", "client_db.dat");
+var nestedDatabaseDirectory = Path.Combine(databaseDirectory, "db");
+var dataDirectory = File.Exists(Path.Combine(nestedDatabaseDirectory, "server_db.dat"))
+    ? nestedDatabaseDirectory
+    : databaseDirectory;
+var serverPath = Path.Combine(dataDirectory, "server_db.dat");
+var clientPath = Path.Combine(dataDirectory, "client_db.dat");
+var isOriginalCm4 = !File.Exists(clientPath);
 
-if (!File.Exists(serverPath) || !File.Exists(clientPath))
+if (isOriginalCm4)
 {
-    Console.Error.WriteLine("The database directory must contain db/server_db.dat and db/client_db.dat.");
+    Console.Error.WriteLine(
+        "Original CM4 databases require direct people_db.dat decoding. " +
+        "Runtime extraction is intentionally disabled because a loaded game contains only its selected subset.");
     return 1;
 }
 
-var editorProcesses = Process.GetProcessesByName("cm data editor");
+var runtimeLayout = isOriginalCm4
+    ? Cm4RuntimeLayout.OriginalCm4
+    : Cm4RuntimeLayout.Cm0304Editor;
+
+if (!File.Exists(serverPath))
+{
+    Console.Error.WriteLine("The database directory must contain server_db.dat, either directly or inside db.");
+    return 1;
+}
+
+var editorProcesses = Process.GetProcessesByName(runtimeLayout.ProcessName);
 
 if (editorProcesses.Length != 1)
 {
-    Console.Error.WriteLine("Open exactly one CM 03-04 Data Editor process with this database loaded.");
+    Console.Error.WriteLine(runtimeLayout.ProcessInstruction);
     return 1;
 }
 
@@ -54,17 +64,29 @@ try
 {
     Console.WriteLine("Reading database string tables...");
     var personNames = ReadPersonNames(serverPath);
-    var clientBuffer = File.ReadAllBytes(clientPath);
+    var hasClientDatabase = File.Exists(clientPath);
+    var metadataBuffer = File.ReadAllBytes(hasClientDatabase ? clientPath : serverPath);
     var leagueMembership = ReadLeagueMembership(databaseDirectory);
-    var namedObjects = ReadNamedObjects(clientBuffer, leagueMembership);
+    var namedObjects = hasClientDatabase
+        ? ReadNamedObjects(metadataBuffer, leagueMembership)
+        : ReadRootNamedObjects(metadataBuffer, leagueMembership);
     Console.WriteLine(
         $"Found {personNames.Count:N0} person names, " +
         $"{namedObjects.Clubs.Count:N0} clubs, " +
         $"{namedObjects.Leagues.Count:N0} leagues, and {namedObjects.Nations.Count:N0} nations.");
 
     Console.WriteLine("Scanning loaded editor people...");
-    DebugPersonNameReferences(processHandle, personNames);
-    var people = ReadPeople(processHandle, personNames, namedObjects);
+    DebugPersonNameReferences(processHandle, personNames, runtimeLayout);
+    var people = ReadPeople(processHandle, personNames, namedObjects, runtimeLayout);
+
+    if (people.Length < 1_000)
+    {
+        Console.Error.WriteLine(
+            $"Only {people.Length:N0} matching people were found. " +
+            "The open CM Data Editor does not appear to have this database loaded.");
+        return 1;
+    }
+
     var clubs = namedObjects.Clubs.Values
         .OrderBy(record => record.Name)
         .ToArray();
@@ -92,7 +114,8 @@ return 0;
 
 static void DebugPersonNameReferences(
     IntPtr processHandle,
-    IReadOnlyDictionary<(uint Id, uint Reference), string> personNames)
+    IReadOnlyDictionary<(uint Id, uint Reference), string> personNames,
+    Cm4RuntimeLayout runtimeLayout)
 {
     var debugName = Environment.GetEnvironmentVariable("CM4_DEBUG_NAME_PART");
 
@@ -122,7 +145,7 @@ static void DebugPersonNameReferences(
             {
                 for (var offset = 0; offset + 12 <= region.Length; offset += 4)
                 {
-                    if (BitConverter.ToUInt32(region, offset) != PersonNameVtable)
+                    if (BitConverter.ToUInt32(region, offset) != runtimeLayout.PersonNameVtable)
                     {
                         continue;
                     }
@@ -478,6 +501,150 @@ static NamedObjectMaps ReadNamedObjects(byte[] buffer, LeagueMembership leagueMe
     return new NamedObjectMaps(clubs, leagueMembership.Leagues, nations);
 }
 
+static NamedObjectMaps ReadRootNamedObjects(
+    byte[] buffer,
+    LeagueMembership leagueMembership)
+{
+    var clubs = new Dictionary<uint, ClubRecord>();
+    var nations = new Dictionary<uint, string>();
+
+    for (var markerOffset = 9; markerOffset + 12 < buffer.Length; markerOffset++)
+    {
+        if (BitConverter.ToUInt32(buffer, markerOffset) != 139)
+        {
+            continue;
+        }
+
+        var clubId = BitConverter.ToUInt32(buffer, markerOffset - 5);
+
+        if (clubId is < 1 or > 20_000_000)
+        {
+            continue;
+        }
+
+        var strings = ReadLengthPrefixedStrings(
+            buffer,
+            markerOffset + 5,
+            Math.Min(buffer.Length, markerOffset + 280));
+
+        if (strings.Count < 2)
+        {
+            continue;
+        }
+
+        var displayNames = strings
+            .Skip(1)
+            .Where(value => value.Length > 1)
+            .ToArray();
+
+        if (displayNames.Length == 0)
+        {
+            continue;
+        }
+
+        var name = displayNames
+            .OrderByDescending(value => value.Length)
+            .First();
+        leagueMembership.ClubLeaguesByName.TryGetValue(name, out var league);
+        clubs.TryAdd(
+            clubId,
+            new ClubRecord(
+                (int)clubId,
+                name,
+                league?.Id,
+                league?.Name ?? ""));
+    }
+
+    for (var textOffset = 2_000_000; textOffset + 16 < buffer.Length; textOffset++)
+    {
+        var length = BitConverter.ToUInt32(buffer, textOffset);
+
+        if (length is < 2 or > 60)
+        {
+            continue;
+        }
+
+        var firstTextOffset = textOffset + 4;
+        var secondLengthOffset = firstTextOffset + checked((int)length * 2) + 2;
+
+        if (secondLengthOffset + 4 > buffer.Length ||
+            BitConverter.ToUInt32(buffer, secondLengthOffset) != length)
+        {
+            continue;
+        }
+
+        var secondTextOffset = secondLengthOffset + 4;
+
+        if (secondTextOffset + length * 2 + 2 > buffer.Length)
+        {
+            continue;
+        }
+
+        var name = ReadUnicode(buffer, firstTextOffset, checked((int)length));
+        var repeatedName = ReadUnicode(buffer, secondTextOffset, checked((int)length));
+
+        if (name.Length == 0 ||
+            !name.Equals(repeatedName, StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        var metadataStart = secondTextOffset + checked((int)length * 2) + 2;
+        var metadataEnd = Math.Min(buffer.Length - 8, metadataStart + 96);
+
+        for (var offset = metadataStart; offset <= metadataEnd; offset++)
+        {
+            var databaseId = BitConverter.ToUInt32(buffer, offset);
+            var nationObjectId = BitConverter.ToUInt32(buffer, offset + 4);
+
+            if (databaseId < 1_000 &&
+                nationObjectId is > 0 and < 5_000 &&
+                nationObjectId > databaseId &&
+                nationObjectId - databaseId <= 2_000)
+            {
+                nations.TryAdd(nationObjectId, name);
+                break;
+            }
+        }
+
+        textOffset = secondTextOffset + checked((int)length * 2);
+    }
+
+    return new NamedObjectMaps(clubs, leagueMembership.Leagues, nations);
+}
+
+static List<string> ReadLengthPrefixedStrings(
+    byte[] buffer,
+    int start,
+    int end)
+{
+    var strings = new List<string>();
+
+    for (var offset = start; offset + 6 <= end; offset++)
+    {
+        var length = BitConverter.ToUInt32(buffer, offset);
+
+        if (length is < 2 or > 60 ||
+            offset + 4 + length * 2 + 2 > end)
+        {
+            continue;
+        }
+
+        var value = ReadUnicode(buffer, offset + 4, checked((int)length));
+
+        if (value.Length != length ||
+            value.Any(character => char.IsControl(character)))
+        {
+            continue;
+        }
+
+        strings.Add(value);
+        offset += 3 + checked((int)length * 2) + 2;
+    }
+
+    return strings;
+}
+
 static uint ReadClubObjectId(byte[] buffer, int textOffset)
 {
     var scanStart = Math.Max(0, textOffset - 256);
@@ -537,7 +704,8 @@ static string ReadUnicode(byte[] buffer, int offset, int length)
 static Cm4Person[] ReadPeople(
     IntPtr processHandle,
     IReadOnlyDictionary<(uint Id, uint Reference), string> personNames,
-    NamedObjectMaps namedObjects)
+    NamedObjectMaps namedObjects,
+    Cm4RuntimeLayout runtimeLayout)
 {
     var people = new Dictionary<int, Cm4Person>();
     long address = 0;
@@ -565,7 +733,8 @@ static Cm4Person[] ReadPeople(
                 {
                     var vtable = BitConverter.ToUInt32(region, offset);
 
-                    if (vtable != PersonVtable && vtable != NonPlayingPersonVtable)
+                    if (vtable != runtimeLayout.PersonVtable &&
+                        vtable != runtimeLayout.NonPlayingPersonVtable)
                     {
                         continue;
                     }
@@ -574,9 +743,10 @@ static Cm4Person[] ReadPeople(
                     var person = ReadPerson(
                         processHandle,
                         personAddress,
-                        vtable == NonPlayingPersonVtable,
+                        vtable == runtimeLayout.NonPlayingPersonVtable,
                         personNames,
-                        namedObjects);
+                        namedObjects,
+                        runtimeLayout);
 
                     if (person is not null)
                     {
@@ -623,7 +793,8 @@ static Rating[] ReadMentalAttributes(
     IntPtr processHandle,
     byte[] personBuffer,
     int personOffset,
-    int personDataPointerOffset)
+    int personDataPointerOffset,
+    Cm4RuntimeLayout runtimeLayout)
 {
     var personDataAddress = BitConverter.ToUInt32(personBuffer, personOffset + personDataPointerOffset);
     var buffer = ReadMemory(processHandle, personDataAddress, 140);
@@ -632,7 +803,7 @@ static Rating[] ReadMentalAttributes(
     const int attributeOffset = currentMentalRecordOffset + 12;
 
     if (buffer is null ||
-        BitConverter.ToUInt32(buffer, currentMentalRecordOffset) != PersonDataVtable)
+        BitConverter.ToUInt32(buffer, currentMentalRecordOffset) != runtimeLayout.PersonDataVtable)
     {
         return [];
     }
@@ -648,7 +819,8 @@ static Cm4Person? ReadPerson(
     long personAddress,
     bool isNonPlaying,
     IReadOnlyDictionary<(uint Id, uint Reference), string> personNames,
-    NamedObjectMaps namedObjects)
+    NamedObjectMaps namedObjects,
+    Cm4RuntimeLayout runtimeLayout)
 {
     var personBuffer = ReadMemory(processHandle, personAddress - 284, 352);
 
@@ -659,9 +831,10 @@ static Cm4Person? ReadPerson(
 
     const int personOffset = 284;
     var id = BitConverter.ToInt32(personBuffer, personOffset + 4);
+    var playerPrefixAdjustment = isNonPlaying ? 0 : runtimeLayout.PlayerPrefixAdjustment;
     var detailAddress = BitConverter.ToUInt32(
         personBuffer,
-        personOffset + (isNonPlaying ? -8 : -20));
+        personOffset + (isNonPlaying ? -8 : -20 + playerPrefixAdjustment));
     var firstNameAddress = BitConverter.ToUInt32(personBuffer, personOffset + 32);
     var secondNameAddress = BitConverter.ToUInt32(personBuffer, personOffset + 36);
     var commonNameAddress = BitConverter.ToUInt32(personBuffer, personOffset + 40);
@@ -673,11 +846,11 @@ static Cm4Person? ReadPerson(
         return null;
     }
 
-    var firstName = ReadPersonName(processHandle, firstNameAddress, personNames);
-    var secondName = ReadPersonName(processHandle, secondNameAddress, personNames);
+    var firstName = ReadPersonName(processHandle, firstNameAddress, personNames, runtimeLayout);
+    var secondName = ReadPersonName(processHandle, secondNameAddress, personNames, runtimeLayout);
     var commonName = commonNameAddress == 0
         ? ""
-        : ReadPersonName(processHandle, commonNameAddress, personNames);
+        : ReadPersonName(processHandle, commonNameAddress, personNames, runtimeLayout);
     var displayName = commonName.Length > 0
         ? commonName
         : string.Join(" ", new[] { firstName, secondName }.Where(value => value.Length > 0));
@@ -704,8 +877,13 @@ static Cm4Person? ReadPerson(
 
     }
 
-    var detailBuffer = ReadMemory(processHandle, detailAddress, isNonPlaying ? 64 : 77);
-    var expectedDetailVtable = isNonPlaying ? NonPlayingDataVtable : PlayingDataVtable;
+    var detailBuffer = ReadMemory(
+        processHandle,
+        detailAddress,
+        isNonPlaying ? 64 : 12 + runtimeLayout.PlayerAttributeCount);
+    var expectedDetailVtable = isNonPlaying
+        ? runtimeLayout.NonPlayingDataVtable
+        : runtimeLayout.PlayingDataVtable;
 
     if (detailBuffer is null ||
         BitConverter.ToUInt32(detailBuffer, 0) != expectedDetailVtable)
@@ -717,7 +895,7 @@ static Cm4Person? ReadPerson(
         processHandle,
         personBuffer,
         personOffset,
-        isNonPlaying ? -104 : -212,
+        isNonPlaying ? -104 : -212 + playerPrefixAdjustment,
         namedObjects);
     var nationId = ReadObjectId(processHandle, BitConverter.ToUInt32(personBuffer, personOffset + 56));
     var packedDate = BitConverter.ToUInt32(personBuffer, personOffset + 48);
@@ -728,7 +906,8 @@ static Cm4Person? ReadPerson(
         processHandle,
         personBuffer,
         personOffset,
-        isNonPlaying ? -108 : -216);
+        isNonPlaying ? -108 : -216 + playerPrefixAdjustment,
+        runtimeLayout);
     Cm4Ratings? playerRatings = null;
     Cm4NonPlayingRatings? nonPlayingRatings = null;
     byte? jobCode = null;
@@ -750,17 +929,17 @@ static Cm4Person? ReadPerson(
     }
     else
     {
-        var attributes = detailBuffer.AsSpan(12, 65).ToArray();
+        var attributes = detailBuffer.AsSpan(12, runtimeLayout.PlayerAttributeCount).ToArray();
         playerRatings = new Cm4Ratings(
             0,
-            BitConverter.ToUInt16(personBuffer, personOffset - 144),
-            BitConverter.ToUInt16(personBuffer, personOffset - 142),
-            BitConverter.ToUInt16(personBuffer, personOffset - 150),
-            BitConverter.ToUInt16(personBuffer, personOffset - 148),
-            BitConverter.ToUInt16(personBuffer, personOffset - 146),
+            BitConverter.ToUInt16(personBuffer, personOffset - 144 + playerPrefixAdjustment),
+            BitConverter.ToUInt16(personBuffer, personOffset - 142 + playerPrefixAdjustment),
+            BitConverter.ToUInt16(personBuffer, personOffset - 150 + playerPrefixAdjustment),
+            BitConverter.ToUInt16(personBuffer, personOffset - 148 + playerPrefixAdjustment),
+            BitConverter.ToUInt16(personBuffer, personOffset - 146 + playerPrefixAdjustment),
             Cm4Schema.PositionLabels.Select((label, index) => new Rating(label, attributes[index])).ToArray(),
             Cm4Schema.SideIndexes.Select(item => new Rating(item.Label, attributes[item.Index])).ToArray(),
-            Cm4Schema.AttributeIndexes.Select(item => new Rating(item.Label, attributes[item.Index])).ToArray(),
+            runtimeLayout.AttributeIndexes.Select(item => new Rating(item.Label, attributes[item.Index])).ToArray(),
             mentalAttributes);
     }
 
@@ -831,12 +1010,13 @@ static int? ReadCurrentClubId(
 static string ReadPersonName(
     IntPtr processHandle,
     uint address,
-    IReadOnlyDictionary<(uint Id, uint Reference), string> personNames)
+    IReadOnlyDictionary<(uint Id, uint Reference), string> personNames,
+    Cm4RuntimeLayout runtimeLayout)
 {
     var buffer = ReadMemory(processHandle, address, 12);
 
     if (buffer is null ||
-        BitConverter.ToUInt32(buffer, 0) != PersonNameVtable)
+        BitConverter.ToUInt32(buffer, 0) != runtimeLayout.PersonNameVtable)
     {
         return "";
     }
@@ -1100,6 +1280,45 @@ record NamedObjectMaps(
     IReadOnlyDictionary<uint, ClubRecord> Clubs,
     IReadOnlyDictionary<int, NamedRecord> Leagues,
     IReadOnlyDictionary<uint, string> Nations);
+record Cm4RuntimeLayout(
+    string ProcessName,
+    string ProcessInstruction,
+    uint PersonVtable,
+    uint NonPlayingPersonVtable,
+    uint PlayingDataVtable,
+    uint NonPlayingDataVtable,
+    uint PersonDataVtable,
+    uint PersonNameVtable,
+    int PlayerPrefixAdjustment,
+    int PlayerAttributeCount,
+    IReadOnlyCollection<(string Label, int Index)> AttributeIndexes)
+{
+    public static readonly Cm4RuntimeLayout Cm0304Editor = new(
+        "cm data editor",
+        "Open exactly one CM 03-04 Data Editor process with this database loaded.",
+        0x006e52bc,
+        0x006eb3d4,
+        0x006c6350,
+        0x006c7104,
+        0x006c727c,
+        0x006c6dd4,
+        0,
+        65,
+        Cm4Schema.AttributeIndexes);
+
+    public static readonly Cm4RuntimeLayout OriginalCm4 = new(
+        "cm4",
+        "Open exactly one CM4 game process and load or start a game using this database.",
+        0x00a2f02c,
+        0x00a30744,
+        0x00a1d120,
+        0x00a2df1c,
+        0x00a1a5d0,
+        0x00a154b0,
+        8,
+        63,
+        Cm4Schema.OriginalCm4AttributeIndexes);
+}
 
 static class Cm4Schema
 {
@@ -1178,6 +1397,16 @@ static class Cm4Schema
         ("First Touch", 35),
         ("Eccentricity", 44)
     ];
+
+    public static readonly (string Label, int Index)[] OriginalCm4AttributeIndexes =
+        AttributeIndexes
+            .Where(item => item.Label is not "First Touch" and not "Eccentricity")
+            .Select(item => (
+                item.Label,
+                item.Index -
+                    (item.Index > 35 ? 1 : 0) -
+                    (item.Index > 44 ? 1 : 0)))
+            .ToArray();
 
     public static readonly string[] MentalAttributeLabels =
     [

@@ -496,11 +496,162 @@ select:focus {
 }
 
 .rep-box {
+  position: relative;
+    isolation: isolate;
   padding: 10px 8px;
   border-right: 1px solid var(--line-soft);
   text-align: center;
 }
 
+@property --gradient-angle {
+  syntax: "<angle>";
+  initial-value: 0turn;
+  inherits: false;
+}
+
+@keyframes gradient-angle {
+  to {
+    --gradient-angle: 1turn;
+  }
+}
+
+.rep-box.ability-tier {
+  border: 0.5px solid transparent;
+  background-image: linear-gradient(var(--ability-background), var(--ability-background)),
+    conic-gradient(from var(--gradient-angle),
+      var(--ability-dark) 0%,
+      var(--ability-mid) 27%,
+      var(--ability-light) 30%,
+      var(--ability-mid) 33%,
+      var(--ability-dark) 40%,
+      var(--ability-dark) 50%,
+      var(--ability-mid) 77%,
+      var(--ability-light) 80%,
+      var(--ability-mid) 83%,
+      var(--ability-dark) 90%);
+  background-clip: padding-box, border-box;
+  background-origin: padding-box, border-box;
+  box-shadow:
+    inset 0 0 18px var(--ability-inner-glow),
+    0 0 4px var(--ability-outer-glow);
+
+}
+
+
+
+.rep-box.ability-animated {
+  animation: gradient-angle 4s infinite linear;
+}
+
+.rep-box.ability-tier:not(.ability-animated) {
+  border-color: #050606;
+  background-image: linear-gradient(var(--ability-background), var(--ability-background));
+}
+
+.rep-box.ability-tier::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 3px;
+  border-radius: 2px;
+  background: radial-gradient(circle at 50% 100%, var(--ability-radial-glow), transparent 90%);
+  pointer-events: none;
+}
+
+.rep-box.ability-tier>* {
+  position: relative;
+  z-index: 1;
+}
+
+.rep-box.ability-tier strong {
+  color: var(--ability-text);
+  text-shadow:
+    0 0 6px var(--ability-text-glow),
+    0 0 16px var(--ability-outer-glow);
+}
+
+.rep-box.ability-gold {
+  --ability-background: #2d230f;
+  --ability-dark: #584827;
+  --ability-mid: #c7a03c;
+  --ability-light: #f9de90;
+  --ability-text: #f9de90;
+  --ability-inner-glow: rgba(223, 200, 132, 0.09);
+  --ability-outer-glow: rgba(210, 163, 15, 0.12);
+  --ability-radial-glow: rgba(127, 95, 8, 0.18);
+  --ability-text-glow: rgba(249, 222, 144, 0.36);
+}
+
+.rep-box.ability-god {
+  --ability-background: #312a18;
+  --ability-dark: #6d5724;
+  --ability-mid: #e0b93c;
+  --ability-light: #fffbe4;
+  --ability-text: #fffbe4;
+  --ability-inner-glow: rgba(255, 246, 191, 0.2);
+  --ability-outer-glow: rgba(255, 215, 72, 0.34);
+  --ability-radial-glow: rgba(255, 235, 145, 0.28);
+  --ability-text-glow: rgba(255, 250, 218, 0.68);
+  animation:
+    gradient-angle 1.0s infinite linear,
+    ability-god-pulse 1.0s infinite ease-in-out;
+}
+
+.rep-box.ability-god::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: -4px;
+  border-radius: 1px;
+  background: radial-gradient(ellipse, rgba(160, 111, 31, 0.24), transparent 100%);
+  filter: blur(1px);
+  pointer-events: none;
+}
+
+.rep-box.ability-god strong {
+  font-weight: 700;
+  letter-spacing: 0.035em;
+}
+
+@keyframes ability-god-pulse {
+
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 4px rgba(255, 246, 191, 0.74),
+      0 0 4px rgba(255, 215, 72, 0.74);
+  }
+
+  50% {
+    box-shadow:
+      inset 0 0 3px rgba(255, 235, 103, 0.7),
+      0 0 3px rgba(255, 202, 10, 0.7);
+  }
+}
+
+.rep-box.ability-silver {
+  --ability-background: #252728;
+  --ability-dark: #54595c;
+  --ability-mid: #a8afb3;
+  --ability-light: #eef2f3;
+  --ability-text: #dce2e4;
+  --ability-inner-glow: rgba(214, 225, 230, 0.08);
+  --ability-outer-glow: rgba(186, 199, 204, 0.12);
+  --ability-radial-glow: rgba(179, 192, 197, 0.15);
+  --ability-text-glow: rgba(225, 234, 237, 0.3);
+}
+
+.rep-box.ability-bronze {
+  --ability-background: #291d16;
+  --ability-dark: #513629;
+  --ability-mid: #9b674a;
+  --ability-light: #d49a72;
+  --ability-text: #c98961;
+  --ability-inner-glow: rgba(181, 113, 74, 0.07);
+  --ability-outer-glow: rgba(154, 91, 55, 0.1);
+  --ability-radial-glow: rgba(143, 79, 45, 0.14);
+  --ability-text-glow: rgba(205, 137, 97, 0.25);
+}
 .rep-box strong {
   display: block;
   margin-top: 4px;
@@ -510,6 +661,11 @@ select:focus {
   font-weight: 400;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .rep-box.ability-animated {
+    animation: none;
+  }
+}
 .history-view {
   display: grid;
   gap: 12px;
@@ -715,25 +871,25 @@ select:focus {
 }
 
 .position-marker.accomplished {
-  background: #1d9e59;
+  background: #1eb363;
 }
 
 .position-marker.limited {
-  background: #c2841a;
+  background: #e1920a;
 }
 
 .position-marker.weak {
-  background: #b44f10;
+  background: #ba5c0e;
 }
 
 .position-marker.awkward {
   background: #b0210b;
-  opacity: 0.3;
+  opacity: 0.51;
 }
 
 .position-marker.very-awkward {
   background: #831c2a;
-  opacity: 0.2;
+  opacity: 0.32;
 }
 
 .position-marker.free-role-marker {

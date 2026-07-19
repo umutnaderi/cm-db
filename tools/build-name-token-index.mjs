@@ -1,0 +1,145 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+
+const INPUTS = [
+  resolve(".tmp-search-index/audited/player_search.csv"),
+  resolve(".tmp-search-index/cm4/retroball_cm0203_0304_profile_ready_v2/player_search.csv"),
+];
+const OUTPUT = resolve("worker/src/name-token-index.json");
+const MAX_PER_TOKEN = 8;
+const MIN_CURRENT_ABILITY = 145;
+const MIN_POTENTIAL_ABILITY = 170;
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        i += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+
+  const [headers, ...records] = rows;
+  return records
+    .filter((record) => record.length > 1)
+    .map((record) =>
+      Object.fromEntries(headers.map((header, index) => [header, record[index] ?? ""])),
+    );
+}
+
+function normalizeTokens(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length >= 3);
+}
+
+function rowScore(row) {
+  return Number(row.current_ability || 0) * 10_000
+    + Number(row.potential_ability || 0) * 100
+    + Number(row.value || 0) / 1_000_000;
+}
+
+function rowPayload(row) {
+  return {
+    database_slug: row.database_slug,
+    source_person_id: row.source_person_id,
+    display_name: row.display_name || null,
+    full_name: row.full_name || null,
+    common_name: row.common_name || null,
+    club_name: row.club_name || null,
+    nation_name: row.nation_name || null,
+    date_of_birth: row.date_of_birth || null,
+    position_text: row.position_text || null,
+    current_ability: row.current_ability ? Number(row.current_ability) : null,
+    potential_ability: row.potential_ability ? Number(row.potential_ability) : null,
+    value: row.value ? Number(row.value) : null,
+    wage: row.wage ? Number(row.wage) : null,
+  };
+}
+
+const buckets = new Map();
+
+for (const input of INPUTS) {
+  for (const row of parseCsv(readFileSync(input, "utf8"))) {
+    const database = row.database_slug;
+    if (!database || !row.source_person_id) continue;
+    if (
+      Number(row.current_ability || 0) < MIN_CURRENT_ABILITY
+      && Number(row.potential_ability || 0) < MIN_POTENTIAL_ABILITY
+    ) {
+      continue;
+    }
+
+    const tokens = new Set([
+      ...normalizeTokens(row.display_name),
+      ...normalizeTokens(row.full_name),
+      ...normalizeTokens(row.common_name),
+    ]);
+
+    for (const token of tokens) {
+      const key = `${database}\t${token}`;
+      const bucket = buckets.get(key) || [];
+      bucket.push(row);
+      buckets.set(key, bucket);
+    }
+  }
+}
+
+const index = {};
+
+for (const [key, rows] of buckets) {
+  const [database, token] = key.split("\t");
+  rows.sort((left, right) =>
+    rowScore(right) - rowScore(left)
+    || String(left.full_name || left.display_name || "").localeCompare(
+      String(right.full_name || right.display_name || ""),
+    ),
+  );
+
+  index[database] ||= {};
+  index[database][token] = rows.slice(0, MAX_PER_TOKEN).map(rowPayload);
+}
+
+mkdirSync(dirname(OUTPUT), { recursive: true });
+writeFileSync(OUTPUT, `${JSON.stringify(index)}\n`);
+
+const sizeKb = Math.round(readFileSync(OUTPUT).length / 1024);
+console.log(`Wrote ${OUTPUT} (${sizeKb} KiB, ${Object.keys(index).length} databases).`);

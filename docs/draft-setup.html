@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Draft Setup · Old-School-Football</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="draft-setup-page">
+    <main class="draft-setup-shell">
+      <header class="draft-setup-header">
+        <a class="eyebrow home-link" href="draft.html">The Ultimate Draft</a>
+        <p id="draftSetupSummary">4-3-3 · Balanced · Classic</p>
+      </header>
+
+      <section class="draft-builder">
+        <aside class="draft-options">
+          <fieldset>
+            <legend>Formation</legend>
+            <div class="draft-choice-grid formation-choices" id="formationChoices"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Style</legend>
+            <div class="draft-choice-grid" id="styleChoices">
+              <button type="button" data-value="Defensive">Defensive</button>
+              <button class="is-selected" type="button" data-value="Balanced">Balanced</button>
+              <button type="button" data-value="Attacking">Attacking</button>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Mode</legend>
+            <div class="draft-choice-grid mode-choices" id="modeChoices">
+              <button class="is-selected" type="button" data-value="Classic">Classic</button>
+              <button type="button" data-value="From memory">From memory</button>
+            </div>
+          </fieldset>
+
+          <div class="draft-roll-intro" id="draftRollIntro">
+            Roll to begin your old-school draft.
+          </div>
+
+          <button class="draft-roll-button" id="draftRollButton" type="button">
+            Roll the Dice <span aria-hidden="true">🎲</span>
+          </button>
+        </aside>
+
+        <section class="formation-preview" aria-label="Formation preview">
+          <div class="formation-pitch" id="formationPitch"></div>
+          <p class="formation-caption" id="formationCaption">4-3-3 · Balanced</p>
+        </section>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
+    </footer>
+
+    <script src="draft-setup.js" type="module"></script>
+  </body>
+</html>

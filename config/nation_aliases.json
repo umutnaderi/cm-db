@@ -1,0 +1,61 @@
+{
+  "aliases": {
+    "antigua and barbuda": "Antigua and Barbuda",
+    "bielorussia": "Belarus",
+    "bosnia": "Bosnia and Herzegovina",
+    "bosnia herzegovina": "Bosnia and Herzegovina",
+    "brunei darussalam": "Brunei",
+    "burkino faso": "Burkina Faso",
+    "burma": "Myanmar",
+    "myanmar burma": "Myanmar",
+    "cape verde islands": "Cape Verde",
+    "china pr": "China",
+    "czech": "Czech Republic",
+    "eire": "Republic of Ireland",
+    "fyr of macedonia": "North Macedonia",
+    "holland": "Netherlands",
+    "kampuchea": "Cambodia",
+    "macedonia": "North Macedonia",
+    "n ireland": "Northern Ireland",
+    "republic of ireland": "Republic of Ireland",
+    "republic of congo": "Republic of Congo",
+    "sao tome and principe": "São Tomé and Príncipe",
+    "sao tome principe": "São Tomé and Príncipe",
+    "st kitts and nevis": "Saint Kitts and Nevis",
+    "st vincent and the grenadines": "Saint Vincent and the Grenadines",
+    "the bahamas": "Bahamas",
+    "the gambia": "Gambia",
+    "the philippines": "Philippines",
+    "trinidad and tobago": "Trinidad and Tobago"
+  },
+  "ambiguous": {
+    "congo": "Can mean Republic of Congo or Democratic Republic of Congo; requires manual review.",
+    "the congo": "Can mean Republic of Congo or Democratic Republic of Congo; requires manual review.",
+    "trinidad": "Short form in source data; confirm whether this means Trinidad and Tobago before linking."
+  },
+  "seed_canonicals": [
+    "Yugoslavia",
+    "Serbia and Montenegro",
+    "Serbia",
+    "Czechoslovakia",
+    "Czech Republic",
+    "Slovakia",
+    "Soviet Union",
+    "Russia",
+    "East Germany",
+    "West Germany",
+    "Germany",
+    "South Vietnam",
+    "Zaire"
+  ],
+  "historical": [
+    "Yugoslavia",
+    "Serbia and Montenegro",
+    "Czechoslovakia",
+    "Soviet Union",
+    "East Germany",
+    "West Germany",
+    "South Vietnam",
+    "Zaire"
+  ]
+}

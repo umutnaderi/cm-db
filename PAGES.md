@@ -9,8 +9,9 @@ npm run pages:build
 ```
 
 This recreates `docs/` from the working frontend and copies only the database
-files required by the browser. The `docs/03-04 dat/` directory contains only
-`cm4-cache.json`.
+frontend assets required by the browser. The database page calls the deployed
+Retroball Worker API at `https://retroball-api.umutnaderi.workers.dev`; Turso
+credentials are not included in the static site.
 
 ## Publish
 

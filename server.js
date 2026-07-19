@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
+import { handleLocalApi } from "./tools/identity/localApi.js";
 
 const root = resolve(".");
 const port = Number(process.env.PORT || 5173);
@@ -704,6 +705,24 @@ function ensureCm4Cache(databasePath) {
 createServer((request, response) => {
   const requestUrl = new URL(request.url || "/", `http://localhost:${port}`);
   const pathname = requestUrl.pathname;
+
+  if (pathname.startsWith("/local-api/api/")) {
+    try {
+      const payload = JSON.stringify(handleLocalApi(requestUrl));
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      response.end(payload);
+    } catch (error) {
+      response.writeHead(500, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      response.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
 
   if (pathname === "/api/databases") {
     response.writeHead(200, {

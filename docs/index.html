@@ -3,87 +3,37 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Championship Manager DB Browser</title>
+    <title>Old-School-Football</title>
     <link rel="stylesheet" href="styles.css">
   </head>
-  <body>
-    <main class="shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Old-School-Football</p>
-        </div>
-        <div class="database-tools">
-          <label class="database-picker">
-            <span>Database</span>
-            <select id="databaseSelect" disabled>
-              <option>Loading databases...</option>
-            </select>
-          </label>
-          <div class="status" id="status">Loading database...</div>
-        </div>
+  <body class="destination-page home-page">
+    <div class="destination-background" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+
+    <main class="destination-shell">
+      <header class="destination-header">
+        <p class="eyebrow">Old-School-Football</p>
+        <h1>Choose your destination</h1>
       </header>
 
-      <section class="controls" aria-label="Search filters">
-        <label>
-          <span>Name or surname</span>
-          <input id="nameSearch" type="search" placeholder="Francesco Totti">
-        </label>
-        <label>
-          <span>Club</span>
-          <select id="clubFilter">
-            <option value="">All clubs</option>
-          </select>
-        </label>
-        <label>
-          <span>League</span>
-          <select id="leagueFilter">
-            <option value="">All leagues</option>
-          </select>
-        </label>
-        <label>
-          <span>Nation</span>
-          <select id="nationFilter">
-            <option value="">All nations</option>
-          </select>
-        </label>
-      </section>
+      <nav class="destination-grid" aria-label="Main destinations">
+        <a class="destination-card database-destination" href="database.html">
+          <span class="destination-label">The Ultimate Database</span>
+          <span class="destination-description">Explore players, staff and attributes across the classic databases.</span>
+        </a>
 
-      <section class="summary" aria-label="Database summary">
-        <div>
-          <span id="playerCount">-</span>
-          <p>staff records</p>
-        </div>
-        <div>
-          <span id="clubCount">-</span>
-          <p>clubs</p>
-        </div>
-        <div>
-          <span id="leagueCount">-</span>
-          <p>leagues</p>
-        </div>
-        <div>
-          <span id="nationCount">-</span>
-          <p>nations</p>
-        </div>
-      </section>
-
-      <section class="workspace">
-        <aside class="results" aria-label="Search results">
-          <div class="results-head">
-            <h2>Players and Staff</h2>
-            <span id="resultCount">0 shown</span>
-          </div>
-          <div id="resultsList" class="results-list"></div>
-        </aside>
-
-        <article class="profile" id="profile">
-          <div class="empty-state">
-            Select a record to view the CM-style profile.
-          </div>
-        </article>
-      </section>
+        <a class="destination-card draft-destination" href="draft.html">
+          <span class="destination-label">The Ultimate Draft</span>
+          <span class="destination-description">Build your old-school football team through the draft.</span>
+        </a>
+      </nav>
     </main>
 
-    <script src="app.js" type="module"></script>
+    <footer class="site-footer">
+      <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
+    </footer>
   </body>
 </html>

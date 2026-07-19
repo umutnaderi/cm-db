@@ -10,9 +10,9 @@ const uint ProcessVmRead = 0x0010;
 const uint MemCommit = 0x1000;
 const uint PageGuard = 0x100;
 const uint PageNoAccess = 0x01;
-if (args.Length != 2)
+if (args.Length is < 2 or > 3)
 {
-    Console.Error.WriteLine("Usage: cm4-extract <database-directory> <output-json>");
+    Console.Error.WriteLine("Usage: cm4-extract <database-directory> <output-json> [--metadata-only]");
     return 1;
 }
 
@@ -25,8 +25,15 @@ var dataDirectory = File.Exists(Path.Combine(nestedDatabaseDirectory, "server_db
 var serverPath = Path.Combine(dataDirectory, "server_db.dat");
 var clientPath = Path.Combine(dataDirectory, "client_db.dat");
 var isOriginalCm4 = !File.Exists(clientPath);
+var metadataOnly = args.Length == 3 && args[2] == "--metadata-only";
 
-if (isOriginalCm4)
+if (!File.Exists(serverPath))
+{
+    Console.Error.WriteLine("The database directory must contain server_db.dat, either directly or inside db.");
+    return 1;
+}
+
+if (isOriginalCm4 && !metadataOnly)
 {
     Console.Error.WriteLine(
         "Original CM4 databases require direct people_db.dat decoding. " +
@@ -38,10 +45,26 @@ var runtimeLayout = isOriginalCm4
     ? Cm4RuntimeLayout.OriginalCm4
     : Cm4RuntimeLayout.Cm0304Editor;
 
-if (!File.Exists(serverPath))
+if (metadataOnly)
 {
-    Console.Error.WriteLine("The database directory must contain server_db.dat, either directly or inside db.");
-    return 1;
+    var metadataBuffer = File.ReadAllBytes(isOriginalCm4 ? serverPath : clientPath);
+    var leagueMembership = ReadLeagueMembership(databaseDirectory);
+    var namedObjects = isOriginalCm4
+        ? ReadRootNamedObjects(metadataBuffer, leagueMembership)
+        : ReadNamedObjects(metadataBuffer, leagueMembership);
+    var clubs = namedObjects.Clubs.Values.OrderBy(record => record.Name).ToArray();
+    var leagues = namedObjects.Leagues.Values.OrderBy(record => record.Name).ToArray();
+    var nations = namedObjects.Nations
+        .Select(pair => new NamedRecord(checked((int)pair.Key), pair.Value))
+        .OrderBy(record => record.Name)
+        .ToArray();
+    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+    using var output = File.Create(outputPath);
+    WriteDatabase(output, Array.Empty<Cm4Person>(), clubs, leagues, nations);
+    Console.WriteLine(
+        $"Wrote metadata-only cache with {clubs.Length:N0} clubs, " +
+        $"{leagues.Length:N0} leagues, and {nations.Length:N0} nations to {outputPath}");
+    return 0;
 }
 
 var editorProcesses = Process.GetProcessesByName(runtimeLayout.ProcessName);

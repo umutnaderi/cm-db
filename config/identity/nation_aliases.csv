@@ -1,0 +1,27 @@
+action,source_name,canonical_name,public_id,historical,notes
+link,Antigua & Barbuda,Antigua and Barbuda,nation_antigua_and_barbuda,0,Orthographic variant
+link,Bielorussia,Belarus,nation_belarus,0,Older English spelling
+link,Bosnia-Herzegovina,Bosnia and Herzegovina,nation_bosnia_and_herzegovina,0,Punctuation variant
+link,Burkino Faso,Burkina Faso,nation_burkina_faso,0,Source spelling correction
+link,Cape Verde Islands,Cape Verde,nation_cape_verde,0,Long-form source variant
+link,China PR,China,nation_china,0,Football database naming variant
+link,Czech,Czech Republic,nation_czech_republic,0,Abbreviated source variant; not Czechoslovakia
+link,Eire,Republic of Ireland,nation_republic_of_ireland,0,English and Irish naming variant
+link,French Guyana,French Guiana,nation_french_guiana,0,Source spelling correction
+link,Holland,Netherlands,nation_netherlands,0,Common football name
+link,N.Ireland,Northern Ireland,nation_northern_ireland,0,Abbreviated source variant
+link,The Bahamas,Bahamas,nation_bahamas,0,Leading article variant
+link,The Gambia,Gambia,nation_gambia,0,Leading article variant
+link,The Philippines,Philippines,nation_philippines,0,Leading article variant
+link,Surinam,Suriname,nation_suriname,0,Source spelling variant
+create_new,Yugoslavia,Yugoslavia,nation_yugoslavia,1,Historical identity kept separate
+create_new,Serbia and Montenegro,Serbia and Montenegro,nation_serbia_and_montenegro,1,Historical identity kept separate
+create_new,Serbia,Serbia,nation_serbia,0,Kept separate from Yugoslavia and Serbia and Montenegro
+create_new,Czechoslovakia,Czechoslovakia,nation_czechoslovakia,1,Historical identity kept separate
+create_new,Czech Republic,Czech Republic,nation_czech_republic,0,Kept separate from Czechoslovakia and Slovakia
+create_new,Slovakia,Slovakia,nation_slovakia,0,Kept separate from Czechoslovakia
+create_new,Soviet Union,Soviet Union,nation_soviet_union,1,Historical identity kept separate
+create_new,Russia,Russia,nation_russia,0,Kept separate from Soviet Union
+create_new,East Germany,East Germany,nation_east_germany,1,Historical identity kept separate
+create_new,West Germany,West Germany,nation_west_germany,1,Historical identity kept separate
+create_new,Germany,Germany,nation_germany,0,Kept separate from East and West Germany

@@ -1,0 +1,9 @@
+{
+  "name": "retroball-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-30",
+  "vars": {
+    "ALLOWED_ORIGIN": "http://localhost:5173",
+    "ALLOWED_ORIGIN_PROD": "https://umutnaderi.github.io/cm-db/"
+  }
+}

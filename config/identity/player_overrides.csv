@@ -1,0 +1,10 @@
+action,database_slug,source_person_id,canonical_public_id,canonical_name,notes
+link,cm9697_vanilla_original,3853,player_figo_portugal_1972,Figo,Sentinel: early full name differs from later common name
+link,cm9798_vanilla_original,2139,player_figo_portugal_1972,Figo,Sentinel: early full name differs from later common name
+link,cm9899_vanilla_original,31936,player_figo_portugal_1972,Figo,Sentinel cross-database identity
+link,cm9900_vanilla_original,41765,player_figo_portugal_1972,Figo,Sentinel cross-database identity
+link,cm0001_vanilla_original,60347,player_figo_portugal_1972,Figo,Sentinel cross-database identity
+link,cm0102_vanilla_original,98231,player_figo_portugal_1972,Figo,Sentinel cross-database identity
+link,cm0203_vanilla_original,540,player_figo_portugal_1972,Figo,Sentinel cross-database identity
+link,cm0304_vanilla_original,518,player_figo_portugal_1972,Figo,Sentinel cross-database identity
+link,cm9697_vanilla_original,4069,player_rivaldo_brazil_1972,Rivaldo,Sentinel: missing DOB in CM 96/97

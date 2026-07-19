@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The Ultimate Database - Old-School-Football</title>
+    <meta name="retroball-api-url" content="/local-api">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <a class="eyebrow home-link" href="index.html">Old-School-Football</a>
+        </div>
+        <div class="database-tools">
+          <label class="database-picker">
+            <span>Season</span>
+            <select id="databaseSelect" disabled>
+              <option>Loading databases...</option>
+            </select>
+          </label>
+          <div class="status" id="status">Loading databases...</div>
+        </div>
+      </header>
+
+      <section class="controls" aria-label="Search filters">
+        <label class="search-field">
+          <span>Player search</span>
+          <input id="nameSearch" type="search" placeholder="Ronaldo" autocomplete="off" disabled>
+        </label>
+        <label>
+          <span>Club</span>
+          <input id="clubSearch" type="search" placeholder="Real Madrid" autocomplete="off" disabled>
+        </label>
+        <label>
+          <span>League</span>
+          <input id="leagueSearch" type="search" placeholder="Premier Division" autocomplete="off" disabled>
+        </label>
+        <label>
+          <span>Nation</span>
+          <input id="nationSearch" type="search" placeholder="Brazil" autocomplete="off" disabled>
+        </label>
+      </section>
+
+      <section class="workspace">
+        <aside class="results" aria-label="Search results">
+          <div class="results-head">
+            <h2>Players</h2>
+            <span id="resultCount">0 shown</span>
+          </div>
+          <div id="resultsList" class="results-list"></div>
+        </aside>
+
+        <article class="profile" id="profile">
+          <div class="empty-state">No player selected.</div>
+        </article>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
+    </footer>
+
+    <script src="src/databaseSearch.js" type="module"></script>
+  </body>
+</html>

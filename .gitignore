@@ -1,5 +1,7 @@
 node_modules/
 worker/node_modules/
+.wrangler/
+worker/.wrangler/
 
 *.log
 .tmp-*

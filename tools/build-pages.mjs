@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const root = resolve(".");
@@ -35,6 +35,17 @@ for (const file of frontendFiles) {
 
 await cp(join(root, "img"), join(output, "img"), { recursive: true });
 await cp(join(root, "src"), join(output, "src"), { recursive: true });
+
+const pagesDatabaseHtml = join(output, "database.html");
+const databaseHtml = await readFile(pagesDatabaseHtml, "utf8");
+await writeFile(
+  pagesDatabaseHtml,
+  databaseHtml.replace(
+    '<meta name="retroball-api-url" content="/local-api">',
+    '<meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">',
+  ),
+);
+
 await writeFile(join(output, ".nojekyll"), "");
 
 console.log(`GitHub Pages package written to ${output}`);

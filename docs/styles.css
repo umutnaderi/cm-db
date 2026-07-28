@@ -1033,6 +1033,25 @@ select:focus {
   text-align: center;
 }
 
+.profile-banner.has-club-colours {
+  background: var(--club-banner-bg);
+  border-bottom-color: color-mix(in srgb, var(--club-banner-fg) 35%, transparent);
+  color: var(--club-banner-fg);
+}
+
+.profile-banner.has-club-colours h2,
+.profile-banner.has-club-colours .profile-club-name.inline-filter,
+.profile-banner.has-club-colours .profile-full-name,
+.profile-banner.has-club-colours .born-line,
+.profile-banner.has-club-colours .born-line .inline-filter {
+  color: var(--club-banner-fg);
+}
+
+.profile-banner.has-club-colours .profile-club-name.inline-filter,
+.profile-banner.has-club-colours .born-line {
+  opacity: 0.82;
+}
+
 .mobile-profile-back {
   display: none;
 }
@@ -2370,6 +2389,9 @@ select:focus {
 }
 
 .profile-club-name.inline-filter {
+  margin-left: 0.45em;
+  padding-left: 0.55em;
+  border-left: 1px solid currentColor;
   color: #8d918e;
 }
 

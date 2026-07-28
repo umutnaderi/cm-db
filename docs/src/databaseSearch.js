@@ -5,7 +5,7 @@ import {
   getPlayerHistory,
   getPlayerSeasons,
   searchPlayers,
-} from "./lib/retroballApi.js";
+} from "./lib/retroballApi.js?v=20260728-1";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -170,6 +170,10 @@ function playerName(player) {
   return player.display_name || player.full_name || player.common_name || "Unknown player";
 }
 
+function displayClubName(player) {
+  return player?.canonical_club_name || player?.club_name || "";
+}
+
 function distinctFullName(player) {
   const name = playerName(player);
   return player.full_name && player.full_name !== name ? player.full_name : "";
@@ -250,7 +254,7 @@ function renderResults(message = "") {
       ${fullName ? `<span class="result-full-name">${escapeHtml(fullName)}</span>` : ""}
       <span class="result-meta">
         ${[
-          player.club_name || "No club",
+          displayClubName(player) || "No club",
           player.nation_name || "Unknown nation",
           player.position_text || "No position",
           formatDate(player.date_of_birth),
@@ -278,12 +282,12 @@ function fact(label, value) {
   `;
 }
 
-function filterFact(label, value, filter) {
+function filterFact(label, value, filter, displayValue = value) {
   if (!value) return fact(label, "-");
   return `
     <div class="fact">
       <span>${escapeHtml(label)}</span>
-      <button type="button" class="fact-filter" data-search-filter="${escapeHtml(filter)}" data-search-value="${escapeHtml(value)}">${escapeHtml(value)}</button>
+      <button type="button" class="fact-filter" data-search-filter="${escapeHtml(filter)}" data-search-value="${escapeHtml(value)}">${escapeHtml(displayValue)}</button>
     </div>
   `;
 }
@@ -625,7 +629,7 @@ function renderHistory() {
             ${state.selectedHistory.map((row) => `
               <tr>
                 <td>${escapeHtml(formatValue(row.season_year))}</td>
-                <td>${row.club_name ? `<button type="button" class="fact-filter table-filter" data-search-filter="club" data-search-value="${escapeHtml(row.club_name)}">${escapeHtml(row.club_name)}</button>` : "-"}</td>
+                <td>${row.club_name ? `<button type="button" class="fact-filter table-filter" data-search-filter="club" data-search-value="${escapeHtml(row.club_name)}">${escapeHtml(row.canonical_club_name || row.club_name)}</button>` : "-"}</td>
                 ${showLeague ? `<td>${row.league_name ? `<button type="button" class="fact-filter table-filter" data-search-filter="league" data-search-value="${escapeHtml(row.league_name)}">${escapeHtml(row.league_name)}</button>` : "-"}</td>` : ""}
                 <td class="history-number">${escapeHtml(formatNumber(row.apps))}</td>
                 <td class="history-number">${escapeHtml(formatNumber(row.goals))}</td>
@@ -655,7 +659,7 @@ function renderDetailContent(player, profile) {
   return `
     <div class="profile-body">
       <section class="facts api-profile-facts" aria-label="Player facts">
-        ${filterFact("Club", player.club_name, "club")}
+        ${filterFact("Club", player.club_name, "club", displayClubName(player))}
         ${latestLeague() ? filterFact("League", latestLeague(), "league") : ""}
         ${filterFact("Nation", player.nation_name, "nation")}
         ${fact("Position", player.position_text || "-")}
@@ -678,6 +682,78 @@ function renderDetailContent(player, profile) {
   `;
 }
 
+const CLUB_COLOUR_PALETTE = [
+  "#000000", "#ffffff", "#808080", "#707090", "#e00000", "#b00000",
+  "#901000", "#ff7000", "#e08000", "#fff000", "#ffd000", "#008030",
+  "#006030", "#002060", "#002080", "#0030a0", "#0050d0", "#60c0ff",
+  "#800040", "#600060", "#800020", "#804000", "#a05000", "#ff9595",
+  "#d9b128", "#c6c6c6", "#ce84ce", "#008888", "#80c848", "#ffaa00",
+  "#10a8a8", "#056161", "#df1e7a", "#003e30",
+];
+
+const CLUB_COLOUR_CODES = {
+  BLA: "#000000",
+  WHI: "#ffffff",
+  GRE: "#808080",
+  RED: "#b00000",
+  ORA: "#e08000",
+  YEL: "#ffd000",
+  GRN: "#006030",
+  BLU: "#002080",
+  PUR: "#600060",
+  BRO: "#804000",
+  PIN: "#ff9595",
+  GOL: "#d9b128",
+};
+
+function clubColour(value) {
+  if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) {
+    return value.toLowerCase();
+  }
+  if (value === null || value === undefined || value === "") return "";
+  const codeColour = CLUB_COLOUR_CODES[String(value).trim().toUpperCase()];
+  if (codeColour) return codeColour;
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "";
+  const directIndex = Number.isInteger(numeric) && numeric >= 0 && numeric < CLUB_COLOUR_PALETTE.length
+    ? numeric
+    : (numeric >>> 24);
+  return CLUB_COLOUR_PALETTE[directIndex] || "";
+}
+
+function profileBannerTheme(player, profile) {
+  const colours = profile?.clubColors || player?.club_colors;
+  if (!colours) return { className: "", style: "" };
+
+  let background = clubColour(colours.background_colour);
+  let foreground = clubColour(colours.foreground_colour);
+
+  // Match the CM editor: "fore" is text and "back" is the fill.
+  // Prefer the canonical pair from the API, then use the current season.
+  if (!background || !foreground || background === foreground) {
+    const currentPair = [1, 2, 3]
+      .map((index) => ({
+        background: clubColour(colours[`back_colour${index}`]),
+        foreground: clubColour(colours[`fore_colour${index}`]),
+      }))
+      .find((pair) =>
+        pair.background
+        && pair.foreground
+        && pair.background !== pair.foreground
+      );
+    background = currentPair?.background || "";
+    foreground = currentPair?.foreground || "";
+  }
+
+  if (!background || !foreground) return { className: "", style: "" };
+
+  return {
+    className: " has-club-colours",
+    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground}"`,
+  };
+}
+
 function renderProfile() {
   const player = state.selectedPlayer;
   document.body.classList.toggle("mobile-profile-open", Boolean(player));
@@ -689,15 +765,16 @@ function renderProfile() {
 
   const profile = state.selectedProfile;
   const fullName = distinctFullName(player);
+  const bannerTheme = profileBannerTheme(player, profile);
   elements.profile.innerHTML = `
-    <div class="profile-banner">
+    <div class="profile-banner${bannerTheme.className}"${bannerTheme.style}>
       <button type="button" class="mobile-profile-back" data-mobile-back>Back to results</button>
       <div class="profile-title">
         <h2>
           <span class="profile-player-name">${escapeHtml(playerName(player))}</span>
           ${
             player.club_name
-              ? `<button type="button" class="profile-club-name fact-filter inline-filter" data-search-filter="club" data-search-value="${escapeHtml(player.club_name)}">(${escapeHtml(player.club_name)})</button>`
+              ? `<button type="button" class="profile-club-name fact-filter inline-filter" data-search-filter="club" data-search-value="${escapeHtml(player.club_name)}">${escapeHtml(displayClubName(player))}</button>`
               : ""
           }
         </h2>

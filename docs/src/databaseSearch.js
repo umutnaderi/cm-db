@@ -594,15 +594,11 @@ function renderSeasonLinks(player) {
   `;
 }
 
-function renderAttributes(profile) {
+function attributeProfile(profile) {
   const attributes = Array.isArray(profile?.attributes) ? profile.attributes : [];
   const hiddenAttributes = Array.isArray(profile?.hiddenAttributes)
     ? profile.hiddenAttributes
     : [];
-
-  if (!attributes.length) {
-    return '<div class="empty-state compact-empty">No attribute profile available for this database yet.</div>';
-  }
 
   const byLabel = ratingsByLabel(attributes);
   const usedLabels = new Set();
@@ -621,6 +617,19 @@ function renderAttributes(profile) {
   hiddenItems.forEach((item) => usedLabels.add(item.label));
   const extraItems = attributes.filter((item) => !usedLabels.has(item.label));
 
+  return {
+    attributes,
+    groups,
+    additionalItems: [...hiddenItems, ...extraItems],
+  };
+}
+
+function renderAttributes(profile) {
+  const { attributes, groups } = attributeProfile(profile);
+  if (!attributes.length) {
+    return '<div class="empty-state compact-empty">No attribute profile available for this database yet.</div>';
+  }
+
   return `
     <section class="profile-section attributes-section" aria-label="Player attributes">
       <div class="attribute-columns">
@@ -631,19 +640,21 @@ function renderAttributes(profile) {
           </div>
         `).join("")}
       </div>
-      ${
-        hiddenItems.length || extraItems.length
-          ? `
-      <details class="hidden-attributes">
-        <summary>More Attributes</summary>
-        <div class="hidden-attribute-grid">
-          ${renderRatingRows([...hiddenItems, ...extraItems])}
-        </div>
-      </details>
-      `
-          : ""
-      }
     </section>
+  `;
+}
+
+function renderMoreAttributes(profile) {
+  const { additionalItems } = attributeProfile(profile);
+  if (!additionalItems.length) return "";
+
+  return `
+    <details class="hidden-attributes">
+      <summary>More Attributes</summary>
+      <div class="hidden-attribute-grid">
+        ${renderRatingRows(additionalItems)}
+      </div>
+    </details>
   `;
 }
 
@@ -820,7 +831,8 @@ function renderFootStrength(feet) {
   const available = feet.filter((foot) => Number.isFinite(Number(foot.value)));
   if (!available.length) return "";
   return `
-    <div class="foot-strength" aria-label="Foot strength">
+    <section class="foot-strength" aria-label="Foot strength">
+      <h3>Feet</h3>
       <div class="foot-options">
         ${available.map((foot) => {
           const side = /left/i.test(foot.label) ? "left" : "right";
@@ -830,12 +842,18 @@ function renderFootStrength(feet) {
           </div>`;
         }).join("")}
       </div>
-    </div>`;
+    </section>`;
 }
 
 function renderPositionPanel(profile) {
   const ratings = positionalRatings(profile);
-  if (!ratings.positions.length && !ratings.sides.length && !ratings.foot.length) return "";
+  const moreAttributes = renderMoreAttributes(profile);
+  if (
+    !ratings.positions.length &&
+    !ratings.sides.length &&
+    !ratings.foot.length &&
+    !moreAttributes
+  ) return "";
   const roles = buildPitchRoles(ratings);
   const occupied = new Set(roles.map((role) => role.label));
   const primary = roles[0];
@@ -866,6 +884,7 @@ function renderPositionPanel(profile) {
             ${hasUnspecifiedSides ? '<span><i class="legend-dot side-unspecified"></i>Side unspecified</span>' : ""}</div>
         </div>
         <div class="position-details">
+          ${moreAttributes}
           <details class="position-ratings-toggle"><summary>Position ratings</summary><div class="position-values">${renderRatingRows([...ratings.positions, ...ratings.sides])}</div></details>
           ${renderFootStrength(ratings.foot)}
         </div>

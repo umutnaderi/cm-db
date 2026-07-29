@@ -1,43 +1,93 @@
+import { getDraftCandidates } from "./src/lib/retroballApi.js";
+
+const PITCH_ROWS = {
+  F: 14,
+  AM: 30,
+  M: 46,
+  DM: 62,
+  WB: 68,
+  D: 78,
+  SW: 86,
+  GK: 94,
+};
+
+const STYLE_ROLE_PREFIX = {
+  Defensive: "DM",
+  Balanced: "M",
+  Attacking: "AM",
+};
+
+function slot(role, x, options = {}) {
+  return { role, x, ...options };
+}
+
 const formations = {
   "4-3-3": [
-    ["GK", 50, 91], ["LB", 18, 76], ["CB", 39, 79], ["CB", 61, 79], ["RB", 82, 76],
-    ["CM", 27, 52], ["DM", 50, 60], ["CM", 73, 52],
-    ["LW", 20, 28], ["ST", 50, 22], ["RW", 80, 28],
+    slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
+    slot("MC", 28, { flexible: true }), slot("MC", 50, { flexible: true }),
+    slot("MC", 74, { flexible: true }), slot("FL", 17), slot("FC", 50), slot("FR", 83),
   ],
   "4-4-2": [
-    ["GK", 50, 91], ["LB", 18, 76], ["CB", 39, 79], ["CB", 61, 79], ["RB", 82, 76],
-    ["LM", 18, 49], ["CM", 40, 55], ["CM", 60, 55], ["RM", 82, 49],
-    ["ST", 39, 24], ["ST", 61, 24],
+    slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
+    slot("ML", 17, { flexible: true }), slot("MC", 40, { flexible: true }),
+    slot("MC", 60, { flexible: true }), slot("MR", 83, { flexible: true }),
+    slot("FC", 39), slot("FC", 61),
   ],
   "4-2-3-1": [
-    ["GK", 50, 91], ["LB", 18, 76], ["CB", 39, 79], ["CB", 61, 79], ["RB", 82, 76],
-    ["DM", 39, 60], ["DM", 61, 60],
-    ["LW", 20, 39], ["AM", 50, 42], ["RW", 80, 39], ["ST", 50, 20],
+    slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
+    slot("DMC", 39), slot("DMC", 61),
+    slot("AML", 17, { styleRoles: { Defensive: "ML", Balanced: "AML", Attacking: "AML" } }),
+    slot("AMC", 50, { styleRoles: { Defensive: "MC", Balanced: "AMC", Attacking: "AMC" } }),
+    slot("AMR", 83, { styleRoles: { Defensive: "MR", Balanced: "AMR", Attacking: "AMR" } }),
+    slot("FC", 50),
   ],
-  "4-2-4": [
-    ["GK", 50, 91], ["LB", 18, 76], ["CB", 39, 79], ["CB", 61, 79], ["RB", 82, 76],
-    ["CM", 39, 56], ["CM", 61, 56],
-    ["LW", 17, 29], ["ST", 40, 22], ["ST", 60, 22], ["RW", 83, 29],
+  "4-1-2-1-2": [
+    slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
+    slot("DMC", 50), slot("MC", 34, { flexible: true }), slot("MC", 66, { flexible: true }),
+    slot("AMC", 50), slot("FC", 39), slot("FC", 61),
   ],
-  "3-5-2": [
-    ["GK", 50, 91], ["CB", 28, 78], ["CB", 50, 81], ["CB", 72, 78],
-    ["LWB", 14, 54], ["CM", 35, 54], ["DM", 50, 62], ["CM", 65, 54], ["RWB", 86, 54],
-    ["ST", 39, 24], ["ST", 61, 24],
-  ],
-  "5-3-2": [
-    ["GK", 50, 91], ["LWB", 12, 70], ["CB", 31, 79], ["CB", 50, 82], ["CB", 69, 79], ["RWB", 88, 70],
-    ["CM", 32, 52], ["DM", 50, 60], ["CM", 68, 52],
-    ["ST", 39, 24], ["ST", 61, 24],
+  "4-2-2-2": [
+    slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
+    slot("DMC", 39), slot("DMC", 61), slot("AML", 25), slot("AMR", 75),
+    slot("FC", 39), slot("FC", 61),
   ],
   "4-5-1": [
-    ["GK", 50, 91], ["LB", 18, 76], ["CB", 39, 79], ["CB", 61, 79], ["RB", 82, 76],
-    ["LM", 15, 49], ["CM", 35, 53], ["DM", 50, 61], ["CM", 65, 53], ["RM", 85, 49],
-    ["ST", 50, 22],
+    slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
+    slot("ML", 14, { flexible: true }), slot("MC", 32, { flexible: true }),
+    slot("MC", 50, { flexible: true }), slot("MC", 68, { flexible: true }),
+    slot("MR", 86, { flexible: true }), slot("FC", 50),
+  ],
+  "3-5-2": [
+    slot("GK", 50), slot("DC", 28), slot("DC", 50), slot("DC", 72),
+    slot("WBL", 8), slot("MC", 35, { flexible: true }), slot("MC", 50, { flexible: true }),
+    slot("MC", 65, { flexible: true }), slot("WBR", 92), slot("FC", 39), slot("FC", 61),
+  ],
+  "3-4-1-2": [
+    slot("GK", 50), slot("DC", 28), slot("DC", 50), slot("DC", 72),
+    slot("ML", 15, { flexible: true }), slot("MC", 40, { flexible: true }),
+    slot("MC", 60, { flexible: true }), slot("MR", 85, { flexible: true }),
+    slot("AMC", 50), slot("FC", 39), slot("FC", 61),
   ],
   "3-4-3": [
-    ["GK", 50, 91], ["CB", 28, 78], ["CB", 50, 81], ["CB", 72, 78],
-    ["LM", 16, 53], ["CM", 40, 57], ["CM", 60, 57], ["RM", 84, 53],
-    ["LW", 20, 28], ["ST", 50, 22], ["RW", 80, 28],
+    slot("GK", 50), slot("DC", 28), slot("DC", 50), slot("DC", 72),
+    slot("ML", 15, { flexible: true }), slot("MC", 40, { flexible: true }),
+    slot("MC", 60, { flexible: true }), slot("MR", 85, { flexible: true }),
+    slot("FL", 17), slot("FC", 50), slot("FR", 83),
+  ],
+  "5-2-1-2": [
+    slot("GK", 50), slot("WBL", 8), slot("DC", 31), slot("DC", 50), slot("DC", 69),
+    slot("WBR", 92), slot("MC", 39, { flexible: true }), slot("MC", 61, { flexible: true }),
+    slot("AMC", 50), slot("FC", 39), slot("FC", 61),
+  ],
+  "5-2-3": [
+    slot("GK", 50), slot("WBL", 8), slot("DC", 31), slot("DC", 50), slot("DC", 69),
+    slot("WBR", 92), slot("MC", 39, { flexible: true }), slot("MC", 61, { flexible: true }),
+    slot("FL", 17), slot("FC", 50), slot("FR", 83),
+  ],
+  "5-3-2": [
+    slot("GK", 50), slot("WBL", 8), slot("DC", 31), slot("DC", 50), slot("DC", 69),
+    slot("WBR", 92), slot("MC", 30, { flexible: true }), slot("MC", 50, { flexible: true }),
+    slot("MC", 70, { flexible: true }), slot("FC", 39), slot("FC", 61),
   ],
 };
 
@@ -45,6 +95,11 @@ const state = {
   formation: "4-3-3",
   style: "Balanced",
   mode: "Classic",
+  suggestions: [],
+  selectedCandidateKey: "",
+  drafted: new Map(),
+  rolling: false,
+  rollNumber: 0,
 };
 
 const formationChoices = document.querySelector("#formationChoices");
@@ -54,6 +109,355 @@ const pitch = document.querySelector("#formationPitch");
 const caption = document.querySelector("#formationCaption");
 const summary = document.querySelector("#draftSetupSummary");
 const rollIntro = document.querySelector("#draftRollIntro");
+const rollButton = document.querySelector("#draftRollButton");
+const suggestions = document.querySelector("#draftSuggestions");
+const suggestionHelp = document.querySelector("#draftSuggestionHelp");
+const progress = document.querySelector("#draftProgress");
+
+function effectiveRole(item) {
+  if (item.styleRoles) return item.styleRoles[state.style] || item.role;
+  if (!item.flexible) return item.role;
+  const side = item.role.endsWith("L") ? "L" : item.role.endsWith("R") ? "R" : "C";
+  return `${STYLE_ROLE_PREFIX[state.style]}${side}`;
+}
+
+function rolePrefix(role) {
+  return ["GK", "SW", "WB", "DM", "AM", "D", "M", "F"]
+    .find((prefix) => role.startsWith(prefix)) || role;
+}
+
+function pitchRow(role) {
+  return PITCH_ROWS[rolePrefix(role)] || 50;
+}
+
+function currentSlots() {
+  return formations[state.formation].map((item, index) => ({
+    ...item,
+    id: `slot-${index}`,
+    effectiveRole: effectiveRole(item),
+    y: item.y ?? pitchRow(effectiveRole(item)),
+  }));
+}
+
+function candidateKey(candidate) {
+  return `${candidate.database_slug}:${candidate.source_person_id}`;
+}
+
+function playerName(candidate) {
+  return candidate.canonical_player_name
+    || candidate.display_name
+    || candidate.full_name
+    || "Unknown player";
+}
+
+function seasonLabel(candidate) {
+  const match = String(candidate.database_title || "").match(/(\d{2})\/(\d{2})/);
+  return match ? `${match[1]}-${match[2]}` : candidate.database_title || candidate.database_slug;
+}
+
+function ratingMap(candidate) {
+  return new Map(
+    (candidate.position_ratings || []).map((item) => [
+      String(item.label || "").toLowerCase(),
+      Number(item.value) || 0,
+    ]),
+  );
+}
+
+function firstRating(ratings, labels) {
+  for (const label of labels) {
+    if (ratings.has(label)) return ratings.get(label) || 0;
+  }
+  return 0;
+}
+
+function roleRatingLabels(role) {
+  const prefix = rolePrefix(role);
+  return {
+    GK: ["goalkeeper"],
+    SW: ["sweeper"],
+    D: ["defender", "defence"],
+    WB: ["wing back", "defender", "defence"],
+    DM: ["defensive midfielder", "def midfielder", "anchor"],
+    M: ["midfielder", "midfield"],
+    AM: ["attacking midfielder", "att midfielder", "support"],
+    F: ["attacker", "attack"],
+  }[prefix] || [];
+}
+
+function sideRatingLabels(role) {
+  if (role === "GK" || role === "SW") return [];
+  if (role.endsWith("L")) return ["left side", "left sided"];
+  if (role.endsWith("R")) return ["right side", "right sided"];
+  return ["central"];
+}
+
+function positionFit(candidate, role) {
+  const ratings = ratingMap(candidate);
+  if (!ratings.size) return { score: 0, level: "none", label: "Not rated" };
+  const modern = [...ratings.values()].some((value) => value > 2);
+  let base = firstRating(ratings, roleRatingLabels(role));
+  const sideLabels = sideRatingLabels(role);
+  const side = sideLabels.length ? firstRating(ratings, sideLabels) : base;
+
+  if (rolePrefix(role) === "WB" && !modern && base <= 0) {
+    base = firstRating(ratings, ["defender", "defence"]);
+  }
+
+  const score = sideLabels.length ? Math.min(base, side) : base;
+  const thresholds = modern
+    ? [
+        [18, "natural", "Natural"],
+        [15, "playable", "Playable"],
+        [12, "limited", "Limited"],
+        [9, "weak", "Weak"],
+        [6, "awkward", "Awkward"],
+        [2, "very-awkward", "Very awkward"],
+      ]
+    : [
+        [2, "natural", "Natural"],
+        [1, "limited", "Limited"],
+      ];
+  const match = thresholds.find(([minimum]) => score >= minimum);
+  return match
+    ? { score, level: match[1], label: match[2] }
+    : { score, level: "none", label: "Not rated" };
+}
+
+function remainingSlots() {
+  return currentSlots().filter((item) => !state.drafted.has(item.id));
+}
+
+function bestFit(candidate, slots = remainingSlots()) {
+  return slots
+    .map((item) => ({ slot: item, ...positionFit(candidate, item.effectiveRole) }))
+    .sort((left, right) => right.score - left.score)[0]
+    || { slot: null, score: 0, level: "none", label: "Not rated" };
+}
+
+function draftedCanonicalIds() {
+  return new Set(
+    [...state.drafted.values()]
+      .map((candidate) => candidate.canonical_player_public_id || candidateKey(candidate)),
+  );
+}
+
+function seededShuffle(items, seed) {
+  let value = seed || 1;
+  const random = () => {
+    value |= 0;
+    value = value + 0x6d2b79f5 | 0;
+    let result = Math.imul(value ^ value >>> 15, 1 | value);
+    result = result + Math.imul(result ^ result >>> 7, 61 | result) ^ result;
+    return ((result ^ result >>> 14) >>> 0) / 4294967296;
+  };
+  const shuffled = items.slice();
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function chooseSuggestions(pool, seed) {
+  const openSlots = remainingSlots();
+  const draftedIds = draftedCanonicalIds();
+  const eligible = seededShuffle(pool, seed).filter((candidate) => {
+    const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+    return !draftedIds.has(identity) && bestFit(candidate, openSlots).score > 0;
+  });
+  const targetRoles = [...new Set(openSlots.map((item) => item.effectiveRole))];
+  const rotatedRoles = targetRoles.length
+    ? targetRoles.map((_, index) => targetRoles[(index + state.rollNumber) % targetRoles.length])
+    : [];
+  const selected = [];
+  const usedDatabases = new Set();
+  const usedPlayers = new Set();
+
+  const takeBest = (role = "") => {
+    const candidates = eligible
+      .filter((candidate) => {
+        const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+        return !usedDatabases.has(candidate.database_slug)
+          && !usedPlayers.has(identity)
+          && (!role || positionFit(candidate, role).score > 0);
+      })
+      .sort((left, right) => {
+        const leftFit = role ? positionFit(left, role).score : bestFit(left, openSlots).score;
+        const rightFit = role ? positionFit(right, role).score : bestFit(right, openSlots).score;
+        return rightFit - leftFit
+          || Number(right.current_ability || 0) - Number(left.current_ability || 0);
+      });
+    const candidate = candidates[0];
+    if (!candidate) return;
+    selected.push(candidate);
+    usedDatabases.add(candidate.database_slug);
+    usedPlayers.add(candidate.canonical_player_public_id || candidateKey(candidate));
+  };
+
+  for (const role of rotatedRoles) {
+    if (selected.length >= 6) break;
+    takeBest(role);
+  }
+  while (selected.length < 6) {
+    const before = selected.length;
+    takeBest();
+    if (selected.length === before) break;
+  }
+  return selected;
+}
+
+function pitchMarkings() {
+  const fragment = document.createDocumentFragment();
+  for (const className of [
+    "draft-pitch-halfway",
+    "draft-pitch-circle",
+    "draft-pitch-box draft-pitch-box-top",
+    "draft-pitch-box draft-pitch-box-bottom",
+    "draft-pitch-goal draft-pitch-goal-top",
+    "draft-pitch-goal draft-pitch-goal-bottom",
+    "draft-pitch-arc draft-pitch-arc-top",
+    "draft-pitch-arc draft-pitch-arc-bottom",
+    "draft-pitch-spot draft-pitch-spot-top",
+    "draft-pitch-spot draft-pitch-spot-bottom",
+  ]) {
+    const element = document.createElement("span");
+    element.className = className;
+    element.setAttribute("aria-hidden", "true");
+    fragment.append(element);
+  }
+  return fragment;
+}
+
+function renderPitch() {
+  pitch.replaceChildren(pitchMarkings());
+  pitch.dataset.style = state.style.toLowerCase();
+  const selected = state.suggestions.find(
+    (candidate) => candidateKey(candidate) === state.selectedCandidateKey,
+  );
+
+  for (const item of currentSlots()) {
+    const drafted = state.drafted.get(item.id);
+    const fit = selected ? positionFit(selected, item.effectiveRole) : null;
+    const marker = document.createElement("button");
+    marker.type = "button";
+    marker.className = "formation-player";
+    marker.dataset.slotId = item.id;
+    marker.style.left = `${item.x}%`;
+    marker.style.top = `${item.y}%`;
+    marker.title = drafted
+      ? `${playerName(drafted)} · click to remove`
+      : selected
+        ? `${fit.label} at ${item.effectiveRole}`
+        : `Empty ${item.effectiveRole} position`;
+
+    if (drafted) {
+      marker.classList.add("is-filled");
+      const role = document.createElement("span");
+      role.className = "formation-player-role";
+      role.textContent = item.effectiveRole;
+      const name = document.createElement("span");
+      name.className = "formation-player-name";
+      name.textContent = playerName(drafted);
+      marker.append(role, name);
+    } else {
+      marker.textContent = item.effectiveRole;
+      if (fit && fit.score > 0) {
+        marker.classList.add("is-fit-target", `fit-${fit.level}`);
+      } else if (selected) {
+        marker.classList.add("is-no-fit");
+      }
+    }
+    pitch.append(marker);
+  }
+
+  caption.textContent = `${state.formation} · ${state.style}`;
+  summary.textContent = `${state.formation} · ${state.style} · ${state.mode}`;
+  progress.textContent = `${state.drafted.size} / 11`;
+  rollButton.disabled = state.rolling || state.mode !== "Classic" || state.drafted.size >= 11;
+}
+
+function renderSuggestions(message = "") {
+  suggestions.replaceChildren();
+  if (message || !state.suggestions.length) {
+    const empty = document.createElement("div");
+    empty.className = "draft-suggestions-empty";
+    empty.textContent = message || "No players rolled yet.";
+    suggestions.append(empty);
+    return;
+  }
+
+  for (const candidate of state.suggestions) {
+    const fit = bestFit(candidate);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `draft-suggestion-card fit-${fit.level}`;
+    button.dataset.candidateKey = candidateKey(candidate);
+    button.classList.toggle("is-selected", button.dataset.candidateKey === state.selectedCandidateKey);
+
+    const heading = document.createElement("span");
+    heading.className = "draft-suggestion-name";
+    heading.textContent = playerName(candidate);
+    const season = document.createElement("span");
+    season.className = "draft-suggestion-season";
+    season.textContent = seasonLabel(candidate);
+    const meta = document.createElement("span");
+    meta.className = "draft-suggestion-meta";
+    meta.textContent = [candidate.canonical_club_name || candidate.club_name, candidate.nation_name]
+      .filter(Boolean)
+      .join(" · ");
+    const ratings = document.createElement("span");
+    ratings.className = "draft-suggestion-ratings";
+    ratings.innerHTML = `<span>CA <strong>${Number(candidate.current_ability) || 0}</strong></span><span>PA <strong>${Number(candidate.potential_ability) || 0}</strong></span>`;
+    const fitBadge = document.createElement("span");
+    fitBadge.className = "draft-fit-badge";
+    fitBadge.textContent = `${fit.label} · ${fit.slot?.effectiveRole || "No fit"}`;
+    button.append(heading, season, meta, ratings, fitBadge);
+    suggestions.append(button);
+  }
+}
+
+function resetDraft(message) {
+  state.drafted.clear();
+  state.suggestions = [];
+  state.selectedCandidateKey = "";
+  state.rollNumber = 0;
+  rollIntro.textContent = message;
+  suggestionHelp.textContent = "Roll the dice for six database-backed choices.";
+  renderSuggestions();
+  renderPitch();
+}
+
+async function rollPlayers() {
+  if (state.mode !== "Classic" || state.rolling || state.drafted.size >= 11) return;
+  state.rolling = true;
+  state.selectedCandidateKey = "";
+  rollIntro.textContent = "Rolling through eight classic databases…";
+  suggestionHelp.textContent = "Finding choices that fit your unfilled positions.";
+  renderSuggestions("Loading player choices…");
+  renderPitch();
+
+  try {
+    const seed = Math.floor(Date.now() / 300000) * 100 + state.rollNumber;
+    const payload = await getDraftCandidates({ seed, perDatabase: 22 });
+    state.suggestions = chooseSuggestions(payload.items, seed);
+    state.rollNumber += 1;
+    if (!state.suggestions.length) {
+      throw new Error("No suitable players were found for the remaining positions.");
+    }
+    rollIntro.textContent = `${state.suggestions.length} players rolled from different seasons.`;
+    suggestionHelp.textContent = "Select a player, then choose one of the highlighted pitch positions.";
+    renderSuggestions();
+  } catch (error) {
+    state.suggestions = [];
+    rollIntro.textContent = "The database roll failed.";
+    suggestionHelp.textContent = error.message || "Please try rolling again.";
+    renderSuggestions("Could not load player choices.");
+  } finally {
+    state.rolling = false;
+    renderPitch();
+  }
+}
 
 Object.keys(formations).forEach((formation) => {
   const button = document.createElement("button");
@@ -64,33 +468,21 @@ Object.keys(formations).forEach((formation) => {
   formationChoices.append(button);
 });
 
-function renderPitch() {
-  pitch.replaceChildren();
-  pitch.dataset.style = state.style.toLowerCase();
-
-  formations[state.formation].forEach(([role, x, y]) => {
-    const marker = document.createElement("span");
-    marker.className = "formation-player";
-    marker.textContent = role;
-    marker.style.left = `${x}%`;
-    marker.style.top = `${y}%`;
-    pitch.append(marker);
-  });
-
-  caption.textContent = `${state.formation} · ${state.style}`;
-  summary.textContent = `${state.formation} · ${state.style} · ${state.mode}`;
-}
-
 function bindChoiceGroup(container, key) {
   container.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-value]");
-    if (!button) return;
-
+    if (!button || state[key] === button.dataset.value) return;
     state[key] = button.dataset.value;
     container.querySelectorAll("button").forEach((item) => {
       item.classList.toggle("is-selected", item === button);
     });
-    renderPitch();
+
+    if (key === "mode" && state.mode === "From memory") {
+      resetDraft("From-memory drafting will use manual player entry; Classic mode uses the database.");
+      suggestionHelp.textContent = "Switch back to Classic to roll database players.";
+      return;
+    }
+    resetDraft(`${key === "formation" ? "Formation" : key === "style" ? "Style" : "Mode"} changed. Roll a fresh set of players.`);
   });
 }
 
@@ -98,8 +490,59 @@ bindChoiceGroup(formationChoices, "formation");
 bindChoiceGroup(styleChoices, "style");
 bindChoiceGroup(modeChoices, "mode");
 
-document.querySelector("#draftRollButton").addEventListener("click", () => {
-  rollIntro.textContent = `${state.formation} · ${state.style} · ${state.mode} selected. Player roll comes next.`;
+suggestions.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-candidate-key]");
+  if (!card) return;
+  state.selectedCandidateKey = card.dataset.candidateKey;
+  const candidate = state.suggestions.find(
+    (item) => candidateKey(item) === state.selectedCandidateKey,
+  );
+  const fit = candidate ? bestFit(candidate) : null;
+  suggestionHelp.textContent = fit?.slot
+    ? `${playerName(candidate)} is ${fit.label.toLowerCase()} at ${fit.slot.effectiveRole}. Choose a highlighted position.`
+    : "This player has no recognised fit in the current formation.";
+  renderSuggestions();
+  renderPitch();
 });
 
+pitch.addEventListener("click", (event) => {
+  const marker = event.target.closest("[data-slot-id]");
+  if (!marker) return;
+  const slotId = marker.dataset.slotId;
+
+  if (state.drafted.has(slotId) && !state.selectedCandidateKey) {
+    const removed = state.drafted.get(slotId);
+    state.drafted.delete(slotId);
+    rollIntro.textContent = `${playerName(removed)} removed from the draft.`;
+    renderPitch();
+    return;
+  }
+
+  const candidate = state.suggestions.find(
+    (item) => candidateKey(item) === state.selectedCandidateKey,
+  );
+  const target = currentSlots().find((item) => item.id === slotId);
+  if (!candidate || !target || state.drafted.has(slotId)) return;
+  const fit = positionFit(candidate, target.effectiveRole);
+  if (fit.score <= 0) {
+    suggestionHelp.textContent = `${playerName(candidate)} is not rated for ${target.effectiveRole}.`;
+    return;
+  }
+
+  state.drafted.set(slotId, candidate);
+  state.suggestions = state.suggestions.filter(
+    (item) => candidateKey(item) !== candidateKey(candidate),
+  );
+  state.selectedCandidateKey = "";
+  rollIntro.textContent = `${playerName(candidate)} drafted at ${target.effectiveRole} (${fit.label.toLowerCase()}).`;
+  suggestionHelp.textContent = state.drafted.size >= 11
+    ? "Draft complete."
+    : "Roll again for six fresh choices covering the remaining positions.";
+  renderSuggestions();
+  renderPitch();
+});
+
+rollButton.addEventListener("click", rollPlayers);
+
+renderSuggestions();
 renderPitch();

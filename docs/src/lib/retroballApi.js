@@ -190,6 +190,24 @@ export async function getFilters(database, options = {}) {
   });
 }
 
+export async function getDraftCandidates({
+  seed = Date.now(),
+  perDatabase = 18,
+  signal,
+} = {}) {
+  const searchParams = new URLSearchParams({
+    seed: String(seed),
+    perDatabase: String(perDatabase),
+  });
+  const payload = await requestJson(`/api/draft-candidates?${searchParams}`, {
+    signal,
+  });
+  return {
+    items: Array.isArray(payload.items) ? payload.items : [],
+    databases: Array.isArray(payload.databases) ? payload.databases : [],
+  };
+}
+
 /**
  * @param {{ database: string, q: string, page?: number, pageSize?: number, signal?: AbortSignal }} params
  * @returns {Promise<{ items: PlayerSearchRow[], page: number, pageSize: number }>}

@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Draft Setup · Old-School-Football</title>
-    <link rel="stylesheet" href="styles.css">
+    <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
+    <link rel="stylesheet" href="styles.css?v=20260729-30">
   </head>
   <body class="draft-setup-page">
     <main class="draft-setup-shell">
@@ -47,8 +48,27 @@
         </aside>
 
         <section class="formation-preview" aria-label="Formation preview">
-          <div class="formation-pitch" id="formationPitch"></div>
-          <p class="formation-caption" id="formationCaption">4-3-3 · Balanced</p>
+          <div class="draft-stage">
+            <div class="draft-pitch-column">
+              <div class="formation-pitch" id="formationPitch"></div>
+              <p class="formation-caption" id="formationCaption">4-3-3 · Balanced</p>
+            </div>
+            <aside class="draft-suggestions-panel" aria-live="polite">
+              <div class="draft-suggestions-head">
+                <div>
+                  <span class="draft-panel-kicker">Classic roll</span>
+                  <h2>Player choices</h2>
+                </div>
+                <span id="draftProgress">0 / 11</span>
+              </div>
+              <p class="draft-suggestion-help" id="draftSuggestionHelp">
+                Roll the dice for six database-backed choices.
+              </p>
+              <div class="draft-suggestions" id="draftSuggestions">
+                <div class="draft-suggestions-empty">No players rolled yet.</div>
+              </div>
+            </aside>
+          </div>
         </section>
       </section>
     </main>
@@ -57,6 +77,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="draft-setup.js" type="module"></script>
+    <script src="draft-setup.js?v=20260729-30" type="module"></script>
   </body>
 </html>

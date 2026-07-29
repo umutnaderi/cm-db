@@ -470,6 +470,47 @@ function searchPlayers(params) {
   return { items, page, pageSize };
 }
 
+function draftCandidates(params) {
+  const parsedSeed = Number.parseInt(params.get("seed") || "0", 10);
+  const seed = Number.isFinite(parsedSeed) ? Math.abs(parsedSeed) : 0;
+  const perDatabase = integer(params.get("perDatabase"), 18, 8, 30);
+  const databases = source.prepare(`
+    SELECT slug, title, season_order
+    FROM cm_databases
+    ORDER BY season_order
+  `).all();
+  const statement = source.prepare(`
+    SELECT
+      ${playerColumns.split(",").map((column) => `ps.${column.trim()}`).join(", ")},
+      profile.position_ratings_json
+    FROM player_search ps
+    LEFT JOIN player_profile profile
+      ON profile.database_slug = ps.database_slug
+     AND profile.source_person_id = ps.source_person_id
+    WHERE ps.database_slug = ?
+      AND ps.current_ability IS NOT NULL
+      AND ps.current_ability >= 100
+    ORDER BY
+      ps.current_ability DESC,
+      ps.potential_ability DESC,
+      ps.source_person_id
+    LIMIT ? OFFSET ?
+  `);
+  const items = databases.flatMap((database, index) => {
+    const offset = (seed * 31 + (index + 1) * 97) % 180;
+    return statement.all(database.slug, perDatabase, offset).map((row) => {
+      const { position_ratings_json, ...player } = row;
+      return {
+        ...withCanonicalIdentity(player),
+        database_title: database.title,
+        season_order: database.season_order,
+        position_ratings: ratingList(position_ratings_json),
+      };
+    });
+  });
+  return { items, databases };
+}
+
 function playerDetail(database, personId) {
   const item = withCanonicalIdentity(source.prepare(`
     SELECT ${playerColumns} FROM player_search
@@ -623,6 +664,7 @@ export function handleLocalApi(requestUrl) {
     return filters(requestUrl.searchParams.get("database") || "");
   }
   if (path === "/api/players") return searchPlayers(requestUrl.searchParams);
+  if (path === "/api/draft-candidates") return draftCandidates(requestUrl.searchParams);
   if (path === "/api/player-seasons") {
     return playerSeasons(
       requestUrl.searchParams.get("database") || "",

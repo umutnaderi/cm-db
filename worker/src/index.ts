@@ -626,6 +626,70 @@ export default {
         });
       }
 
+      if (url.pathname === "/api/draft-candidates") {
+        const parsedSeed = Number.parseInt(url.searchParams.get("seed") || "0", 10);
+        const seed = Number.isFinite(parsedSeed) ? Math.abs(parsedSeed) : 0;
+        const parsedLimit = Number.parseInt(
+          url.searchParams.get("perDatabase") || "18",
+          10,
+        );
+        const perDatabase = Math.min(30, Math.max(8, parsedLimit || 18));
+
+        return cachedJson(request, env, ctx, 300, async () => {
+          const databaseResult = await db.execute(`
+            SELECT slug, title, season_order
+            FROM cm_databases
+            ORDER BY season_order
+          `);
+          const databases = databaseResult.rows;
+          const queries = databases.map((database, index) => {
+            const offset = (seed * 31 + (index + 1) * 97) % 180;
+            return {
+              sql: `
+                SELECT
+                  candidates.*,
+                  canonical_player.canonical_player_id,
+                  canonical_player.canonical_player_public_id,
+                  canonical_player.canonical_player_name,
+                  profile.position_ratings_json
+                FROM (
+                  ${playerSearchBaseSelectColumns()}
+                  WHERE ps.database_slug = ?
+                    AND ps.current_ability IS NOT NULL
+                    AND ps.current_ability >= 100
+                  ORDER BY
+                    ps.current_ability DESC,
+                    ps.potential_ability DESC,
+                    ps.source_person_id
+                  LIMIT ? OFFSET ?
+                ) candidates
+                LEFT JOIN canonical_player_names canonical_player
+                  ON canonical_player.database_slug = candidates.database_slug
+                 AND canonical_player.source_person_id = cast(candidates.source_person_id AS TEXT)
+                LEFT JOIN player_profile profile
+                  ON profile.database_slug = candidates.database_slug
+                 AND profile.source_person_id = candidates.source_person_id
+              `,
+              args: [database.slug as string, perDatabase, offset],
+            };
+          });
+          const results = await db.batch(queries);
+          const items = results.flatMap((result, index) =>
+            result.rows.map((row) => {
+              const { position_ratings_json, ...player } = row;
+              return {
+                ...player,
+                database_title: databases[index]?.title,
+                season_order: databases[index]?.season_order,
+                position_ratings: ratingListFromJson(position_ratings_json),
+              };
+            }),
+          );
+
+          return { items, databases };
+        });
+      }
+
       if (url.pathname === "/api/players") {
         const database = url.searchParams.get("database");
         const q = url.searchParams.get("q") || "";

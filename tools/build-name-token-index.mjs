@@ -77,24 +77,6 @@ function rowScore(row) {
     + Number(row.value || 0) / 1_000_000;
 }
 
-function rowPayload(row) {
-  return {
-    database_slug: row.database_slug,
-    source_person_id: row.source_person_id,
-    display_name: row.display_name || null,
-    full_name: row.full_name || null,
-    common_name: row.common_name || null,
-    club_name: row.club_name || null,
-    nation_name: row.nation_name || null,
-    date_of_birth: row.date_of_birth || null,
-    position_text: row.position_text || null,
-    current_ability: row.current_ability ? Number(row.current_ability) : null,
-    potential_ability: row.potential_ability ? Number(row.potential_ability) : null,
-    value: row.value ? Number(row.value) : null,
-    wage: row.wage ? Number(row.wage) : null,
-  };
-}
-
 const buckets = new Map();
 
 for (const input of INPUTS) {
@@ -135,7 +117,9 @@ for (const [key, rows] of buckets) {
   );
 
   index[database] ||= {};
-  index[database][token] = rows.slice(0, MAX_PER_TOKEN).map(rowPayload);
+  index[database][token] = rows
+    .slice(0, MAX_PER_TOKEN)
+    .map((row) => String(row.source_person_id));
 }
 
 mkdirSync(dirname(OUTPUT), { recursive: true });

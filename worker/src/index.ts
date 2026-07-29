@@ -1,18 +1,34 @@
-import { createClient } from "@libsql/client/web";
 import leagueMapData from "./league-map.json";
 import nameTokenIndexData from "./name-token-index.json";
 
-type Env = {
-  TURSO_DATABASE_URL: string;
-  TURSO_AUTH_TOKEN: string;
-  ALLOWED_ORIGIN: string;
-  ALLOWED_ORIGIN_PROD: string;
-  PLAYER_PROFILES_ENABLED?: string;
-};
-
 type QueryRow = Record<string, unknown>;
 type LeagueMap = Record<string, Record<string, string>>;
-type NameTokenIndex = Record<string, Record<string, QueryRow[]>>;
+type NameTokenIndex = Record<string, Record<string, string[]>>;
+type QueryInput = string | {
+  sql: string;
+  args?: Array<string | number | null>;
+};
+
+function d1Client(database: D1Database) {
+  const prepare = (input: QueryInput) => {
+    const sql = typeof input === "string" ? input : input.sql;
+    const args = typeof input === "string" ? [] : input.args || [];
+    return args.length
+      ? database.prepare(sql).bind(...args)
+      : database.prepare(sql);
+  };
+
+  return {
+    async execute(input: QueryInput): Promise<{ rows: QueryRow[] }> {
+      const result = await prepare(input).all<QueryRow>();
+      return { rows: result.results };
+    },
+    async batch(inputs: QueryInput[]): Promise<Array<{ rows: QueryRow[] }>> {
+      const results = await database.batch<QueryRow>(inputs.map(prepare));
+      return results.map((result) => ({ rows: result.results }));
+    },
+  };
+}
 
 const leagueMap = leagueMapData as LeagueMap;
 const nameTokenIndex = nameTokenIndexData as NameTokenIndex;
@@ -40,53 +56,25 @@ function clubsForLeague(database: string, league: string): string[] {
     .map(([club]) => club);
 }
 
-function staticNameFallbackRows(
-  database: string,
-  tokens: string[],
-  filters: {
-    club?: string | null;
-    nation?: string | null;
-    leagueClubs?: string[];
-    position?: string | null;
-  },
-): QueryRow[] {
+function staticNameFallbackIds(database: string, tokens: string[]): string[] {
   const databaseIndex = nameTokenIndex[canonicalDatabaseSlug(database)] || nameTokenIndex[database];
   if (!databaseIndex || !tokens.length) return [];
 
-  let rows = databaseIndex[tokens[0]] || [];
+  let sourceIds = databaseIndex[tokens[0]] || [];
   for (const token of tokens.slice(1)) {
-    const keys = new Set((databaseIndex[token] || []).map((row) => `${row.database_slug}:${row.source_person_id}`));
-    rows = rows.filter((row) => keys.has(`${row.database_slug}:${row.source_person_id}`));
+    const tokenIds = new Set(databaseIndex[token] || []);
+    sourceIds = sourceIds.filter((sourceId) => tokenIds.has(sourceId));
   }
 
-  if (filters.club) {
-    rows = rows.filter((row) => textField(row, "club_name") === filters.club);
-  }
-  if (filters.nation) {
-    rows = rows.filter((row) => textField(row, "nation_name") === filters.nation);
-  }
-  if (filters.position) {
-    const normalizedPosition = filters.position.toLowerCase();
-    rows = rows.filter((row) => textField(row, "position_text").toLowerCase().includes(normalizedPosition));
-  }
-  if (filters.leagueClubs?.length) {
-    const clubSet = new Set(filters.leagueClubs);
-    rows = rows.filter((row) => clubSet.has(textField(row, "club_name")));
-  }
-
-  return rows.slice().sort((left, right) =>
-    numberField(right, "current_ability") - numberField(left, "current_ability")
-    || numberField(right, "potential_ability") - numberField(left, "potential_ability")
-    || textField(left, "full_name").localeCompare(textField(right, "full_name")),
-  );
+  return [...new Set(sourceIds)];
 }
 
-function json(data: unknown, env: Env, status = 200, cacheSeconds = 60): Response {
+function json(data: unknown, _env: Env, status = 200, cacheSeconds = 60): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": env.ALLOWED_ORIGIN || env.ALLOWED_ORIGIN_PROD || "*",
+      "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET, OPTIONS",
       "access-control-allow-headers": "content-type",
       "cache-control": `public, max-age=${cacheSeconds}`,
@@ -106,7 +94,9 @@ async function cachedJson(
   }
 
   const cache = caches.default;
-  const cacheKey = new Request(request.url, request);
+  const cacheUrl = new URL(request.url);
+  cacheUrl.searchParams.set("__retroball_cache", "25");
+  const cacheKey = new Request(cacheUrl, request);
   const cached = await cache.match(cacheKey);
 
   if (cached) {
@@ -141,7 +131,7 @@ function storeEdgeCache(
 
 function edgeCacheKey(request: Request | string): Request {
   const url = new URL(typeof request === "string" ? request : request.url);
-  url.searchParams.set("__cacheVersion", "13");
+  url.searchParams.set("__cacheVersion", "26");
   return new Request(url, typeof request === "string" ? undefined : request);
 }
 
@@ -204,14 +194,21 @@ function searchNameRank(row: QueryRow, query: string): number {
   const display = textField(row, "display_name").toLowerCase();
   const full = textField(row, "full_name").toLowerCase();
   const common = textField(row, "common_name").toLowerCase();
+  const canonical = textField(row, "canonical_player_name").toLowerCase();
 
-  if (display === normalizedQuery || full === normalizedQuery || common === normalizedQuery) {
+  if (
+    display === normalizedQuery
+    || full === normalizedQuery
+    || common === normalizedQuery
+    || canonical === normalizedQuery
+  ) {
     return 0;
   }
   if (
     display.startsWith(normalizedQuery)
     || full.startsWith(normalizedQuery)
     || common.startsWith(normalizedQuery)
+    || canonical.startsWith(normalizedQuery)
   ) {
     return 1;
   }
@@ -233,23 +230,51 @@ function sortPlayerSearchRows(rows: QueryRow[], query: string, isSingleTokenQuer
   });
 }
 
+function playerSearchBaseColumnList(alias = "ps"): string {
+  return `
+    ${alias}.database_slug,
+    ${alias}.source_person_id,
+    ${alias}.display_name,
+    ${alias}.full_name,
+    ${alias}.common_name,
+    ${alias}.club_id,
+    ${alias}.club_name,
+    ${alias}.nation_name,
+    ${alias}.date_of_birth,
+    ${alias}.position_text,
+    ${alias}.current_ability,
+    ${alias}.potential_ability,
+    ${alias}.value,
+    ${alias}.wage
+  `;
+}
+
+function playerSearchBaseSelectColumns(alias = "ps"): string {
+  return `
+    SELECT
+      ${playerSearchBaseColumnList(alias)}
+    FROM player_search ${alias}
+  `;
+}
+
 function playerSearchSelectColumns(alias = "ps"): string {
   return `
     SELECT
-      ${alias}.database_slug,
-      ${alias}.source_person_id,
-      ${alias}.display_name,
-      ${alias}.full_name,
-      ${alias}.common_name,
-      ${alias}.club_name,
-      ${alias}.nation_name,
-      ${alias}.date_of_birth,
-      ${alias}.position_text,
-      ${alias}.current_ability,
-      ${alias}.potential_ability,
-      ${alias}.value,
-      ${alias}.wage
+      ${playerSearchBaseColumnList(alias)},
+      canonical_player.canonical_player_id,
+      canonical_player.canonical_player_public_id,
+      canonical_player.canonical_player_name,
+      (
+        SELECT names.canonical_club_name
+        FROM canonical_club_names names
+        WHERE names.database_slug = ${alias}.database_slug
+          AND names.source_club_name = ${alias}.club_name
+        LIMIT 1
+      ) AS canonical_club_name
     FROM player_search ${alias}
+    LEFT JOIN canonical_player_names canonical_player
+      ON canonical_player.database_slug = ${alias}.database_slug
+     AND canonical_player.source_person_id = cast(${alias}.source_person_id AS TEXT)
   `;
 }
 
@@ -262,6 +287,7 @@ function playerNameVariants(row: QueryRow): string[] {
     normalizedName(row.display_name),
     normalizedName(row.full_name),
     normalizedName(row.common_name),
+    normalizedName(row.canonical_player_name),
   ].filter(Boolean);
   const expanded = new Set<string>();
 
@@ -539,7 +565,10 @@ function playerProfileFromRow(row: Record<string, unknown> | undefined) {
     display_name: row.display_name,
     full_name: row.full_name,
     common_name: row.common_name,
+    canonical_player_public_id: row.canonical_player_public_id ?? null,
+    canonical_player_name: row.canonical_player_name ?? null,
     club_name: row.club_name,
+    canonical_club_name: row.canonical_club_name ?? null,
     nation_name: row.nation_name,
     date_of_birth: row.date_of_birth,
     age: row.season_age ?? row.age,
@@ -557,6 +586,7 @@ function playerProfileFromRow(row: Record<string, unknown> | undefined) {
     attributes: ratingListFromJson(row.attributes_json),
     hiddenAttributes: ratingListFromJson(row.hidden_attributes_json),
     foot,
+    clubColors: null as QueryRow | null,
     profile: profileData,
   };
 }
@@ -569,30 +599,7 @@ export default {
 
     const url = new URL(request.url);
 
-    if (!env.TURSO_DATABASE_URL) {
-      return json(
-        {
-          error: "Missing TURSO_DATABASE_URL. Add it to worker/.dev.vars",
-        },
-        env,
-        500,
-      );
-    }
-
-    if (!env.TURSO_AUTH_TOKEN) {
-      return json(
-        {
-          error: "Missing TURSO_AUTH_TOKEN. Add it to worker/.dev.vars",
-        },
-        env,
-        500,
-      );
-    }
-
-    const db = createClient({
-      url: env.TURSO_DATABASE_URL,
-      authToken: env.TURSO_AUTH_TOKEN,
-    });
+    const db = d1Client(env.DB);
 
     try {
       if (url.pathname === "/api/databases") {
@@ -664,7 +671,7 @@ export default {
           );
         }
 
-        const selectColumns = playerSearchSelectColumns();
+        const selectColumns = playerSearchBaseSelectColumns();
 
         const buildTermSearchQuery = (tokens: string[]) => {
           const termSql = tokens
@@ -860,6 +867,98 @@ export default {
           };
         };
 
+        const buildCanonicalNameQuery = (limit: number): QueryInput => {
+          const prefix = indexedNamePrefix(trimmedQ);
+          const args: Array<string | number> = [
+            database,
+            prefix,
+            `${prefix}\uffff`,
+          ];
+          const where = [
+            "canonical_player.database_slug = ?",
+            "canonical_player.canonical_player_name >= ?",
+            "canonical_player.canonical_player_name < ?",
+          ];
+
+          if (club) {
+            where.push("ps.club_name = ?");
+            args.push(club);
+          }
+          if (nation) {
+            where.push("ps.nation_name = ?");
+            args.push(nation);
+          }
+          if (position) {
+            where.push("ps.position_text LIKE ?");
+            args.push(`%${position}%`);
+          }
+          if (league) {
+            if (leagueClubs.length) {
+              where.push(`ps.club_name IN (${leagueClubs.map(() => "?").join(", ")})`);
+              args.push(...leagueClubs);
+            } else {
+              where.push("0 = 1");
+            }
+          }
+
+          return {
+            sql: `
+              SELECT
+                ${playerSearchBaseColumnList()},
+                canonical_player.canonical_player_id,
+                canonical_player.canonical_player_public_id,
+                canonical_player.canonical_player_name
+              FROM canonical_player_names canonical_player
+              JOIN player_search ps
+                ON ps.database_slug = canonical_player.database_slug
+               AND ps.source_person_id = canonical_player.source_person_id
+              WHERE ${where.join(" AND ")}
+              ORDER BY ${orderBy}
+              LIMIT ?
+            `,
+            args: [...args, ...orderArgs, limit],
+          };
+        };
+
+        const buildStaticTokenQuery = (sourceIds: string[]): QueryInput => {
+          const args: Array<string | number> = [database, ...sourceIds];
+          const where = [
+            "ps.database_slug = ?",
+            `ps.source_person_id IN (${sourceIds.map(() => "?").join(", ")})`,
+          ];
+
+          if (club) {
+            where.push("ps.club_name = ?");
+            args.push(club);
+          }
+          if (nation) {
+            where.push("ps.nation_name = ?");
+            args.push(nation);
+          }
+          if (position) {
+            where.push("ps.position_text LIKE ?");
+            args.push(`%${position}%`);
+          }
+          if (league) {
+            if (leagueClubs.length) {
+              where.push(`ps.club_name IN (${leagueClubs.map(() => "?").join(", ")})`);
+              args.push(...leagueClubs);
+            } else {
+              where.push("0 = 1");
+            }
+          }
+
+          return {
+            sql: `
+              ${selectColumns}
+              WHERE ${where.join(" AND ")}
+              ORDER BY ${orderBy}
+              LIMIT ?
+            `,
+            args: [...args, ...orderArgs, sourceIds.length],
+          };
+        };
+
         let result;
 
         if (trimmedQ) {
@@ -871,22 +970,26 @@ export default {
 
           const isSingleTokenQuery = normalizedTokens.length === 1;
           const mergeLimit = Math.min(Math.max(offset + pageSize, pageSize) * 3, 120);
-          const [displayResult, fullResult] = await Promise.all([
-            db.execute(buildIndexedNameQuery("display_name", mergeLimit)),
-            db.execute(buildIndexedNameQuery("full_name", mergeLimit)),
-          ]);
-
+          const fallbackIds = staticNameFallbackIds(database, normalizedTokens);
+          const searchQueries = [
+            buildIndexedNameQuery("display_name", mergeLimit),
+            buildIndexedNameQuery("full_name", mergeLimit),
+            buildCanonicalNameQuery(mergeLimit),
+            ...(fallbackIds.length ? [buildStaticTokenQuery(fallbackIds)] : []),
+          ];
+          const [
+            displayResult,
+            fullResult,
+            canonicalResult,
+            tokenResult = { rows: [] },
+          ] = await db.batch(searchQueries);
           const mergedRowsByKey = new Map<string, QueryRow>();
-          for (const row of [...displayResult.rows, ...fullResult.rows]) {
-            mergedRowsByKey.set(searchResultKey(row), row);
-          }
-          const fallbackRows = staticNameFallbackRows(database, normalizedTokens, {
-            club,
-            nation,
-            leagueClubs,
-            position,
-          });
-          for (const row of fallbackRows) {
+          for (const row of [
+            ...displayResult.rows,
+            ...fullResult.rows,
+            ...canonicalResult.rows,
+            ...tokenResult.rows,
+          ]) {
             mergedRowsByKey.set(searchResultKey(row), row);
           }
           const mergedRows = sortPlayerSearchRows([...mergedRowsByKey.values()], trimmedQ, isSingleTokenQuery);
@@ -896,11 +999,70 @@ export default {
 
           if (!result.rows.length && page === 1) {
             result = {
-              rows: fallbackRows.slice(offset, offset + pageSize),
+              rows: tokenResult.rows.slice(offset, offset + pageSize),
             };
           }
         } else {
           result = await db.execute(buildLegacySearchQuery([]));
+        }
+
+        if (result.rows.length) {
+          const hydrationQueries: QueryInput[] = [];
+          const hydrationChunkSize = 25;
+          for (let index = 0; index < result.rows.length; index += hydrationChunkSize) {
+            const chunk = result.rows.slice(index, index + hydrationChunkSize);
+            const requestedValues = chunk.map(() => "(?, ?, ?)").join(", ");
+            const requestedArgs = chunk.flatMap((row) => [
+              textField(row, "database_slug"),
+              textField(row, "source_person_id"),
+              textField(row, "club_name"),
+            ]);
+            hydrationQueries.push({
+              sql: `
+                WITH requested(database_slug, source_person_id, club_name) AS (
+                  VALUES ${requestedValues}
+                )
+                SELECT
+                  requested.database_slug,
+                  requested.source_person_id,
+                  canonical_player.canonical_player_id,
+                  canonical_player.canonical_player_public_id,
+                  canonical_player.canonical_player_name,
+                  canonical_club.canonical_club_name
+                FROM requested
+                LEFT JOIN canonical_player_names canonical_player
+                  ON canonical_player.database_slug = requested.database_slug
+                 AND canonical_player.source_person_id = requested.source_person_id
+                LEFT JOIN canonical_club_names canonical_club
+                  ON canonical_club.database_slug = requested.database_slug
+                 AND canonical_club.source_club_name = requested.club_name
+              `,
+              args: requestedArgs,
+            });
+          }
+          const canonicalResults = await db.batch(hydrationQueries);
+          const canonicalBySource = new Map(
+            canonicalResults
+              .flatMap((canonicalResult) => canonicalResult.rows)
+              .map((row) => [searchResultKey(row), row]),
+          );
+          result.rows = result.rows.map((row) => {
+            const canonical = canonicalBySource.get(searchResultKey(row));
+            if (!canonical) return row;
+            return {
+              ...row,
+              canonical_player_id:
+                canonical.canonical_player_id ?? row.canonical_player_id ?? null,
+              canonical_player_public_id:
+                canonical.canonical_player_public_id
+                ?? row.canonical_player_public_id
+                ?? null,
+              canonical_player_name:
+                canonical.canonical_player_name ?? row.canonical_player_name ?? null,
+              canonical_club_name:
+                canonical.canonical_club_name ?? row.canonical_club_name ?? null,
+            };
+          });
         }
 
         return storeEdgeCache(request, json(
@@ -928,10 +1090,24 @@ export default {
 
         const selectedResult = await db.execute({
           sql: `
-              SELECT *
-              FROM player_search
-              WHERE database_slug = ?
-                AND source_person_id = ?
+              SELECT
+                ps.*,
+                canonical_player.canonical_player_id,
+                canonical_player.canonical_player_public_id,
+                canonical_player.canonical_player_name,
+                (
+                  SELECT names.canonical_club_name
+                  FROM canonical_club_names names
+                  WHERE names.database_slug = ps.database_slug
+                    AND names.source_club_name = ps.club_name
+                  LIMIT 1
+                ) AS canonical_club_name
+              FROM player_search ps
+              LEFT JOIN canonical_player_names canonical_player
+                ON canonical_player.database_slug = ps.database_slug
+               AND canonical_player.source_person_id = cast(ps.source_person_id AS TEXT)
+              WHERE ps.database_slug = ?
+                AND ps.source_person_id = ?
               LIMIT 1
             `,
           args: [database, sourcePersonId],
@@ -955,7 +1131,17 @@ export default {
             ps.display_name,
             ps.full_name,
             ps.common_name,
+            canonical_player.canonical_player_id,
+            canonical_player.canonical_player_public_id,
+            canonical_player.canonical_player_name,
             ps.club_name,
+            (
+              SELECT names.canonical_club_name
+              FROM canonical_club_names names
+              WHERE names.database_slug = ps.database_slug
+                AND names.source_club_name = ps.club_name
+              LIMIT 1
+            ) AS canonical_club_name,
             ps.nation_name,
             ps.date_of_birth,
             ps.position_text,
@@ -966,6 +1152,9 @@ export default {
             cd.title,
             cd.season_order
           FROM player_search ps
+          LEFT JOIN canonical_player_names canonical_player
+            ON canonical_player.database_slug = ps.database_slug
+           AND canonical_player.source_person_id = cast(ps.source_person_id AS TEXT)
           LEFT JOIN cm_databases cd
             ON cd.slug = CASE ps.database_slug
               WHEN 'cm0203' THEN 'cm0203_vanilla_original'
@@ -973,46 +1162,59 @@ export default {
               ELSE ps.database_slug
             END
         `;
-        const exactNameClauses = exactNames.length
-          ? [
-            `ps.full_name IN (${exactNames.map(() => "?").join(", ")})`,
-            `ps.display_name IN (${exactNames.map(() => "?").join(", ")})`,
-            `ps.common_name IN (${exactNames.map(() => "?").join(", ")})`,
-          ]
-          : [];
-        const exactNameArgs = exactNames.length
-          ? [...exactNames, ...exactNames, ...exactNames]
-          : [];
-        const candidateClauses = [...exactNameClauses];
-        const candidateArgs: Array<string | number> = [...exactNameArgs];
+        let candidates;
+        const canonicalPlayerId = textField(selectedPlayer, "canonical_player_id");
+        if (canonicalPlayerId) {
+          candidates = await db.execute({
+            sql: `
+              ${selectSeasonColumns}
+              WHERE canonical_player.canonical_player_id = ?
+              ORDER BY cd.season_order, ps.source_person_id
+            `,
+            args: [canonicalPlayerId],
+          });
+        } else {
+          const exactNameClauses = exactNames.length
+            ? [
+              `ps.full_name IN (${exactNames.map(() => "?").join(", ")})`,
+              `ps.display_name IN (${exactNames.map(() => "?").join(", ")})`,
+              `ps.common_name IN (${exactNames.map(() => "?").join(", ")})`,
+            ]
+            : [];
+          const exactNameArgs = exactNames.length
+            ? [...exactNames, ...exactNames, ...exactNames]
+            : [];
+          const candidateClauses = [...exactNameClauses];
+          const candidateArgs: Array<string | number> = [...exactNameArgs];
 
-        if (queryTokens.length && textField(selectedPlayer, "nation_name")) {
-          candidateClauses.push(`
-            (
-              ps.nation_name = ?
-              ${queryTokens.map(() => "AND lower(ps.search_blob) LIKE ?").join("\n")}
-            )
-          `);
-          candidateArgs.push(
-            textField(selectedPlayer, "nation_name"),
-            ...queryTokens.map((token) => `%${token}%`),
-          );
+          if (queryTokens.length && textField(selectedPlayer, "nation_name")) {
+            candidateClauses.push(`
+              (
+                ps.nation_name = ?
+                ${queryTokens.map(() => "AND lower(ps.search_blob) LIKE ?").join("\n")}
+              )
+            `);
+            candidateArgs.push(
+              textField(selectedPlayer, "nation_name"),
+              ...queryTokens.map((token) => `%${token}%`),
+            );
+          }
+
+          candidates = await db.execute({
+            sql: `
+              ${selectSeasonColumns}
+              WHERE ps.database_slug IN (
+                SELECT slug FROM cm_databases
+                UNION ALL SELECT 'cm0203'
+                UNION ALL SELECT 'cm0304'
+              )
+                AND (${candidateClauses.join(" OR ")})
+              ORDER BY cd.season_order, coalesce(ps.current_ability, 0) DESC
+              LIMIT 500
+            `,
+            args: candidateArgs,
+          });
         }
-
-        const candidates = await db.execute({
-          sql: `
-            ${selectSeasonColumns}
-            WHERE ps.database_slug IN (
-              SELECT slug FROM cm_databases
-              UNION ALL SELECT 'cm0203'
-              UNION ALL SELECT 'cm0304'
-            )
-              AND (${candidateClauses.join(" OR ")})
-            ORDER BY cd.season_order, coalesce(ps.current_ability, 0) DESC
-            LIMIT 500
-          `,
-          args: candidateArgs,
-        });
 
         const selectedDatabaseResult = await db.execute({
           sql: `
@@ -1032,7 +1234,9 @@ export default {
         const bestByDatabase = new Map<string, { row: QueryRow; score: number }>();
 
         for (const row of [currentEntry, ...(candidates.rows as QueryRow[])]) {
-          const score = seasonCandidateScore(selectedPlayer, row);
+          const score = canonicalPlayerId
+            ? 1_000
+            : seasonCandidateScore(selectedPlayer, row);
           const slug = textField(row, "database_slug");
           if (!score || !slug) {
             continue;
@@ -1051,7 +1255,11 @@ export default {
             display_name: row.display_name,
             full_name: row.full_name,
             common_name: row.common_name,
+            canonical_player_id: row.canonical_player_id,
+            canonical_player_public_id: row.canonical_player_public_id,
+            canonical_player_name: row.canonical_player_name,
             club_name: row.club_name,
+            canonical_club_name: row.canonical_club_name,
             nation_name: row.nation_name,
             age: row.age ?? row.season_age,
             date_of_birth: row.date_of_birth,
@@ -1109,20 +1317,118 @@ export default {
 
         if (item) {
           const mappedLeague = leagueForClub(database, item.club_name);
-          if (mappedLeague) {
-            item.league_name = mappedLeague;
-          } else {
-            const leagueResult = await db.execute({
+          const clubResult = await db.execute({
+            sql: `
+              SELECT
+                c.source_club_id,
+                json_extract(c.raw_json, '$.division_name') AS league_name,
+                coalesce(
+                  nullif(c.fore_colour1, ''),
+                  json_extract(c.raw_json, '$."Home Text Col"'),
+                  json_extract(c.raw_json, '$."Home Col 1"')
+                ) AS fore_colour1,
+                coalesce(
+                  nullif(c.back_colour1, ''),
+                  json_extract(c.raw_json, '$."Home Back Col"'),
+                  json_extract(c.raw_json, '$."Home Col 2"')
+                ) AS back_colour1,
+                coalesce(
+                  nullif(c.fore_colour2, ''),
+                  json_extract(c.raw_json, '$."Away Text Col"'),
+                  json_extract(c.raw_json, '$."Away Col 1"')
+                ) AS fore_colour2,
+                coalesce(
+                  nullif(c.back_colour2, ''),
+                  json_extract(c.raw_json, '$."Away Back Col"'),
+                  json_extract(c.raw_json, '$."Away Col 2"')
+                ) AS back_colour2,
+                nullif(c.fore_colour3, '') AS fore_colour3,
+                nullif(c.back_colour3, '') AS back_colour3,
+                colours.background_colour,
+                colours.foreground_colour,
+                colours.canonical_club_id,
+                colours.colour_canonical_club_id,
+                colours.colour_source_database_slug,
+                colours.colour_source_club_id,
+                colours.colour_slot,
+                colours.resolution_method AS colour_resolution_method
+              FROM clubs c
+              LEFT JOIN canonical_club_colours colours
+                ON colours.database_slug = c.database_slug
+               AND colours.source_club_id = cast(c.source_club_id AS TEXT)
+              WHERE c.database_slug = ?
+                AND (
+                  c.source_club_id = ?
+                  OR (? <> '' AND c.name = ?)
+                )
+              ORDER BY
+                CASE WHEN c.name = ? THEN 0 ELSE 1 END,
+                CASE WHEN c.source_club_id = ? THEN 0 ELSE 1 END
+              LIMIT 1
+            `,
+            args: [
+              database,
+              textField(item, "club_id"),
+              textField(item, "club_name"),
+              textField(item, "club_name"),
+              textField(item, "club_name"),
+              textField(item, "club_id"),
+            ],
+          });
+          const club = clubResult.rows[0] as QueryRow | undefined;
+          let canonicalColour = club?.background_colour && club?.foreground_colour
+            ? club
+            : undefined;
+          if (!canonicalColour && textField(item, "club_name")) {
+            const canonicalColourResult = await db.execute({
               sql: `
-                SELECT json_extract(raw_json, '$.division_name') AS league_name
-                FROM clubs
-                WHERE database_slug = ? AND name = ?
+                SELECT
+                  colours.background_colour,
+                  colours.foreground_colour,
+                  colours.canonical_club_id,
+                  colours.colour_canonical_club_id,
+                  colours.colour_source_database_slug,
+                  colours.colour_source_club_id,
+                  colours.colour_slot,
+                  'canonical_player_club_name' AS colour_resolution_method
+                FROM canonical_club_names names
+                JOIN canonical_club_colours colours
+                  ON colours.canonical_club_id = names.canonical_club_id
+                WHERE names.database_slug = ?
+                  AND names.source_club_name = ?
+                ORDER BY
+                  CASE WHEN colours.database_slug = ? THEN 0 ELSE 1 END,
+                  colours.database_slug,
+                  colours.source_club_id
                 LIMIT 1
               `,
-              args: [database, textField(item, "club_name")],
+              args: [
+                database,
+                textField(item, "club_name"),
+                database,
+              ],
             });
-            item.league_name = leagueResult.rows[0]?.league_name ?? null;
+            canonicalColour = canonicalColourResult.rows[0] as QueryRow | undefined;
           }
+          item.league_name = mappedLeague || club?.league_name || null;
+          item.club_colors = club || canonicalColour
+            ? {
+                fore_colour1: club?.fore_colour1,
+                back_colour1: club?.back_colour1,
+                fore_colour2: club?.fore_colour2,
+                back_colour2: club?.back_colour2,
+                fore_colour3: club?.fore_colour3,
+                back_colour3: club?.back_colour3,
+                background_colour: canonicalColour?.background_colour,
+                foreground_colour: canonicalColour?.foreground_colour,
+                canonical_club_id: canonicalColour?.canonical_club_id,
+                colour_canonical_club_id: canonicalColour?.colour_canonical_club_id,
+                colour_source_database_slug: canonicalColour?.colour_source_database_slug,
+                colour_source_club_id: canonicalColour?.colour_source_club_id,
+                colour_slot: canonicalColour?.colour_slot,
+                colour_resolution_method: canonicalColour?.colour_resolution_method,
+              }
+            : null;
 
           try {
             const profileResult = await db.execute({
@@ -1169,6 +1475,17 @@ export default {
               }
             }
           }
+          if (profile && item.club_colors) {
+            profile.clubColors = item.club_colors as QueryRow;
+          }
+          if (profile) {
+            profile.canonical_club_name =
+              textField(item, "canonical_club_name") || null;
+            profile.canonical_player_public_id =
+              textField(item, "canonical_player_public_id") || null;
+            profile.canonical_player_name =
+              textField(item, "canonical_player_name") || null;
+          }
         }
 
         return storeEdgeCache(request, json(
@@ -1201,6 +1518,13 @@ export default {
                 season_year,
                 club_id,
                 club_name,
+                (
+                  SELECT names.canonical_club_name
+                  FROM canonical_club_names names
+                  WHERE names.database_slug = person_history.database_slug
+                    AND names.source_club_name = person_history.club_name
+                  LIMIT 1
+                ) AS canonical_club_name,
                 league_name,
                 apps,
                 goals,
@@ -1226,6 +1550,13 @@ export default {
                 season_year,
                 club_id,
                 club_name,
+                (
+                  SELECT names.canonical_club_name
+                  FROM canonical_club_names names
+                  WHERE names.database_slug = person_history.database_slug
+                    AND names.source_club_name = person_history.club_name
+                  LIMIT 1
+                ) AS canonical_club_name,
                 (
                   SELECT json_extract(c.raw_json, '$.division_name')
                   FROM clubs c
@@ -1362,6 +1693,11 @@ export default {
 
       return json({ error: "not found" }, env, 404);
     } catch (error) {
+      console.error(JSON.stringify({
+        message: "request failed",
+        path: url.pathname,
+        error: error instanceof Error ? error.message : String(error),
+      }));
       return json(
         {
           error: error instanceof Error ? error.message : String(error),
@@ -1371,4 +1707,4 @@ export default {
       );
     }
   },
-};
+} satisfies ExportedHandler<Env>;

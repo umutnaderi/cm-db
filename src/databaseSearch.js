@@ -666,7 +666,7 @@ function renderMoreAttributes(profile) {
   if (!additionalItems.length) return "";
 
   return `
-    <details class="hidden-attributes">
+    <details class="hidden-attributes" open>
       <summary>More Attributes</summary>
       <div class="hidden-attribute-grid">
         ${renderRatingRows(additionalItems)}
@@ -926,7 +926,7 @@ function renderPositionPanel(profile) {
         </div>
         <div class="position-details">
           ${moreAttributes}
-          <details class="position-ratings-toggle"><summary>Position ratings</summary><div class="position-values">${renderRatingRows([...ratings.positions, ...ratings.sides])}</div></details>
+          <details class="position-ratings-toggle" open><summary>Position ratings</summary><div class="position-values">${renderRatingRows([...ratings.positions, ...ratings.sides])}</div></details>
         </div>
       </div>
     </section>`;

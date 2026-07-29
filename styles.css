@@ -1666,14 +1666,14 @@ select:focus {
 
 .position-pitch {
   --pitch-line-inset: 10px;
-    --pitch-line-color: rgba(240, 240, 240, 0.72);
+    --pitch-line-color: rgba(255, 255, 255, 0.72);
     --penalty-box-depth: 15.714%;
     --penalty-mark-depth: 10.476%;
     --pitch-circle-diameter: 26.912%;
   position: relative;
-  width: min(100%, 240px);
-    aspect-ratio: 68 / 105;
-    margin: 0 auto;
+  width: min(100%, 340px);
+    aspect-ratio: 72 / 105;
+  margin: 0 auto;
   overflow: hidden;
   background:
     repeating-linear-gradient(
@@ -1685,8 +1685,8 @@ select:focus {
     ),
     #287b3c;
   border: 0;
-  border-radius: 2px;
-    outline: 2px solid var(--pitch-line-color);
+  border-radius: 8px;
+  outline: 2px solid var(--pitch-line-color);
     outline-offset: calc(-1 * var(--pitch-line-inset));
   box-shadow: inset 0 0 0 2px rgba(121, 189, 116, 0.65);
 }
@@ -1745,8 +1745,8 @@ select:focus {
   position: absolute;
   left: 50%;
   width: 59.294%;
-    height: var(--penalty-box-depth);
-    border: 2px solid var(--pitch-line-color);
+  height: var(--penalty-box-depth);
+  border: 2px solid var(--pitch-line-color);
   transform: translateX(-50%);
 }
 

@@ -23,15 +23,41 @@ identity.execute("PRAGMA query_only = ON")
 arguments = sys.argv[1:8]
 arguments.extend([""] * (7 - len(arguments)))
 database, query, page, page_size, club, league, nation = arguments
+league_map = json.loads(
+    (root / "worker" / "src" / "league-map.json").read_text(encoding="utf-8")
+)
+canonical_database = {
+    "cm0203": "cm0203_vanilla_original",
+    "cm0304": "cm0304_vanilla_original",
+}.get(database, database)
+database_leagues = dict(league_map.get(canonical_database, {}))
+if canonical_database == "cm0203_vanilla_original":
+    database_leagues = {
+        **league_map.get("cm0304_vanilla_original", {}),
+        **database_leagues,
+    }
+league_clubs = [
+    club_name
+    for club_name, club_league in database_leagues.items()
+    if club_league == league
+]
 normalized = unicodedata.normalize("NFKD", query)
 tokens = re.findall(r"[\w]+", "".join(c for c in normalized if not unicodedata.combining(c)).lower())
 match = " AND ".join(f'"{token}"*' for token in tokens[:10])
 clauses = ["ps.database_slug = ?", "player_search_fts MATCH ?"]
 values = [database, match]
-for column, value in (("club_name", club), ("league_name", league), ("nation_name", nation)):
+for column, value in (("club_name", club), ("nation_name", nation)):
     if value:
         clauses.append(f"ps.{column} = ?")
         values.append(value)
+if league:
+    if league_clubs:
+        clauses.append(
+            f"ps.club_name IN ({','.join('?' for _ in league_clubs)})"
+        )
+        values.extend(league_clubs)
+    else:
+        clauses.append("0 = 1")
 
 requested_page = max(1, int(page))
 requested_page_size = max(1, int(page_size))
@@ -46,7 +72,8 @@ rows = list(connection.execute(
     JOIN player_search_fts f
       ON f.database_slug = ps.database_slug AND f.source_person_id = ps.source_person_id
     WHERE {' AND '.join(clauses)}
-    ORDER BY coalesce(ps.current_ability, 0) DESC, ps.display_name, ps.source_person_id
+    ORDER BY ps.current_ability DESC, ps.potential_ability DESC,
+             ps.full_name, ps.source_person_id
     LIMIT ?
     """,
     (*values, merge_limit),
@@ -74,10 +101,18 @@ canonical_ids = [
 if canonical_ids:
     source_clauses = ["ps.database_slug = ?"]
     source_values = [database]
-    for column, value in (("club_name", club), ("league_name", league), ("nation_name", nation)):
+    for column, value in (("club_name", club), ("nation_name", nation)):
         if value:
             source_clauses.append(f"ps.{column} = ?")
             source_values.append(value)
+    if league:
+        if league_clubs:
+            source_clauses.append(
+                f"ps.club_name IN ({','.join('?' for _ in league_clubs)})"
+            )
+            source_values.extend(league_clubs)
+        else:
+            source_clauses.append("0 = 1")
     source_clauses.append(
         f"cast(ps.source_person_id AS TEXT) IN ({','.join('?' for _ in canonical_ids)})"
     )
@@ -103,7 +138,8 @@ ordered_rows = sorted(
     unique_rows.values(),
     key=lambda row: (
         -(int(row["current_ability"]) if row["current_ability"] is not None else 0),
-        str(row["display_name"] or ""),
+        -(int(row["potential_ability"]) if row["potential_ability"] is not None else 0),
+        str(row["full_name"] or ""),
         str(row["source_person_id"]),
     ),
 )

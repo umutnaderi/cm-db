@@ -12,6 +12,25 @@ const leagueMap = JSON.parse(
 source.exec("PRAGMA query_only = ON");
 identity.exec("PRAGMA query_only = ON");
 
+function canonicalDatabaseSlug(slug) {
+  if (slug === "cm0203") return "cm0203_vanilla_original";
+  if (slug === "cm0304") return "cm0304_vanilla_original";
+  return slug;
+}
+
+function clubsForLeague(database, league) {
+  const slug = canonicalDatabaseSlug(database);
+  const databaseLeagues = slug === "cm0203_vanilla_original"
+    ? {
+        ...(leagueMap.cm0304_vanilla_original || {}),
+        ...(leagueMap.cm0203_vanilla_original || {}),
+      }
+    : leagueMap[slug] || {};
+  return Object.entries(databaseLeagues)
+    .filter(([, clubLeague]) => clubLeague === league)
+    .map(([club]) => club);
+}
+
 const playerColumns = `
   database_slug, source_person_id, display_name, full_name, common_name,
   club_id, club_name, nation_name, date_of_birth, season_age AS age, position_text,
@@ -383,6 +402,8 @@ function searchPlayers(params) {
   const page = integer(params.get("page"), 1, 1, 100000);
   const pageSize = integer(params.get("pageSize"), 20, 1, 100);
   const query = (params.get("q") || "").trim();
+  const league = (params.get("league") || "").trim();
+  const leagueClubs = league ? clubsForLeague(database, league) : [];
   const clauses = ["ps.database_slug = ?"];
   const values = [database];
   let join = "";
@@ -397,7 +418,7 @@ function searchPlayers(params) {
       String(page),
       String(pageSize),
       params.get("club") || "",
-      params.get("league") || "",
+      league,
       params.get("nation") || ""
     ], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
     if (result.status === 0) {
@@ -417,12 +438,20 @@ function searchPlayers(params) {
   }
 
   for (const [parameter, column] of [
-    ["club", "club_name"], ["league", "league_name"], ["nation", "nation_name"]
+    ["club", "club_name"], ["nation", "nation_name"]
   ]) {
     const value = (params.get(parameter) || "").trim();
     if (value) {
       clauses.push(`ps.${column} = ?`);
       values.push(value);
+    }
+  }
+  if (league) {
+    if (leagueClubs.length) {
+      clauses.push(`ps.club_name IN (${leagueClubs.map(() => "?").join(", ")})`);
+      values.push(...leagueClubs);
+    } else {
+      clauses.push("0 = 1");
     }
   }
 
@@ -431,7 +460,11 @@ function searchPlayers(params) {
     FROM player_search ps
     ${join}
     WHERE ${clauses.join(" AND ")}
-    ORDER BY coalesce(ps.current_ability, 0) DESC, ps.display_name, ps.source_person_id
+    ORDER BY
+      ps.current_ability DESC,
+      ps.potential_ability DESC,
+      ps.full_name,
+      ps.source_person_id
     LIMIT ? OFFSET ?
   `).all(...values, pageSize, (page - 1) * pageSize).map(withCanonicalIdentity);
   return { items, page, pageSize };

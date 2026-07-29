@@ -131,7 +131,7 @@ function storeEdgeCache(
 
 function edgeCacheKey(request: Request | string): Request {
   const url = new URL(typeof request === "string" ? request : request.url);
-  url.searchParams.set("__cacheVersion", "33");
+  url.searchParams.set("__cacheVersion", "34");
   return new Request(url, typeof request === "string" ? undefined : request);
 }
 
@@ -649,7 +649,11 @@ export default {
         const orderArgs: Array<string | number> = [];
         // Match idx_player_search_name's BINARY collation so SQLite can stream
         // the first page from the index instead of sorting an entire season.
-        let orderBy = "ps.full_name";
+        let orderBy = `
+          ps.current_ability DESC,
+          ps.potential_ability DESC,
+          ps.full_name
+        `;
 
         if (trimmedQ) {
           const nameRank = `

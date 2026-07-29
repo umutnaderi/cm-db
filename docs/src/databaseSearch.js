@@ -111,15 +111,30 @@ const PITCH_ROWS = {
   goalkeeper: 94,
 };
 const PITCH_SLOTS = [
-  ["LW", "left", "striker"], ["ST", "centre", "striker"], ["RW", "right", "striker"],
-  ["AML", "left", "attackingMidfield"], ["AMC", "centre", "attackingMidfield"], ["AMR", "right", "attackingMidfield"],
-  ["ML", "left", "midfield"], ["MC", "centre", "midfield"], ["MR", "right", "midfield"],
-  ["WBL", "wideLeft", "defensiveMidfield"], ["DML", "defensiveLeft", "defensiveMidfield"],
-  ["DMC", "centre", "defensiveMidfield"], ["DMR", "defensiveRight", "defensiveMidfield"],
-  ["WBR", "wideRight", "defensiveMidfield"], ["DL", "left", "defence"],
-  ["DC", "centre", "defence"], ["DR", "right", "defence"], ["SW", "centre", "sweeper"],
+  ["LW", "left", "striker"],
+  ["ST", "centre", "striker"],
+  ["RW", "right", "striker"],
+  ["AML", "left", "attackingMidfield"],
+  ["AMC", "centre", "attackingMidfield"],
+  ["AMR", "right", "attackingMidfield"],
+  ["ML", "left", "midfield"],
+  ["MC", "centre", "midfield"],
+  ["MR", "right", "midfield"],
+  ["WBL", "wideLeft", "defensiveMidfield"],
+  ["DML", "defensiveLeft", "defensiveMidfield"],
+  ["DMC", "centre", "defensiveMidfield"],
+  ["DMR", "defensiveRight", "defensiveMidfield"],
+  ["WBR", "wideRight", "defensiveMidfield"],
+  ["DL", "left", "defence"],
+  ["DC", "centre", "defence"],
+  ["DR", "right", "defence"],
+  ["SW", "centre", "sweeper"],
   ["GK", "centre", "goalkeeper"],
-].map(([label, lane, row]) => ({ label, x: PITCH_LANES[lane], y: PITCH_ROWS[row] }));
+].map(([label, lane, row]) => ({
+  label,
+  x: PITCH_LANES[lane],
+  y: PITCH_ROWS[row],
+}));
 
 const state = {
   databases: [],
@@ -129,6 +144,7 @@ const state = {
   league: "",
   nation: "",
   page: 1,
+  hasMorePlayers: true,
   items: [],
   selectedPlayer: null,
   selectedProfile: null,
@@ -142,6 +158,7 @@ const state = {
   seasonLoading: false,
   seasonError: "",
   loadingPlayers: false,
+  loadingMorePlayers: false,
   playerAbortController: null,
   detailAbortController: null,
   historyAbortController: null,
@@ -458,9 +475,12 @@ async function loadFilterOptions() {
 }
 
 function renderResults(message = "") {
+  const previousScrollTop = elements.resultsList.scrollTop;
   renderActiveSearchFilters();
-  elements.resultCount.textContent = state.loadingPlayers
+  elements.resultCount.textContent = state.loadingPlayers && !state.items.length
     ? "Searching..."
+    : state.loadingMorePlayers
+      ? `${state.items.length.toLocaleString()} shown · loading...`
     : `${state.items.length.toLocaleString()} shown`;
   elements.resultsList.replaceChildren();
 
@@ -492,7 +512,9 @@ function renderResults(message = "") {
           player.nation_name || "Unknown nation",
           player.position_text || "No position",
           formatDate(player.date_of_birth),
-        ].map((value) => `<span>${escapeHtml(value)}</span>`).join("")}
+        ]
+          .map((value) => `<span>${escapeHtml(value)}</span>`)
+          .join("")}
       </span>
       <span class="result-stats" aria-label="Player metadata">
         <span>CA <strong>${escapeHtml(formatNumber(player.current_ability))}</strong></span>
@@ -505,6 +527,7 @@ function renderResults(message = "") {
   });
 
   elements.resultsList.append(fragment);
+  elements.resultsList.scrollTop = previousScrollTop;
 }
 
 function fact(label, value) {
@@ -999,7 +1022,9 @@ function renderHistory() {
             </tr>
           </thead>
           <tbody>
-            ${state.selectedHistory.map((row) => `
+            ${state.selectedHistory
+              .map(
+                (row) => `
               <tr>
                 <td>${escapeHtml(formatValue(row.season_year))}</td>
                 <td>${row.club_name ? `<button type="button" class="fact-filter table-filter" data-search-filter="club" data-search-value="${escapeHtml(row.club_name)}">${escapeHtml(row.canonical_club_name || row.club_name)}</button>` : "-"}</td>
@@ -1008,7 +1033,9 @@ function renderHistory() {
                 <td class="history-number">${escapeHtml(formatNumber(row.goals))}</td>
                 <td>${Number(row.on_loan) ? "Yes" : "-"}</td>
               </tr>
-            `).join("")}
+            `,
+              )
+              .join("")}
           </tbody>
           <tfoot>
             <tr>
@@ -1056,12 +1083,40 @@ function renderDetailContent(player, profile) {
 }
 
 const CLUB_COLOUR_PALETTE = [
-  "#000000", "#ffffff", "#808080", "#707090", "#e00000", "#b00000",
-  "#901000", "#ff7000", "#e08000", "#fff000", "#ffd000", "#008030",
-  "#006030", "#002060", "#002080", "#0030a0", "#0050d0", "#60c0ff",
-  "#800040", "#600060", "#800020", "#804000", "#a05000", "#ff9595",
-  "#d9b128", "#c6c6c6", "#ce84ce", "#008888", "#80c848", "#ffaa00",
-  "#10a8a8", "#056161", "#df1e7a", "#003e30",
+  "#000000",
+  "#ffffff",
+  "#808080",
+  "#707090",
+  "#e00000",
+  "#b00000",
+  "#901000",
+  "#ff7000",
+  "#e08000",
+  "#fff000",
+  "#ffd000",
+  "#008030",
+  "#006030",
+  "#002060",
+  "#002080",
+  "#0030a0",
+  "#0050d0",
+  "#60c0ff",
+  "#800040",
+  "#600060",
+  "#800020",
+  "#804000",
+  "#a05000",
+  "#ff9595",
+  "#d9b128",
+  "#c6c6c6",
+  "#ce84ce",
+  "#008888",
+  "#80c848",
+  "#ffaa00",
+  "#10a8a8",
+  "#056161",
+  "#df1e7a",
+  "#003e30",
 ];
 
 const CLUB_COLOUR_CODES = {
@@ -1089,9 +1144,12 @@ function clubColour(value) {
 
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "";
-  const directIndex = Number.isInteger(numeric) && numeric >= 0 && numeric < CLUB_COLOUR_PALETTE.length
-    ? numeric
-    : (numeric >>> 24);
+  const directIndex =
+    Number.isInteger(numeric) &&
+    numeric >= 0 &&
+    numeric < CLUB_COLOUR_PALETTE.length
+      ? numeric
+      : numeric >>> 24;
   return CLUB_COLOUR_PALETTE[directIndex] || "";
 }
 
@@ -1110,10 +1168,11 @@ function profileBannerTheme(player, profile) {
         background: clubColour(colours[`back_colour${index}`]),
         foreground: clubColour(colours[`fore_colour${index}`]),
       }))
-      .find((pair) =>
-        pair.background
-        && pair.foreground
-        && pair.background !== pair.foreground
+      .find(
+        (pair) =>
+          pair.background &&
+          pair.foreground &&
+          pair.background !== pair.foreground,
       );
     background = currentPair?.background || "";
     foreground = currentPair?.foreground || "";
@@ -1418,7 +1477,8 @@ function scheduleSearch() {
   renderActiveSearchFilters();
   searchTimer = setTimeout(() => {
     state.page = 1;
-    loadPlayers();
+    state.hasMorePlayers = true;
+    loadPlayers({ append: false });
   }, SEARCH_DEBOUNCE_MS);
 }
 
@@ -1487,34 +1547,57 @@ function startFilterSearch(filter, value) {
   elements.nationSearch.value = filter === "nation" ? value : "";
   readSearchInputs();
   state.page = 1;
+  state.hasMorePlayers = true;
   clearSelectedPlayer();
   renderProfile();
-  loadPlayers();
+  loadPlayers({ append: false });
 }
 
-async function loadPlayers() {
-  if (state.playerAbortController) {
+function currentSearchSignature() {
+  return JSON.stringify([
+    state.selectedDatabase,
+    state.query,
+    state.club,
+    state.league,
+    state.nation,
+  ]);
+}
+
+async function loadPlayers({ append = false } = {}) {
+  if (append && (
+    state.loadingPlayers
+    || state.loadingMorePlayers
+    || !state.hasMorePlayers
+  )) {
+    return;
+  }
+
+  if (!append && state.playerAbortController) {
     state.playerAbortController.abort();
   }
 
-  const hasFilter = Boolean(state.club || state.league || state.nation);
-  if ((state.query && state.query.length < 2) || (!state.query && !hasFilter)) {
+  if (state.query && state.query.length < 2) {
     state.items = [];
+    state.hasMorePlayers = false;
     clearSelectedPlayer();
     state.loadingPlayers = false;
+    state.loadingMorePlayers = false;
     state.playerAbortController = null;
     setStatus("Ready");
-    renderResults(state.query ? "Type at least 2 characters." : "No search yet.");
+    renderResults("Type at least 2 characters.");
     renderProfile();
     renderSummary();
     return;
   }
 
+  const requestedPage = append ? state.page + 1 : 1;
+  const searchSignature = currentSearchSignature();
   const abortController = new AbortController();
   state.playerAbortController = abortController;
-  state.loadingPlayers = true;
-  setStatus("Searching...");
-  renderResults("Searching...");
+  state.loadingPlayers = !append;
+  state.loadingMorePlayers = append;
+  setStatus(append ? "Loading more players..." : "Searching...");
+  renderResults(append ? "" : "Searching...");
 
   try {
     const result = await searchPlayers({
@@ -1523,37 +1606,53 @@ async function loadPlayers() {
       club: state.club,
       league: state.league,
       nation: state.nation,
-      page: state.page,
+      page: requestedPage,
       pageSize: PAGE_SIZE,
       signal: abortController.signal,
     });
 
-    if (state.playerAbortController !== abortController) {
+    if (
+      state.playerAbortController !== abortController
+      || currentSearchSignature() !== searchSignature
+    ) {
       return;
     }
 
-    state.items = result.items;
-    state.page = result.page || state.page;
-    clearSelectedPlayer();
+    const incomingItems = result.items;
+    if (append) {
+      const itemsByKey = new Map(state.items.map((item) => [playerKey(item), item]));
+      incomingItems.forEach((item) => itemsByKey.set(playerKey(item), item));
+      state.items = [...itemsByKey.values()];
+    } else {
+      state.items = incomingItems;
+      clearSelectedPlayer();
+    }
+    state.page = result.page || requestedPage;
+    state.hasMorePlayers = incomingItems.length >= result.pageSize;
     state.loadingPlayers = false;
+    state.loadingMorePlayers = false;
     setStatus(state.items.length ? "Results loaded" : "No results");
     renderResults();
-    renderProfile();
+    if (!append) renderProfile();
   } catch (error) {
     if (error.name === "AbortError") {
       return;
     }
 
-    state.items = [];
-    clearSelectedPlayer();
+    if (!append) {
+      state.items = [];
+      clearSelectedPlayer();
+    }
     state.loadingPlayers = false;
+    state.loadingMorePlayers = false;
     setStatus("Search failed");
-    renderResults(`Error: ${error.message}`);
-    renderProfile();
+    renderResults(append ? "" : `Error: ${error.message}`);
+    if (!append) renderProfile();
     console.error(error);
   } finally {
     if (state.playerAbortController === abortController) {
       state.loadingPlayers = false;
+      state.loadingMorePlayers = false;
       state.playerAbortController = null;
       renderSummary();
     }
@@ -1564,10 +1663,11 @@ function bindEvents() {
   elements.databaseSelect.addEventListener("change", () => {
     state.selectedDatabase = elements.databaseSelect.value;
     state.page = 1;
+    state.hasMorePlayers = true;
     clearSelectedPlayer();
     renderSummary();
     void loadFilterOptions();
-    loadPlayers();
+    loadPlayers({ append: false });
   });
 
   elements.nameSearch.addEventListener("input", scheduleSearch);
@@ -1595,6 +1695,15 @@ function bindEvents() {
     loadPlayerDetail(player);
     if (window.matchMedia("(max-width: 640px)").matches) {
       window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  });
+  elements.resultsList.addEventListener("scroll", () => {
+    const remaining =
+      elements.resultsList.scrollHeight
+      - elements.resultsList.scrollTop
+      - elements.resultsList.clientHeight;
+    if (remaining <= 120) {
+      void loadPlayers({ append: true });
     }
   });
 
@@ -1677,7 +1786,9 @@ async function init() {
     elements.nationSearch.disabled = false;
     setStatus("Ready");
     renderSummary();
-    renderResults("No search yet.");
+    state.page = 1;
+    state.hasMorePlayers = true;
+    void loadPlayers({ append: false });
     void loadFilterOptions();
   } catch (error) {
     setStatus("Load failed");

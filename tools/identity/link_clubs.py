@@ -13,6 +13,7 @@ from pathlib import Path
 from common import REGISTRY_DB, ROOT, normalize_name, registry_connection, slug_part
 
 OVERRIDES=ROOT/"config"/"identity"/"club_overrides.csv"
+ALIAS_GROUPS=ROOT/"config"/"identity"/"club_alias_groups.csv"
 
 
 def stable_id(public_id:str)->int:
@@ -29,6 +30,23 @@ def overrides(path:Path)->dict[tuple[str,str],dict[str,str]]:
             if row["action"] not in {"link","create_new","keep_separate","reject_candidate"} or not all(key) or key in result:
                 raise RuntimeError(f"Invalid club override line {line}")
             result[key]=row
+        return result
+
+
+def alias_groups(path:Path)->dict[str,dict[str,str]]:
+    with path.open("r",encoding="utf-8-sig",newline="") as handle:
+        reader=csv.DictReader(handle); required={"canonical_public_id","canonical_name","team_type","source_aliases","notes"}
+        if reader.fieldnames is None or required-set(reader.fieldnames): raise RuntimeError("Club alias group CSV has invalid columns")
+        result={}
+        for line,raw in enumerate(reader,2):
+            row={k:(v or "").strip() for k,v in raw.items()}
+            if not row["canonical_public_id"] or not row["canonical_name"] or not row["source_aliases"]:
+                raise RuntimeError(f"Invalid club alias group line {line}")
+            for alias in row["source_aliases"].split("|"):
+                normalized=normalize_name(alias)
+                if not normalized or (normalized in result and result[normalized]["canonical_public_id"]!=row["canonical_public_id"]):
+                    raise RuntimeError(f"Conflicting club alias group line {line}: {alias}")
+                result[normalized]=row
         return result
 
 
@@ -62,8 +80,8 @@ def canonical(connection,name,nation_id,team_type,public_id,identity_cache,id_ca
     return integer
 
 
-def link(registry_path:Path,overrides_path:Path)->dict[str,int]:
-    rules=overrides(overrides_path); con=registry_connection(registry_path)
+def link(registry_path:Path,overrides_path:Path,alias_groups_path:Path)->dict[str,int]:
+    rules=overrides(overrides_path); aliases=alias_groups(alias_groups_path); con=registry_connection(registry_path)
     try:
         direct={(r["database_slug"],r["source_nation_id"]):(r["canonical_nation_id"],r["public_id"])
                 for r in con.execute("SELECT l.database_slug,l.source_nation_id,l.canonical_nation_id,c.public_id FROM nation_identity_links l JOIN canonical_nations c ON c.id=l.canonical_nation_id")}
@@ -121,6 +139,18 @@ def link(registry_path:Path,overrides_path:Path)->dict[str,int]:
         for row in rows:
             row["ambiguous_unknown"]=(row["database_slug"],row["source_club_id"]) in ambiguous_unknown
             row["auto_public_id"]=identity_public.get(row["identity_signature"])
+            alias=normalize_name(row["short_name"] or row["source_name"])
+            alias_rule=aliases.get(alias)
+            if alias_rule and (row["database_slug"],row["source_club_id"]) not in rules:
+                rules[(row["database_slug"],row["source_club_id"])]={
+                    "action":"link",
+                    "database_slug":row["database_slug"],
+                    "source_club_id":row["source_club_id"],
+                    "canonical_public_id":alias_rule["canonical_public_id"],
+                    "canonical_name":alias_rule["canonical_name"],
+                    "team_type":alias_rule["team_type"],
+                    "notes":alias_rule["notes"],
+                }
 
         existing=list(con.execute("SELECT id,public_id,normalized_name,canonical_nation_id,team_type FROM canonical_clubs"))
         identity_cache={(r["normalized_name"],r["canonical_nation_id"],r["team_type"]):(int(r["id"]),r["public_id"]) for r in existing}
@@ -163,6 +193,6 @@ def link(registry_path:Path,overrides_path:Path)->dict[str,int]:
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument("--registry",type=Path,default=REGISTRY_DB);p.add_argument("--overrides",type=Path,default=OVERRIDES);a=p.parse_args();s=link(a.registry,a.overrides)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument("--registry",type=Path,default=REGISTRY_DB);p.add_argument("--overrides",type=Path,default=OVERRIDES);p.add_argument("--alias-groups",type=Path,default=ALIAS_GROUPS);a=p.parse_args();s=link(a.registry,a.overrides,a.alias_groups)
     print("source clubs: {source}; canonical: {canonical}; linked: {linked}; unresolved: {unresolved}; canonical nation resolved: {nation_resolved}".format(**s))
 if __name__=="__main__":main()

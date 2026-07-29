@@ -144,6 +144,7 @@ const state = {
   league: "",
   nation: "",
   page: 1,
+  hasMorePlayers: true,
   items: [],
   selectedPlayer: null,
   selectedProfile: null,
@@ -157,6 +158,7 @@ const state = {
   seasonLoading: false,
   seasonError: "",
   loadingPlayers: false,
+  loadingMorePlayers: false,
   playerAbortController: null,
   detailAbortController: null,
   historyAbortController: null,
@@ -473,9 +475,12 @@ async function loadFilterOptions() {
 }
 
 function renderResults(message = "") {
+  const previousScrollTop = elements.resultsList.scrollTop;
   renderActiveSearchFilters();
-  elements.resultCount.textContent = state.loadingPlayers
+  elements.resultCount.textContent = state.loadingPlayers && !state.items.length
     ? "Searching..."
+    : state.loadingMorePlayers
+      ? `${state.items.length.toLocaleString()} shown · loading...`
     : `${state.items.length.toLocaleString()} shown`;
   elements.resultsList.replaceChildren();
 
@@ -522,6 +527,7 @@ function renderResults(message = "") {
   });
 
   elements.resultsList.append(fragment);
+  elements.resultsList.scrollTop = previousScrollTop;
 }
 
 function fact(label, value) {
@@ -1471,7 +1477,8 @@ function scheduleSearch() {
   renderActiveSearchFilters();
   searchTimer = setTimeout(() => {
     state.page = 1;
-    loadPlayers();
+    state.hasMorePlayers = true;
+    loadPlayers({ append: false });
   }, SEARCH_DEBOUNCE_MS);
 }
 
@@ -1540,34 +1547,57 @@ function startFilterSearch(filter, value) {
   elements.nationSearch.value = filter === "nation" ? value : "";
   readSearchInputs();
   state.page = 1;
+  state.hasMorePlayers = true;
   clearSelectedPlayer();
   renderProfile();
-  loadPlayers();
+  loadPlayers({ append: false });
 }
 
-async function loadPlayers() {
-  if (state.playerAbortController) {
+function currentSearchSignature() {
+  return JSON.stringify([
+    state.selectedDatabase,
+    state.query,
+    state.club,
+    state.league,
+    state.nation,
+  ]);
+}
+
+async function loadPlayers({ append = false } = {}) {
+  if (append && (
+    state.loadingPlayers
+    || state.loadingMorePlayers
+    || !state.hasMorePlayers
+  )) {
+    return;
+  }
+
+  if (!append && state.playerAbortController) {
     state.playerAbortController.abort();
   }
 
-  const hasFilter = Boolean(state.club || state.league || state.nation);
-  if ((state.query && state.query.length < 2) || (!state.query && !hasFilter)) {
+  if (state.query && state.query.length < 2) {
     state.items = [];
+    state.hasMorePlayers = false;
     clearSelectedPlayer();
     state.loadingPlayers = false;
+    state.loadingMorePlayers = false;
     state.playerAbortController = null;
     setStatus("Ready");
-    renderResults(state.query ? "Type at least 2 characters." : "No search yet.");
+    renderResults("Type at least 2 characters.");
     renderProfile();
     renderSummary();
     return;
   }
 
+  const requestedPage = append ? state.page + 1 : 1;
+  const searchSignature = currentSearchSignature();
   const abortController = new AbortController();
   state.playerAbortController = abortController;
-  state.loadingPlayers = true;
-  setStatus("Searching...");
-  renderResults("Searching...");
+  state.loadingPlayers = !append;
+  state.loadingMorePlayers = append;
+  setStatus(append ? "Loading more players..." : "Searching...");
+  renderResults(append ? "" : "Searching...");
 
   try {
     const result = await searchPlayers({
@@ -1576,37 +1606,53 @@ async function loadPlayers() {
       club: state.club,
       league: state.league,
       nation: state.nation,
-      page: state.page,
+      page: requestedPage,
       pageSize: PAGE_SIZE,
       signal: abortController.signal,
     });
 
-    if (state.playerAbortController !== abortController) {
+    if (
+      state.playerAbortController !== abortController
+      || currentSearchSignature() !== searchSignature
+    ) {
       return;
     }
 
-    state.items = result.items;
-    state.page = result.page || state.page;
-    clearSelectedPlayer();
+    const incomingItems = result.items;
+    if (append) {
+      const itemsByKey = new Map(state.items.map((item) => [playerKey(item), item]));
+      incomingItems.forEach((item) => itemsByKey.set(playerKey(item), item));
+      state.items = [...itemsByKey.values()];
+    } else {
+      state.items = incomingItems;
+      clearSelectedPlayer();
+    }
+    state.page = result.page || requestedPage;
+    state.hasMorePlayers = incomingItems.length >= result.pageSize;
     state.loadingPlayers = false;
+    state.loadingMorePlayers = false;
     setStatus(state.items.length ? "Results loaded" : "No results");
     renderResults();
-    renderProfile();
+    if (!append) renderProfile();
   } catch (error) {
     if (error.name === "AbortError") {
       return;
     }
 
-    state.items = [];
-    clearSelectedPlayer();
+    if (!append) {
+      state.items = [];
+      clearSelectedPlayer();
+    }
     state.loadingPlayers = false;
+    state.loadingMorePlayers = false;
     setStatus("Search failed");
-    renderResults(`Error: ${error.message}`);
-    renderProfile();
+    renderResults(append ? "" : `Error: ${error.message}`);
+    if (!append) renderProfile();
     console.error(error);
   } finally {
     if (state.playerAbortController === abortController) {
       state.loadingPlayers = false;
+      state.loadingMorePlayers = false;
       state.playerAbortController = null;
       renderSummary();
     }
@@ -1617,10 +1663,11 @@ function bindEvents() {
   elements.databaseSelect.addEventListener("change", () => {
     state.selectedDatabase = elements.databaseSelect.value;
     state.page = 1;
+    state.hasMorePlayers = true;
     clearSelectedPlayer();
     renderSummary();
     void loadFilterOptions();
-    loadPlayers();
+    loadPlayers({ append: false });
   });
 
   elements.nameSearch.addEventListener("input", scheduleSearch);
@@ -1648,6 +1695,15 @@ function bindEvents() {
     loadPlayerDetail(player);
     if (window.matchMedia("(max-width: 640px)").matches) {
       window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  });
+  elements.resultsList.addEventListener("scroll", () => {
+    const remaining =
+      elements.resultsList.scrollHeight
+      - elements.resultsList.scrollTop
+      - elements.resultsList.clientHeight;
+    if (remaining <= 120) {
+      void loadPlayers({ append: true });
     }
   });
 
@@ -1730,7 +1786,9 @@ async function init() {
     elements.nationSearch.disabled = false;
     setStatus("Ready");
     renderSummary();
-    renderResults("No search yet.");
+    state.page = 1;
+    state.hasMorePlayers = true;
+    void loadPlayers({ append: false });
     void loadFilterOptions();
   } catch (error) {
     setStatus("Load failed");

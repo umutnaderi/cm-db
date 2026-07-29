@@ -691,7 +691,7 @@ function usesLegacyPositionScale() {
 }
 
 function inheritsWingBacksFromFullBacks() {
-  return /^cm9798_/i.test(state.selectedDatabase);
+  return /^cm(?:9697|9798)_/i.test(state.selectedDatabase);
 }
 
 function buildPitchRoles(ratings) {

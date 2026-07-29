@@ -93,21 +93,21 @@ const PITCH_ROLE_NAMES = {
 };
 
 const PITCH_LANES = {
-  wideLeft: 6,
-  left: 16,
-  defensiveLeft: 20,
+  wideLeft: 8,
+  left: 17,
+  defensiveLeft: 28,
   centre: 50,
-  defensiveRight: 80,
-  right: 84,
-  wideRight: 94,
+  defensiveRight: 74,
+  right: 83,
+  wideRight: 92,
 };
 const PITCH_ROWS = {
-  striker: 8,
-  attackingMidfield: 26,
-  midfield: 40,
-  defensiveMidfield: 54,
-  defence: 68,
-  sweeper: 82,
+  striker: 14,
+  attackingMidfield: 30,
+  midfield: 46,
+  defensiveMidfield: 62,
+  defence: 78,
+  sweeper: 86,
   goalkeeper: 94,
 };
 const PITCH_SLOTS = [

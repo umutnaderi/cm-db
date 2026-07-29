@@ -7,7 +7,7 @@ import {
   getPlayerSeasons,
   searchPlayers,
 } from "./lib/retroballApi.js";
-import "./pixelCanvas.js?v=20260729-27";
+import "./pixelCanvas.js?v=20260729-28";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;

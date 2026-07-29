@@ -1420,8 +1420,18 @@ select:focus {
   opacity: 0.74;
   pointer-events: none;
   transition: opacity 400ms ease;
-  -webkit-mask-image: radial-gradient(circle at center, #000 18%, transparent 88%);
-  mask-image: radial-gradient(circle at center, #000 18%, transparent 88%);
+  -webkit-mask-image: radial-gradient(
+    ellipse 30% 44% at center,
+    transparent 75%,
+    rgba(0, 0, 0, 0.3) 88%,
+    #000 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 30% 44% at center,
+    transparent 75%,
+    rgba(0, 0, 0, 0.3) 88%,
+    #000 100%
+  );
 }
 
 .rep-box.ability-pixel-box > span,

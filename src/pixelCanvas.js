@@ -116,8 +116,12 @@ class AbilityPixelCanvas extends HTMLElement {
     if (event.type === "pointerenter" || event.type === "focusin") {
       this.start("appear");
     } else if (event.type === "pointerleave" || event.type === "focusout") {
-      this.start("disappear");
+      this.start(this.persistent ? "appear" : "disappear");
     }
+  }
+
+  get persistent() {
+    return this.parentBox?.classList.contains("ability-god") || false;
   }
 
   palette() {
@@ -159,6 +163,7 @@ class AbilityPixelCanvas extends HTMLElement {
         ));
       }
     }
+    if (this.persistent) this.start("appear");
   }
 
   start(action) {

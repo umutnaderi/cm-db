@@ -2138,17 +2138,9 @@ select:focus {
   padding-top: 4px;
 }
 
-.foot-strength h3 {
-  padding: 4px 0 2px;
-  color: #7f877b;
-  font-family: "Titillium Web", Arial, Helvetica, sans-serif;
-  font-size: 0.72rem;
-  font-weight: 400;
-  text-transform: uppercase;
-}
-
 .foot-options {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 

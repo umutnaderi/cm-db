@@ -855,7 +855,6 @@ function renderFootStrength(feet) {
   if (!available.length) return "";
   return `
     <section class="foot-strength" aria-label="Foot strength">
-      <h3>Feet</h3>
       <div class="foot-options">
         ${available.map((foot) => {
           const side = /left/i.test(foot.label) ? "left" : "right";

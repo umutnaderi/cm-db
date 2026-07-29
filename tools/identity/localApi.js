@@ -113,6 +113,24 @@ const canonicalPlayerStatement = identity.prepare(`
   LIMIT 1
 `);
 const canonicalPlayerCache = new Map();
+const draftClubColourCache = new Map();
+const draftClubColourStatement = source.prepare(`
+  SELECT
+    coalesce(nullif(fore_colour1, ''), json_extract(raw_json, '$."Home Text Col"')) AS fore_colour1,
+    coalesce(nullif(back_colour1, ''), json_extract(raw_json, '$."Home Back Col"')) AS back_colour1,
+    nullif(fore_colour2, '') AS fore_colour2,
+    nullif(back_colour2, '') AS back_colour2,
+    nullif(fore_colour3, '') AS fore_colour3,
+    nullif(back_colour3, '') AS back_colour3
+  FROM clubs
+  WHERE database_slug = ?
+    AND (
+      cast(source_club_id AS TEXT) = ?
+      OR (? <> '' AND name = ?)
+    )
+  ORDER BY CASE WHEN cast(source_club_id AS TEXT) = ? THEN 0 ELSE 1 END
+  LIMIT 1
+`);
 
 function canonicalClubName(database, sourceName) {
   if (!database || !sourceName) return "";
@@ -155,6 +173,31 @@ function withCanonicalIdentity(row) {
     ...withCanonicalClubName(row),
     ...canonicalPlayer(String(row.database_slug), row.source_person_id)
   };
+}
+
+function draftClubColours(database, sourceClubId, sourceClubName) {
+  const key = `${database}\u001f${sourceClubId || ""}\u001f${sourceClubName || ""}`;
+  if (draftClubColourCache.has(key)) return draftClubColourCache.get(key);
+  const sourceId = String(sourceClubId || "");
+  const sourceName = String(sourceClubName || "");
+  const row = draftClubColourStatement.get(
+    database,
+    sourceId,
+    sourceName,
+    sourceName,
+    sourceId
+  );
+  let colours = null;
+  for (const slot of [1, 2, 3]) {
+    const foreground = decodeClubColour(row?.[`fore_colour${slot}`]);
+    const background = decodeClubColour(row?.[`back_colour${slot}`]);
+    if (background && foreground && background !== foreground) {
+      colours = { background_colour: background, foreground_colour: foreground };
+      break;
+    }
+  }
+  draftClubColourCache.set(key, colours);
+  return colours;
 }
 
 function decodeClubColour(value) {
@@ -489,7 +532,7 @@ function draftCandidates(params) {
      AND profile.source_person_id = ps.source_person_id
     WHERE ps.database_slug = ?
       AND ps.current_ability IS NOT NULL
-      AND ps.current_ability >= 100
+      AND ps.current_ability BETWEEN 60 AND 200
     ORDER BY
       ps.current_ability DESC,
       ps.potential_ability DESC,
@@ -497,14 +540,25 @@ function draftCandidates(params) {
     LIMIT ? OFFSET ?
   `);
   const items = databases.flatMap((database, index) => {
-    const offset = (seed * 31 + (index + 1) * 97) % 180;
+    const offset = (seed * 31 + (index + 1) * 397) % 2500;
     return statement.all(database.slug, perDatabase, offset).map((row) => {
       const { position_ratings_json, ...player } = row;
+      const clubColors = draftClubColours(
+        database.slug,
+        player.club_id,
+        String(player.club_name || "")
+      );
       return {
         ...withCanonicalIdentity(player),
         database_title: database.title,
         season_order: database.season_order,
         position_ratings: ratingList(position_ratings_json),
+        club_colors: clubColors
+          ? {
+              background_colour: clubColors.background_colour,
+              foreground_colour: clubColors.foreground_colour,
+            }
+          : null,
       };
     });
   });

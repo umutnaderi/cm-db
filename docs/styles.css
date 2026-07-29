@@ -2914,12 +2914,12 @@ select:focus {
 
 .draft-pitch-arc-top {
   top: calc(var(--pitch-line-inset) + var(--penalty-mark-depth));
-  clip-path: inset(75% 0 0);
+  clip-path: inset(77% 0 0);
 }
 
 .draft-pitch-arc-bottom {
   bottom: calc(var(--pitch-line-inset) + var(--penalty-mark-depth));
-  clip-path: inset(0 0 75%);
+  clip-path: inset(0 0 77%);
   transform: translate(-50%, 50%);
 }
 
@@ -3016,31 +3016,55 @@ select:focus {
 
 .formation-player.is-filled {
   width: 88px;
-  min-height: 42px;
+  min-height: 48px;
   aspect-ratio: auto;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   gap: 1px;
   padding: 4px 6px;
-  border: 1px solid #f4d94f;
+  border: 2px solid color-mix(in srgb, var(--club-fg, #fff) 72%, #fff);
   border-radius: 5px;
-  background: rgba(13, 19, 16, 0.94);
+  background: var(--club-bg, rgba(13, 19, 16, 0.94));
+  color: var(--club-fg, #fff);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
 }
 
+.formation-player.is-filled.is-out-of-position {
+  border-color: var(--fit-color);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--fit-color) 34%, transparent),
+    0 3px 10px rgba(0, 0, 0, 0.55);
+}
+
+.formation-player.is-filled.is-captain {
+  outline: 2px solid #f4d94f;
+  outline-offset: 2px;
+}
+
 .formation-player-role {
-  color: #f4d94f;
+  color: inherit;
   font-size: 0.58rem;
+  font-weight: 800;
   line-height: 1;
+  opacity: 0.86;
 }
 
 .formation-player-name {
   width: 100%;
   overflow: hidden;
-  color: #fff;
+  color: inherit;
   font-size: 0.64rem;
+  font-weight: 800;
   line-height: 1.05;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.formation-player-ability {
+  color: inherit;
+  font-size: 0.54rem;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.82;
 }
 
 .draft-suggestions-panel {
@@ -3117,7 +3141,12 @@ select:focus {
   border: 1px solid var(--line);
   border-left: 3px solid var(--fit-color, #68716b);
   border-radius: 3px;
-  background: #171a18;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--club-bg, #171a18) 42%, #171a18),
+      #171a18 72%
+    );
   color: var(--text);
   cursor: pointer;
   text-align: left;
@@ -3127,7 +3156,12 @@ select:focus {
 .draft-suggestion-card:focus-visible,
 .draft-suggestion-card.is-selected {
   border-color: var(--fit-color, var(--accent-2));
-  background: #202521;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--club-bg, #202521) 58%, #202521),
+      #202521 78%
+    );
   outline: none;
 }
 

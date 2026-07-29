@@ -24,21 +24,26 @@ function slot(role, x, options = {}) {
 const formations = {
   "4-3-3": [
     slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
-    slot("MC", 28, { flexible: true }), slot("MC", 50, { flexible: true }),
-    slot("MC", 74, { flexible: true }), slot("FL", 17), slot("FC", 50), slot("FR", 83),
+    slot("MC", 28, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" } }),
+    slot("MC", 50, { styleRoles: { Defensive: "MC", Balanced: "MC", Attacking: "AMC" } }),
+    slot("MC", 74, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" } }),
+    slot("FL", 17), slot("FC", 50), slot("FR", 83),
   ],
   "4-4-2": [
     slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
-    slot("ML", 17, { flexible: true }), slot("MC", 40, { flexible: true }),
-    slot("MC", 60, { flexible: true }), slot("MR", 83, { flexible: true }),
+    slot("ML", 17, { styleRoles: { Defensive: "ML", Balanced: "ML", Attacking: "AML" } }),
+    slot("MC", 40, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" } }),
+    slot("MC", 60, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" } }),
+    slot("MR", 83, { styleRoles: { Defensive: "MR", Balanced: "MR", Attacking: "AMR" } }),
     slot("FC", 39), slot("FC", 61),
   ],
   "4-2-3-1": [
     slot("GK", 50), slot("DL", 17), slot("DC", 39), slot("DC", 61), slot("DR", 83),
-    slot("DMC", 39), slot("DMC", 61),
-    slot("AML", 17, { styleRoles: { Defensive: "ML", Balanced: "AML", Attacking: "AML" } }),
+    slot("DMC", 39),
+    slot("DMC", 61, { styleRoles: { Defensive: "DMC", Balanced: "DMC", Attacking: "MC" } }),
+    slot("AML", 17, { styleRoles: { Defensive: "ML", Balanced: "ML", Attacking: "AML" } }),
     slot("AMC", 50, { styleRoles: { Defensive: "MC", Balanced: "AMC", Attacking: "AMC" } }),
-    slot("AMR", 83, { styleRoles: { Defensive: "MR", Balanced: "AMR", Attacking: "AMR" } }),
+    slot("AMR", 83, { styleRoles: { Defensive: "MR", Balanced: "MR", Attacking: "AMR" } }),
     slot("FC", 50),
   ],
   "4-1-2-1-2": [
@@ -64,14 +69,19 @@ const formations = {
   ],
   "3-4-1-2": [
     slot("GK", 50), slot("DC", 28), slot("DC", 50), slot("DC", 72),
-    slot("ML", 15, { flexible: true }), slot("MC", 40, { flexible: true }),
-    slot("MC", 60, { flexible: true }), slot("MR", 85, { flexible: true }),
-    slot("AMC", 50), slot("FC", 39), slot("FC", 61),
+    slot("ML", 15),
+    slot("MC", 40, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" } }),
+    slot("MC", 60, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "AMC" } }),
+    slot("MR", 85),
+    slot("AMC", 50, { styleRoles: { Defensive: "MC", Balanced: "AMC", Attacking: "AMC" } }),
+    slot("FC", 39), slot("FC", 61),
   ],
   "3-4-3": [
     slot("GK", 50), slot("DC", 28), slot("DC", 50), slot("DC", 72),
-    slot("ML", 15, { flexible: true }), slot("MC", 40, { flexible: true }),
-    slot("MC", 60, { flexible: true }), slot("MR", 85, { flexible: true }),
+    slot("ML", 15, { styleRoles: { Defensive: "DML", Balanced: "ML", Attacking: "ML" } }),
+    slot("MC", 40, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" } }),
+    slot("MC", 60, { styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "AMC" } }),
+    slot("MR", 85, { styleRoles: { Defensive: "DMR", Balanced: "MR", Attacking: "MR" } }),
     slot("FL", 17), slot("FC", 50), slot("FR", 83),
   ],
   "5-2-1-2": [
@@ -98,6 +108,7 @@ const state = {
   suggestions: [],
   selectedCandidateKey: "",
   drafted: new Map(),
+  captainSlotId: "",
   rolling: false,
   rollNumber: 0,
 };
@@ -148,6 +159,16 @@ function playerName(candidate) {
     || candidate.display_name
     || candidate.full_name
     || "Unknown player";
+}
+
+function clubTheme(candidate) {
+  const colours = candidate.club_colors || {};
+  const background = String(colours.background_colour || "");
+  const foreground = String(colours.foreground_colour || "");
+  return {
+    background: /^#[0-9a-f]{6}$/i.test(background) ? background : "#0d1310",
+    foreground: /^#[0-9a-f]{6}$/i.test(foreground) ? foreground : "#ffffff",
+  };
 }
 
 function seasonLabel(candidate) {
@@ -285,8 +306,7 @@ function chooseSuggestions(pool, seed) {
       .sort((left, right) => {
         const leftFit = role ? positionFit(left, role).score : bestFit(left, openSlots).score;
         const rightFit = role ? positionFit(right, role).score : bestFit(right, openSlots).score;
-        return rightFit - leftFit
-          || Number(right.current_ability || 0) - Number(left.current_ability || 0);
+        return rightFit - leftFit;
       });
     const candidate = candidates[0];
     if (!candidate) return;
@@ -346,20 +366,32 @@ function renderPitch() {
     marker.style.left = `${item.x}%`;
     marker.style.top = `${item.y}%`;
     marker.title = drafted
-      ? `${playerName(drafted)} · click to remove`
+      ? state.drafted.size >= 11
+        ? `${playerName(drafted)} · click to select as captain`
+        : `${playerName(drafted)} · click to remove`
       : selected
         ? `${fit.label} at ${item.effectiveRole}`
         : `Empty ${item.effectiveRole} position`;
 
     if (drafted) {
-      marker.classList.add("is-filled");
+      const draftedFit = positionFit(drafted, item.effectiveRole);
+      const theme = clubTheme(drafted);
+      const isCaptain = state.captainSlotId === item.id;
+      marker.classList.add("is-filled", `fit-${draftedFit.level}`);
+      if (draftedFit.level !== "natural") marker.classList.add("is-out-of-position");
+      if (isCaptain) marker.classList.add("is-captain");
+      marker.style.setProperty("--club-bg", theme.background);
+      marker.style.setProperty("--club-fg", theme.foreground);
       const role = document.createElement("span");
       role.className = "formation-player-role";
-      role.textContent = item.effectiveRole;
+      role.textContent = `${item.effectiveRole}${isCaptain ? " · C" : ""}`;
       const name = document.createElement("span");
       name.className = "formation-player-name";
       name.textContent = playerName(drafted);
-      marker.append(role, name);
+      const ability = document.createElement("span");
+      ability.className = "formation-player-ability";
+      ability.textContent = `CA ${(Number(drafted.current_ability) || 0) * (isCaptain ? 2 : 1)}`;
+      marker.append(role, name, ability);
     } else {
       marker.textContent = item.effectiveRole;
       if (fit && fit.score > 0) {
@@ -373,7 +405,11 @@ function renderPitch() {
 
   caption.textContent = `${state.formation} · ${state.style}`;
   summary.textContent = `${state.formation} · ${state.style} · ${state.mode}`;
-  progress.textContent = `${state.drafted.size} / 11`;
+  progress.textContent = state.drafted.size < 11
+    ? `${state.drafted.size} / 11`
+    : state.captainSlotId
+      ? `11 / 11 · ${playerName(state.drafted.get(state.captainSlotId))} (C)`
+      : "11 / 11 · Choose captain";
   rollButton.disabled = state.rolling || state.mode !== "Classic" || state.drafted.size >= 11;
 }
 
@@ -394,6 +430,9 @@ function renderSuggestions(message = "") {
     button.className = `draft-suggestion-card fit-${fit.level}`;
     button.dataset.candidateKey = candidateKey(candidate);
     button.classList.toggle("is-selected", button.dataset.candidateKey === state.selectedCandidateKey);
+    const theme = clubTheme(candidate);
+    button.style.setProperty("--club-bg", theme.background);
+    button.style.setProperty("--club-fg", theme.foreground);
 
     const heading = document.createElement("span");
     heading.className = "draft-suggestion-name";
@@ -419,6 +458,7 @@ function renderSuggestions(message = "") {
 
 function resetDraft(message) {
   state.drafted.clear();
+  state.captainSlotId = "";
   state.suggestions = [];
   state.selectedCandidateKey = "";
   state.rollNumber = 0;
@@ -439,7 +479,7 @@ async function rollPlayers() {
 
   try {
     const seed = Math.floor(Date.now() / 300000) * 100 + state.rollNumber;
-    const payload = await getDraftCandidates({ seed, perDatabase: 22 });
+    const payload = await getDraftCandidates({ seed, perDatabase: 28 });
     state.suggestions = chooseSuggestions(payload.items, seed);
     state.rollNumber += 1;
     if (!state.suggestions.length) {
@@ -511,8 +551,17 @@ pitch.addEventListener("click", (event) => {
   const slotId = marker.dataset.slotId;
 
   if (state.drafted.has(slotId) && !state.selectedCandidateKey) {
-    const removed = state.drafted.get(slotId);
+    const drafted = state.drafted.get(slotId);
+    if (state.drafted.size >= 11) {
+      state.captainSlotId = slotId;
+      rollIntro.textContent = `${playerName(drafted)} selected as captain. Captain CA is doubled to ${(Number(drafted.current_ability) || 0) * 2}.`;
+      suggestionHelp.textContent = "Click another player to change the captain.";
+      renderPitch();
+      return;
+    }
+    const removed = drafted;
     state.drafted.delete(slotId);
+    if (state.captainSlotId === slotId) state.captainSlotId = "";
     rollIntro.textContent = `${playerName(removed)} removed from the draft.`;
     renderPitch();
     return;
@@ -530,15 +579,17 @@ pitch.addEventListener("click", (event) => {
   }
 
   state.drafted.set(slotId, candidate);
-  state.suggestions = state.suggestions.filter(
-    (item) => candidateKey(item) !== candidateKey(candidate),
-  );
+  state.suggestions = [];
   state.selectedCandidateKey = "";
   rollIntro.textContent = `${playerName(candidate)} drafted at ${target.effectiveRole} (${fit.label.toLowerCase()}).`;
   suggestionHelp.textContent = state.drafted.size >= 11
-    ? "Draft complete."
-    : "Roll again for six fresh choices covering the remaining positions.";
-  renderSuggestions();
+    ? "Starting XI complete. Click one of the eleven players to select the captain and double his CA."
+    : "Signing complete for this roll. Roll again for six fresh choices.";
+  renderSuggestions(
+    state.drafted.size >= 11
+      ? "Choose your captain on the pitch."
+      : "Roll again to sign the next player.",
+  );
   renderPitch();
 });
 

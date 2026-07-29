@@ -95,7 +95,7 @@ async function cachedJson(
 
   const cache = caches.default;
   const cacheUrl = new URL(request.url);
-  cacheUrl.searchParams.set("__retroball_cache", "25");
+  cacheUrl.searchParams.set("__retroball_cache", "26");
   const cacheKey = new Request(cacheUrl, request);
   const cached = await cache.match(cacheKey);
 
@@ -643,7 +643,7 @@ export default {
           `);
           const databases = databaseResult.rows;
           const queries = databases.map((database, index) => {
-            const offset = (seed * 31 + (index + 1) * 97) % 180;
+            const offset = (seed * 31 + (index + 1) * 397) % 2500;
             return {
               sql: `
                 SELECT
@@ -656,7 +656,7 @@ export default {
                   ${playerSearchBaseSelectColumns()}
                   WHERE ps.database_slug = ?
                     AND ps.current_ability IS NOT NULL
-                    AND ps.current_ability >= 100
+                    AND ps.current_ability BETWEEN 60 AND 200
                   ORDER BY
                     ps.current_ability DESC,
                     ps.potential_ability DESC,
@@ -674,14 +674,62 @@ export default {
             };
           });
           const results = await db.batch(queries);
+          const colourQueries = results.map((result, index) => {
+            const clubNames = [...new Set(
+              result.rows.map((row) => textField(row, "club_name")).filter(Boolean),
+            )];
+            const placeholders = clubNames.map(() => "?").join(", ");
+            return {
+              sql: `
+                SELECT
+                  names.source_club_name,
+                  names.canonical_club_name,
+                  colours.background_colour,
+                  colours.foreground_colour
+                FROM canonical_club_names names
+                LEFT JOIN canonical_club_colours colours
+                  ON colours.canonical_club_id = names.canonical_club_id
+                WHERE names.database_slug = ?
+                  ${clubNames.length ? `AND names.source_club_name IN (${placeholders})` : "AND 0"}
+                ORDER BY
+                  names.source_club_name,
+                  CASE WHEN colours.database_slug = ? THEN 0 ELSE 1 END,
+                  colours.database_slug
+              `,
+              args: [
+                databases[index]?.slug as string,
+                ...clubNames,
+                databases[index]?.slug as string,
+              ],
+            };
+          });
+          const colourResults = await db.batch(colourQueries);
+          const clubThemes = colourResults.map((result) => {
+            const themes = new Map<string, QueryRow>();
+            for (const row of result.rows) {
+              const sourceName = textField(row, "source_club_name");
+              if (sourceName && !themes.has(sourceName)) themes.set(sourceName, row);
+            }
+            return themes;
+          });
           const items = results.flatMap((result, index) =>
             result.rows.map((row) => {
               const { position_ratings_json, ...player } = row;
+              const clubTheme = clubThemes[index]?.get(textField(row, "club_name"));
+              const background = clubTheme?.background_colour;
+              const foreground = clubTheme?.foreground_colour;
               return {
                 ...player,
+                canonical_club_name: clubTheme?.canonical_club_name ?? null,
                 database_title: databases[index]?.title,
                 season_order: databases[index]?.season_order,
                 position_ratings: ratingListFromJson(position_ratings_json),
+                club_colors: background && foreground
+                  ? {
+                      background_colour: background,
+                      foreground_colour: foreground,
+                    }
+                  : null,
               };
             }),
           );

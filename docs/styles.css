@@ -1745,8 +1745,8 @@ select:focus {
   position: absolute;
   left: 50%;
   width: 59.294%;
-    height: var(--penalty-box-depth);
-    border: 0px solid var(--pitch-line-color);
+  height: var(--penalty-box-depth);
+  border: 2px solid var(--pitch-line-color);
   transform: translateX(-50%);
 }
 

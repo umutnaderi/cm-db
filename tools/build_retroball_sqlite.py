@@ -294,6 +294,16 @@ def as_int(value):
         return None
 
 
+def normalize_potential_ability(database_slug, value):
+    potential_ability = as_int(value)
+    if database_slug in {
+        "cm9697_vanilla_original",
+        "cm9798_vanilla_original",
+    }:
+        return {126: -2, 127: -1}.get(potential_ability, potential_ability)
+    return potential_ability
+
+
 def pick(row, *names):
     for name in names:
         value = row.get(name)
@@ -412,7 +422,7 @@ def normalize_player_search(row):
         "age": as_int(pick(row, "age")),
         "position_text": pick(row, "position_text"),
         "current_ability": as_int(ca),
-        "potential_ability": as_int(pa),
+        "potential_ability": normalize_potential_ability(database_slug, pa),
         "value": as_int(pick(row, "value", "estimated_value")),
         "wage": as_int(pick(row, "wage")),
         "person_history_index": as_int(pick(row, "person_history_index")),
@@ -470,7 +480,10 @@ def normalize_player_profile(row):
     )
     source_player_id = pick(row, "player_id", "id", "row_id", "unique_id")
     current_ability = as_int(pick(row, "current_ability", "ability"))
-    potential_ability = as_int(pick(row, "potential_ability", "potential"))
+    potential_ability = normalize_potential_ability(
+        database_slug,
+        pick(row, "potential_ability", "potential"),
+    )
     full_name, display_name, common_name = sanitize_names(database_slug, row)
 
     if "current_ability" in row or "defender" in row:

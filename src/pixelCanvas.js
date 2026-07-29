@@ -125,6 +125,12 @@ class AbilityPixelCanvas extends HTMLElement {
   }
 
   palette() {
+    const customColors = String(this.dataset.colors || "")
+      .split(",")
+      .map((color) => color.trim())
+      .filter(Boolean);
+    if (customColors.length) return customColors;
+
     const styles = getComputedStyle(this.parentBox || this);
     const colors = ["--ability-dark", "--ability-mid", "--ability-light"]
       .map((name) => styles.getPropertyValue(name).trim())

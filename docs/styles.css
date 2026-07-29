@@ -1271,6 +1271,7 @@ select:focus {
 .rep-box span {
   display: block;
   color: var(--subtle);
+  font-family: "Titillium Web", Arial, Helvetica, sans-serif;
   font-size: 0.7rem;
   font-weight: 900;
   text-transform: uppercase;
@@ -1507,6 +1508,18 @@ select:focus {
   letter-spacing: 0.035em;
 }
 
+.rep-box.ability-special-potential {
+  --ability-background: #102a3d;
+  --ability-dark: #0ea5e9;
+  --ability-mid: #7dd3fc;
+  --ability-light: #e0f2fe;
+  --ability-text: #e0f2fe;
+  --ability-inner-glow: rgba(125, 211, 252, 0.22);
+  --ability-outer-glow: rgba(14, 165, 233, 0.38);
+  --ability-radial-glow: rgba(14, 165, 233, 0.26);
+  --ability-text-glow: rgba(224, 242, 254, 0.72);
+}
+
 @keyframes ability-god-pulse {
 
   0%,
@@ -1547,6 +1560,10 @@ select:focus {
   --ability-outer-glow: rgba(154, 91, 55, 0.1);
   --ability-radial-glow: rgba(143, 79, 45, 0.14);
   --ability-text-glow: rgba(205, 137, 97, 0.25);
+}
+
+.rep-box.ability-bronze .ability-pixels {
+  display: none;
 }
 .result-row.ability-tier {
   border-left-color: var(--ability-mid);

@@ -7,7 +7,7 @@ import {
   getPlayerSeasons,
   searchPlayers,
 } from "./lib/retroballApi.js";
-import "./pixelCanvas.js?v=20260729-28";
+import "./pixelCanvas.js?v=20260729-29";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -940,13 +940,27 @@ function renderPositionPanel(profile) {
 
 function abilityTierClass(value) {
   const number = Number(value);
-  if (!Number.isFinite(number) || number <= 0) return "";
+  if (!Number.isFinite(number)) return "";
+  if (number === -1 || number === -2) {
+    return " ability-tier ability-god ability-special-potential ability-animated";
+  }
+  if (number <= 0) return "";
   if (number >= 185) return " ability-tier ability-god ability-animated";
   if (number >= 170) return " ability-tier ability-gold ability-animated";
   if (number >= 150) return " ability-tier ability-gold";
   if (number >= 140) return " ability-tier ability-silver ability-animated";
   if (number >= 130) return " ability-tier ability-silver";
   return " ability-tier ability-bronze";
+}
+
+function abilityPixelOptions(value) {
+  const number = Number(value);
+  const isSpecialPotential = number === -1 || number === -2;
+  const speed = number >= 185 || isSpecialPotential ? 36 : 20;
+  const colors = isSpecialPotential
+    ? ' data-colors="#e0f2fe, #7dd3fc, #0ea5e9"'
+    : "";
+  return `data-gap="4" data-speed="${speed}"${colors}`;
 }
 
 function renderReputation(player, profile) {
@@ -957,13 +971,13 @@ function renderReputation(player, profile) {
   return `
     <section class="reputation api-reputation" aria-label="Ability and finance">
       <div class="rep-box ability-pixel-box${abilityTierClass(currentAbility)}" tabindex="0" aria-label="Current ability ${escapeHtml(formatNumber(currentAbility))}">
-        <ability-pixel-canvas class="ability-pixels" data-gap="4" data-speed="20" aria-hidden="true"></ability-pixel-canvas>
-        <span>Current</span>
+        <ability-pixel-canvas class="ability-pixels" ${abilityPixelOptions(currentAbility)} aria-hidden="true"></ability-pixel-canvas>
+        <span>Current Ability</span>
         <strong>${escapeHtml(formatNumber(currentAbility))}</strong>
       </div>
       <div class="rep-box ability-pixel-box${abilityTierClass(potentialAbility)}" tabindex="0" aria-label="Potential ability ${escapeHtml(formatNumber(potentialAbility))}">
-        <ability-pixel-canvas class="ability-pixels" data-gap="4" data-speed="20" aria-hidden="true"></ability-pixel-canvas>
-        <span>Potential</span>
+        <ability-pixel-canvas class="ability-pixels" ${abilityPixelOptions(potentialAbility)} aria-hidden="true"></ability-pixel-canvas>
+        <span>Potential Ability</span>
         <strong>${escapeHtml(formatNumber(potentialAbility))}</strong>
       </div>
       <div class="rep-box">

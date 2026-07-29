@@ -899,11 +899,11 @@ function renderPositionPanel(profile) {
               : '<span><i class="legend-dot natural"></i>Natural 18-20</span><span><i class="legend-dot accomplished"></i>Playable 15-17</span><span><i class="legend-dot limited"></i>Limited 12-14</span><span><i class="legend-dot weak"></i>Weak 9-11</span><span><i class="legend-dot awkward"></i>Awkward 6-8</span><span><i class="legend-dot very-awkward"></i>Very awkward 2-5</span>'
           }
             ${hasUnspecifiedSides ? '<span><i class="legend-dot side-unspecified"></i>Side unspecified</span>' : ""}</div>
+          ${renderFootStrength(ratings.foot)}
         </div>
         <div class="position-details">
           ${moreAttributes}
           <details class="position-ratings-toggle"><summary>Position ratings</summary><div class="position-values">${renderRatingRows([...ratings.positions, ...ratings.sides])}</div></details>
-          ${renderFootStrength(ratings.foot)}
         </div>
       </div>
     </section>`;

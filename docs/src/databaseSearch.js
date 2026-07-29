@@ -7,6 +7,7 @@ import {
   getPlayerSeasons,
   searchPlayers,
 } from "./lib/retroballApi.js";
+import "./pixelCanvas.js?v=20260729-27";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -950,16 +951,20 @@ function abilityTierClass(value) {
 
 function renderReputation(player, profile) {
   const ratings = profile?.ratings || {};
+  const currentAbility = ratings.current_ability ?? player.current_ability;
+  const potentialAbility = ratings.potential_ability ?? player.potential_ability;
 
   return `
     <section class="reputation api-reputation" aria-label="Ability and finance">
-      <div class="rep-box${abilityTierClass(ratings.current_ability ?? player.current_ability)}">
+      <div class="rep-box ability-pixel-box${abilityTierClass(currentAbility)}" tabindex="0" aria-label="Current ability ${escapeHtml(formatNumber(currentAbility))}">
+        <ability-pixel-canvas class="ability-pixels" data-gap="4" data-speed="20" aria-hidden="true"></ability-pixel-canvas>
         <span>Current</span>
-        <strong>${escapeHtml(formatNumber(ratings.current_ability ?? player.current_ability))}</strong>
+        <strong>${escapeHtml(formatNumber(currentAbility))}</strong>
       </div>
-      <div class="rep-box${abilityTierClass(ratings.potential_ability ?? player.potential_ability)}">
+      <div class="rep-box ability-pixel-box${abilityTierClass(potentialAbility)}" tabindex="0" aria-label="Potential ability ${escapeHtml(formatNumber(potentialAbility))}">
+        <ability-pixel-canvas class="ability-pixels" data-gap="4" data-speed="20" aria-hidden="true"></ability-pixel-canvas>
         <span>Potential</span>
-        <strong>${escapeHtml(formatNumber(ratings.potential_ability ?? player.potential_ability))}</strong>
+        <strong>${escapeHtml(formatNumber(potentialAbility))}</strong>
       </div>
       <div class="rep-box">
         <span>Home Rep</span>

@@ -131,7 +131,7 @@ function storeEdgeCache(
 
 function edgeCacheKey(request: Request | string): Request {
   const url = new URL(typeof request === "string" ? request : request.url);
-  url.searchParams.set("__cacheVersion", "32");
+  url.searchParams.set("__cacheVersion", "33");
   return new Request(url, typeof request === "string" ? undefined : request);
 }
 
@@ -742,9 +742,10 @@ export default {
 
         const buildFtsSearchQuery = (tokens: string[], limit: number) => {
           const ftsQuery = tokens.map((token) => `${token}*`).join(" ");
-          const args: Array<string | number> = [ftsQuery, database];
+          const args: Array<string | number> = [ftsQuery, database, database];
           const where: string[] = [
             "player_name_search_fts MATCH ?",
+            "f.database_slug = ?",
             "ps.database_slug = ?",
           ];
 
@@ -776,7 +777,7 @@ export default {
               ${selectColumns}
               JOIN player_name_search_fts f
                 ON f.database_slug = ps.database_slug
-               AND f.source_person_id = cast(ps.source_person_id AS TEXT)
+               AND f.source_person_id = ps.source_person_id
               WHERE ${where.join(" AND ")}
               ORDER BY ${orderBy}
               LIMIT ?

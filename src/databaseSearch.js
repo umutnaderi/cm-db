@@ -707,6 +707,10 @@ function usesLegacyPositionScale() {
   return /^cm(?:9697|9798)_/i.test(state.selectedDatabase);
 }
 
+function inheritsWingBacksFromFullBacks() {
+  return /^cm9798_/i.test(state.selectedDatabase);
+}
+
 function buildPitchRoles(ratings) {
   const legacyScale = usesLegacyPositionScale();
   const pitchValue = (value) => {
@@ -806,6 +810,25 @@ function buildPitchRoles(ratings) {
         PITCH_ROWS.defensiveMidfield,
         "Wing Back — side unspecified",
         true,
+      );
+    }
+  } else if (inheritsWingBacksFromFullBacks()) {
+    const leftBack = roles.find((role) => role.label === "DL");
+    const rightBack = roles.find((role) => role.label === "DR");
+    if (leftBack) {
+      addRole(
+        "WBL",
+        leftBack.value,
+        PITCH_LANES.wideLeft,
+        PITCH_ROWS.defensiveMidfield,
+      );
+    }
+    if (rightBack) {
+      addRole(
+        "WBR",
+        rightBack.value,
+        PITCH_LANES.wideRight,
+        PITCH_ROWS.defensiveMidfield,
       );
     }
   }

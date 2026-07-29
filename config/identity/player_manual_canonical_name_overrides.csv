@@ -1,0 +1,30 @@
+database_slug,source_person_id,canonical_name,reference_url,match_basis
+cm9899_vanilla_original,39062,Hasan Şaş,https://www.transfermarkt.com/hasan-sas/profil/spieler/6102,Reviewed exact Galatasaray identity; source birth year is incorrect
+cm9900_vanilla_original,12613,Hasan Şaş,https://www.transfermarkt.com/hasan-sas/profil/spieler/6102,Reviewed exact Galatasaray identity; source birth year is incorrect
+cm9697_vanilla_original,4963,Hami Mandıralı,https://www.transfermarkt.com/hami-mandirali/profil/spieler/84880,Reviewed exact Trabzonspor identity; source DOB is incorrect
+cm9899_vanilla_original,39041,Hami Mandıralı,https://www.transfermarkt.com/hami-mandirali/profil/spieler/84880,Reviewed exact Schalke identity; source DOB is incorrect
+cm9900_vanilla_original,51033,Hami Mandıralı,https://www.transfermarkt.com/hami-mandirali/profil/spieler/84880,Reviewed exact Trabzonspor identity; source DOB is incorrect
+cm0001_vanilla_original,76858,Hami Mandıralı,https://www.transfermarkt.com/hami-mandirali/profil/spieler/84880,Reviewed exact Trabzonspor identity; source DOB is incorrect
+cm0102_vanilla_original,118238,Hami Mandıralı,https://www.transfermarkt.com/hami-mandirali/profil/spieler/84880,Reviewed exact Trabzonspor identity; source DOB is incorrect
+cm0203_vanilla_original,113921,Hami Mandıralı,https://www.transfermarkt.com/hami-mandirali/profil/spieler/84880,Reviewed exact Trabzonspor identity; source DOB is incorrect
+cm0304_vanilla_original,117831,Hami Mandıralı,https://www.transfermarkt.com/hami-mandirali/profil/spieler/84880,Reviewed exact Trabzonspor identity; source DOB is incorrect
+cm9798_vanilla_original,67118,Rüştü Reçber,https://en.wikipedia.org/wiki/R%C3%BC%C5%9Ft%C3%BC_Re%C3%A7ber,Reviewed exact Fenerbahçe identity; source DOB is incorrect
+cm9899_vanilla_original,39091,Sergen Yalçın,https://www.transfermarkt.com/sergen-yalcin/profil/spieler/6904,Reviewed exact Istanbulspor identity; source DOB month is incorrect
+cm9900_vanilla_original,51105,Sergen Yalçın,https://www.transfermarkt.com/sergen-yalcin/profil/spieler/6904,Reviewed exact Fenerbahçe identity; source DOB month is incorrect
+cm0001_vanilla_original,77889,Sergen Yalçın,https://www.transfermarkt.com/sergen-yalcin/profil/spieler/6904,Reviewed exact Siirt identity; source DOB month is incorrect
+cm0102_vanilla_original,119581,Sergen Yalçın,https://www.transfermarkt.com/sergen-yalcin/profil/spieler/6904,Reviewed exact Siirt identity; source DOB month is incorrect
+cm0203_vanilla_original,113940,Sergen Yalçın,https://www.transfermarkt.com/sergen-yalcin/profil/spieler/6904,Reviewed exact Besiktas identity; source DOB month is incorrect
+cm0304_vanilla_original,117850,Sergen Yalçın,https://www.transfermarkt.com/sergen-yalcin/profil/spieler/6904,Reviewed exact Besiktas identity; source DOB month is incorrect
+cm0001_vanilla_original,77852,Selçuk Şahin,,User-reviewed name order; distinct 1977 lower-league player remains a separate identity
+cm0102_vanilla_original,119541,Selçuk Şahin,,User-reviewed name order; distinct 1977 lower-league player remains a separate identity
+cm0203_vanilla_original,43514,Selçuk Şahin,,User-reviewed name order; distinct 1977 lower-league player remains a separate identity
+cm0304_vanilla_original,44676,Selçuk Şahin,,User-reviewed name order; distinct 1977 lower-league player remains a separate identity
+cm0203_vanilla_original,46559,Ali Güneş,,User-reviewed name order; distinct 1971 player remains a separate identity
+cm0304_vanilla_original,47696,Ali Güneş,,User-reviewed name order; distinct 1971 player remains a separate identity
+cm9798_vanilla_original,32329,Álvaro Recoba,https://www.inter.it/en/archivio_giocatore/G0535/alvaro-recoba,Reviewed exact Internazionale identity; source omits accent and DOB
+cm9899_vanilla_original,41714,Álvaro Recoba,https://www.inter.it/en/archivio_giocatore/G0535/alvaro-recoba,Reviewed exact Internazionale identity; source DOB is incorrect
+cm9900_vanilla_original,54220,Álvaro Recoba,https://www.inter.it/en/archivio_giocatore/G0535/alvaro-recoba,Reviewed exact Internazionale identity; source DOB is incorrect
+cm0001_vanilla_original,85828,Álvaro Recoba,https://www.inter.it/en/archivio_giocatore/G0535/alvaro-recoba,Reviewed exact Internazionale identity; source DOB is offset by one day
+cm0102_vanilla_original,132584,Álvaro Recoba,https://www.inter.it/en/archivio_giocatore/G0535/alvaro-recoba,Reviewed exact Internazionale identity; source DOB is offset by one day
+cm0203_vanilla_original,71878,Álvaro Recoba,https://www.inter.it/en/archivio_giocatore/G0535/alvaro-recoba,Reviewed exact Internazionale identity
+cm0304_vanilla_original,73428,Álvaro Recoba,https://www.inter.it/en/archivio_giocatore/G0535/alvaro-recoba,Reviewed exact Internazionale identity

@@ -1,9 +1,19 @@
 {
   "name": "retroball-api",
   "main": "src/index.ts",
-  "compatibility_date": "2026-06-30",
-  "vars": {
-    "ALLOWED_ORIGIN": "http://localhost:5173",
-    "ALLOWED_ORIGIN_PROD": "https://umutnaderi.github.io/cm-db/"
+  "compatibility_date": "2026-07-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "retroball-db",
+      "database_id": "86c89ae2-8efc-4a87-b364-6331a7fa984f"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    }
   }
 }

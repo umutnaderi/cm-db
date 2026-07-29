@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 const INPUTS = [
@@ -6,6 +6,7 @@ const INPUTS = [
   resolve(".tmp-search-index/cm4/retroball_cm0203_0304_profile_ready_v2/player_search.csv"),
 ];
 const OUTPUT = resolve("worker/src/name-token-index.json");
+const MANUAL_ALIASES = resolve("config/identity/player_search_aliases.csv");
 const MAX_PER_TOKEN = 8;
 const MIN_CURRENT_ABILITY = 145;
 const MIN_POTENTIAL_ABILITY = 170;
@@ -78,8 +79,9 @@ function rowScore(row) {
 }
 
 const buckets = new Map();
+const availableInputs = INPUTS.filter((input) => existsSync(input));
 
-for (const input of INPUTS) {
+for (const input of availableInputs) {
   for (const row of parseCsv(readFileSync(input, "utf8"))) {
     const database = row.database_slug;
     if (!database || !row.source_person_id) continue;
@@ -105,7 +107,11 @@ for (const input of INPUTS) {
   }
 }
 
-const index = {};
+const index = availableInputs.length
+  ? {}
+  : existsSync(OUTPUT)
+    ? JSON.parse(readFileSync(OUTPUT, "utf8"))
+    : {};
 
 for (const [key, rows] of buckets) {
   const [database, token] = key.split("\t");
@@ -120,6 +126,23 @@ for (const [key, rows] of buckets) {
   index[database][token] = rows
     .slice(0, MAX_PER_TOKEN)
     .map((row) => String(row.source_person_id));
+}
+
+if (existsSync(MANUAL_ALIASES)) {
+  for (const alias of parseCsv(readFileSync(MANUAL_ALIASES, "utf8"))) {
+    const database = String(alias.database_slug || "").trim();
+    const sourcePersonId = String(alias.source_person_id || "").trim();
+    if (!database || !sourcePersonId) continue;
+
+    index[database] ||= {};
+    for (const token of new Set(normalizeTokens(alias.search_text))) {
+      const existing = index[database][token] || [];
+      index[database][token] = [
+        sourcePersonId,
+        ...existing.filter((candidate) => candidate !== sourcePersonId),
+      ].slice(0, MAX_PER_TOKEN);
+    }
+  }
 }
 
 mkdirSync(dirname(OUTPUT), { recursive: true });

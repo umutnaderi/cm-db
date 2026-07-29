@@ -1,6 +1,7 @@
 import {
   API_BASE,
   getDatabases,
+  getFilters,
   getPlayer,
   getPlayerHistory,
   getPlayerSeasons,
@@ -9,6 +10,7 @@ import {
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
+const AUTOCOMPLETE_LIMIT = 8;
 
 const ATTRIBUTE_GROUPS = [
   {
@@ -90,21 +92,49 @@ const PITCH_ROLE_NAMES = {
   LW: "Left Winger", RW: "Right Winger", ST: "Striker - Centre",
 };
 
-const PITCH_LANES = { wideLeft: 6, left: 20, centre: 50, right: 80, wideRight: 94 };
+const PITCH_LANES = {
+  wideLeft: 8,
+  left: 17,
+  defensiveLeft: 28,
+  centre: 50,
+  defensiveRight: 74,
+  right: 83,
+  wideRight: 92,
+};
 const PITCH_ROWS = {
-  striker: 12, attackingMidfield: 26, midfield: 40, defensiveMidfield: 54,
-  defence: 68, sweeper: 82, goalkeeper: 94,
+  striker: 14,
+  attackingMidfield: 30,
+  midfield: 46,
+  defensiveMidfield: 62,
+  defence: 78,
+  sweeper: 86,
+  goalkeeper: 94,
 };
 const PITCH_SLOTS = [
-  ["LW", "left", "striker"], ["ST", "centre", "striker"], ["RW", "right", "striker"],
-  ["AML", "left", "attackingMidfield"], ["AMC", "centre", "attackingMidfield"], ["AMR", "right", "attackingMidfield"],
-  ["ML", "left", "midfield"], ["MC", "centre", "midfield"], ["MR", "right", "midfield"],
-  ["WBL", "wideLeft", "defensiveMidfield"], ["DML", "left", "defensiveMidfield"],
-  ["DMC", "centre", "defensiveMidfield"], ["DMR", "right", "defensiveMidfield"],
-  ["WBR", "wideRight", "defensiveMidfield"], ["DL", "left", "defence"],
-  ["DC", "centre", "defence"], ["DR", "right", "defence"], ["SW", "centre", "sweeper"],
+  ["LW", "left", "striker"],
+  ["ST", "centre", "striker"],
+  ["RW", "right", "striker"],
+  ["AML", "left", "attackingMidfield"],
+  ["AMC", "centre", "attackingMidfield"],
+  ["AMR", "right", "attackingMidfield"],
+  ["ML", "left", "midfield"],
+  ["MC", "centre", "midfield"],
+  ["MR", "right", "midfield"],
+  ["WBL", "wideLeft", "defensiveMidfield"],
+  ["DML", "defensiveLeft", "defensiveMidfield"],
+  ["DMC", "centre", "defensiveMidfield"],
+  ["DMR", "defensiveRight", "defensiveMidfield"],
+  ["WBR", "wideRight", "defensiveMidfield"],
+  ["DL", "left", "defence"],
+  ["DC", "centre", "defence"],
+  ["DR", "right", "defence"],
+  ["SW", "centre", "sweeper"],
   ["GK", "centre", "goalkeeper"],
-].map(([label, lane, row]) => ({ label, x: PITCH_LANES[lane], y: PITCH_ROWS[row] }));
+].map(([label, lane, row]) => ({
+  label,
+  x: PITCH_LANES[lane],
+  y: PITCH_ROWS[row],
+}));
 
 const state = {
   databases: [],
@@ -134,6 +164,14 @@ const state = {
   detailCache: new Map(),
   historyCache: new Map(),
   seasonCache: new Map(),
+  filterOptions: {
+    club: [],
+    league: [],
+    nation: [],
+  },
+  filterOptionsDatabase: "",
+  autocompleteField: "",
+  autocompleteIndex: -1,
 };
 
 const elements = {
@@ -143,9 +181,28 @@ const elements = {
   clubSearch: document.querySelector("#clubSearch"),
   leagueSearch: document.querySelector("#leagueSearch"),
   nationSearch: document.querySelector("#nationSearch"),
+  clubSuggestions: document.querySelector("#clubSuggestions"),
+  leagueSuggestions: document.querySelector("#leagueSuggestions"),
+  nationSuggestions: document.querySelector("#nationSuggestions"),
+  activeSearchFilters: document.querySelector("#activeSearchFilters"),
   resultCount: document.querySelector("#resultCount"),
   resultsList: document.querySelector("#resultsList"),
   profile: document.querySelector("#profile"),
+};
+
+const autocompleteFields = {
+  club: {
+    input: elements.clubSearch,
+    suggestions: elements.clubSuggestions,
+  },
+  league: {
+    input: elements.leagueSearch,
+    suggestions: elements.leagueSuggestions,
+  },
+  nation: {
+    input: elements.nationSearch,
+    suggestions: elements.nationSuggestions,
+  },
 };
 
 let searchTimer = null;
@@ -167,12 +224,60 @@ function seasonEntryKey(entry) {
 }
 
 function playerName(player) {
-  return player.display_name || player.full_name || player.common_name || "Unknown player";
+  return (
+    player.canonical_player_name ||
+    player.display_name ||
+    player.full_name ||
+    player.common_name ||
+    "Unknown player"
+  );
+}
+
+function displayClubName(player) {
+  return player?.canonical_club_name || player?.club_name || "";
 }
 
 function distinctFullName(player) {
   const name = playerName(player);
   return player.full_name && player.full_name !== name ? player.full_name : "";
+}
+
+const SUMMARY_POSITION_ROLES = {
+  GK: "Goalkeeper",
+  SW: "Sweeper",
+  D: "Defender",
+  WB: "Wing Back",
+  DM: "Defensive Midfielder",
+  M: "Midfielder",
+  AM: "Attacking Midfielder",
+  F: "Forward",
+  S: "Striker",
+};
+
+const SUMMARY_POSITION_SIDES = {
+  L: "Left",
+  C: "Center",
+  R: "Right",
+};
+
+function summaryPosition(positionText) {
+  const rawPosition = String(positionText || "").trim();
+  if (!rawPosition) return "No position";
+
+  const parts = rawPosition.split(/\s+/);
+  const sideCode = /^[LCR]+$/.test(parts.at(-1)) ? parts.pop() : "";
+  const roleCodes = parts
+    .join(" ")
+    .replace(/,/g, "/")
+    .split("/")
+    .map((code) => code.trim())
+    .filter(Boolean);
+  const roles = roleCodes.map((code) => SUMMARY_POSITION_ROLES[code] || code);
+  const sides = [...sideCode].map(
+    (code) => SUMMARY_POSITION_SIDES[code] || code,
+  );
+
+  return [roles.join(" / "), sides.join(" / ")].filter(Boolean).join(" ");
 }
 
 function formatValue(value) {
@@ -220,7 +325,155 @@ function renderSummary() {
   // The database selector and results count already expose the useful state.
 }
 
+function renderActiveSearchFilters() {
+  const filters = [
+    ["Name", state.query],
+    ["Club", state.club],
+    ["League", state.league],
+    ["Nation", state.nation],
+  ].filter(([, value]) => value);
+
+  elements.activeSearchFilters.replaceChildren(
+    ...filters.map(([label, value]) => {
+      const chip = document.createElement("span");
+      chip.className = "active-search-filter";
+      chip.textContent = `${label}: ${value}`;
+      chip.title = `${label}: ${value}`;
+      return chip;
+    }),
+  );
+}
+
+function normalizeAutocompleteValue(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLocaleLowerCase("en");
+}
+
+function filterOptionNames(items) {
+  return [
+    ...new Set(
+      (Array.isArray(items) ? items : [])
+        .map((item) => (typeof item === "string" ? item : item?.name))
+        .map((name) => String(name || "").trim())
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+function closeAutocomplete(field = "") {
+  const fields = field ? [field] : Object.keys(autocompleteFields);
+  for (const currentField of fields) {
+    const config = autocompleteFields[currentField];
+    config.suggestions.hidden = true;
+    config.suggestions.replaceChildren();
+    config.input.setAttribute("aria-expanded", "false");
+    config.input.removeAttribute("aria-activedescendant");
+  }
+
+  if (!field || state.autocompleteField === field) {
+    state.autocompleteField = "";
+    state.autocompleteIndex = -1;
+  }
+}
+
+function autocompleteMatches(field) {
+  const query = normalizeAutocompleteValue(
+    autocompleteFields[field].input.value.trim(),
+  );
+  if (!query || state.filterOptionsDatabase !== state.selectedDatabase)
+    return [];
+
+  const startsWith = [];
+  const contains = [];
+  for (const option of state.filterOptions[field]) {
+    const normalizedOption = normalizeAutocompleteValue(option);
+    if (normalizedOption.startsWith(query)) {
+      startsWith.push(option);
+    } else if (normalizedOption.includes(query)) {
+      contains.push(option);
+    }
+  }
+  return [...startsWith, ...contains].slice(0, AUTOCOMPLETE_LIMIT);
+}
+
+function setAutocompleteIndex(field, index) {
+  const config = autocompleteFields[field];
+  const options = [
+    ...config.suggestions.querySelectorAll("[data-autocomplete-value]"),
+  ];
+  if (!options.length) return;
+
+  state.autocompleteField = field;
+  state.autocompleteIndex = (index + options.length) % options.length;
+  options.forEach((option, optionIndex) => {
+    const selected = optionIndex === state.autocompleteIndex;
+    option.classList.toggle("is-active", selected);
+    option.setAttribute("aria-selected", String(selected));
+  });
+  const activeOption = options[state.autocompleteIndex];
+  config.input.setAttribute("aria-activedescendant", activeOption.id);
+  activeOption.scrollIntoView({ block: "nearest" });
+}
+
+function renderAutocomplete(field) {
+  const config = autocompleteFields[field];
+  const matches = autocompleteMatches(field);
+  if (!matches.length) {
+    closeAutocomplete(field);
+    return;
+  }
+
+  state.autocompleteField = field;
+  state.autocompleteIndex = -1;
+  config.suggestions.replaceChildren(
+    ...matches.map((value, index) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.id = `${field}Suggestion-${index}`;
+      option.className = "search-suggestion";
+      option.dataset.autocompleteValue = value;
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", "false");
+      option.textContent = value;
+      return option;
+    }),
+  );
+  config.suggestions.hidden = false;
+  config.input.setAttribute("aria-expanded", "true");
+  config.input.removeAttribute("aria-activedescendant");
+}
+
+function chooseAutocompleteValue(field, value) {
+  autocompleteFields[field].input.value = value;
+  closeAutocomplete(field);
+  scheduleSearch();
+}
+
+async function loadFilterOptions() {
+  const database = state.selectedDatabase;
+  closeAutocomplete();
+  state.filterOptions = { club: [], league: [], nation: [] };
+  state.filterOptionsDatabase = "";
+  if (!database) return;
+
+  try {
+    const filters = await getFilters(database);
+    if (state.selectedDatabase !== database) return;
+    state.filterOptions = {
+      club: filterOptionNames(filters.clubs),
+      league: filterOptionNames(filters.leagues),
+      nation: filterOptionNames(filters.nations),
+    };
+    state.filterOptionsDatabase = database;
+  } catch (error) {
+    console.warn(`Could not load search suggestions for ${database}.`, error);
+  }
+}
+
 function renderResults(message = "") {
+  renderActiveSearchFilters();
   elements.resultCount.textContent = state.loadingPlayers
     ? "Searching..."
     : `${state.items.length.toLocaleString()} shown`;
@@ -250,11 +503,13 @@ function renderResults(message = "") {
       ${fullName ? `<span class="result-full-name">${escapeHtml(fullName)}</span>` : ""}
       <span class="result-meta">
         ${[
-          player.club_name || "No club",
+          displayClubName(player) || "No club",
           player.nation_name || "Unknown nation",
           player.position_text || "No position",
           formatDate(player.date_of_birth),
-        ].map((value) => `<span>${escapeHtml(value)}</span>`).join("")}
+        ]
+          .map((value) => `<span>${escapeHtml(value)}</span>`)
+          .join("")}
       </span>
       <span class="result-stats" aria-label="Player metadata">
         <span>CA <strong>${escapeHtml(formatNumber(player.current_ability))}</strong></span>
@@ -278,12 +533,12 @@ function fact(label, value) {
   `;
 }
 
-function filterFact(label, value, filter) {
+function filterFact(label, value, filter, displayValue = value) {
   if (!value) return fact(label, "-");
   return `
     <div class="fact">
       <span>${escapeHtml(label)}</span>
-      <button type="button" class="fact-filter" data-search-filter="${escapeHtml(filter)}" data-search-value="${escapeHtml(value)}">${escapeHtml(value)}</button>
+      <button type="button" class="fact-filter" data-search-filter="${escapeHtml(filter)}" data-search-value="${escapeHtml(value)}">${escapeHtml(displayValue)}</button>
     </div>
   `;
 }
@@ -454,34 +709,121 @@ function buildPitchRoles(ratings) {
   const sides = Object.fromEntries(ratings.sides.map((item) => [item.label, pitchValue(item.value)]));
   const roles = [];
   const rated = (value) => Number.isFinite(value) && value >= 2;
-  const addRole = (label, value, x, y, longLabel = null) => {
+  const addRole = (
+    label,
+    value,
+    x,
+    y,
+    longLabel = null,
+    sideUnspecified = false,
+  ) => {
     if (!rated(value)) return;
     const level = pitchRatingLevel(value);
     const displayValue = legacyScale ? (value >= 18 ? 2 : 1) : value;
-    roles.push({ label, longLabel: longLabel || PITCH_ROLE_NAMES[label] || label, value, displayValue, x, y, level: level.className, levelLabel: level.label });
+    roles.push({
+      label,
+      longLabel: longLabel || PITCH_ROLE_NAMES[label] || label,
+      value,
+      displayValue,
+      x,
+      y,
+      level: level.className,
+      levelLabel: level.label,
+      sideUnspecified,
+    });
   };
-  const addSidedRoles = (positionLabel, labels, y) => {
+  const addSidedRoles = (
+    positionLabel,
+    labels,
+    y,
+    genericLabel,
+    sideLanes = PITCH_LANES,
+  ) => {
     const value = positions[positionLabel];
     if (!rated(value)) return;
-    if (rated(sides["Left side"])) addRole(labels.left, Math.min(value, sides["Left side"]), PITCH_LANES.left, y);
-    if (rated(sides.Central)) addRole(labels.centre, Math.min(value, sides.Central), PITCH_LANES.centre, y);
-    if (rated(sides["Right side"])) addRole(labels.right, Math.min(value, sides["Right side"]), PITCH_LANES.right, y);
+    const roleCount = roles.length;
+    if (rated(sides["Left side"]))
+      addRole(
+        labels.left,
+        Math.min(value, sides["Left side"]),
+        sideLanes.left,
+        y,
+      );
+    if (rated(sides.Central))
+      addRole(
+        labels.centre,
+        Math.min(value, sides.Central),
+        PITCH_LANES.centre,
+        y,
+      );
+    if (rated(sides["Right side"]))
+      addRole(
+        labels.right,
+        Math.min(value, sides["Right side"]),
+        sideLanes.right,
+        y,
+      );
+    if (roles.length === roleCount) {
+      addRole(
+        labels.centre,
+        value,
+        PITCH_LANES.centre,
+        y,
+        `${genericLabel} — side unspecified`,
+        true,
+      );
+    }
   };
 
   addRole("GK", positions.Goalkeeper, PITCH_LANES.centre, PITCH_ROWS.goalkeeper);
   addRole("SW", positions.Sweeper, PITCH_LANES.centre, PITCH_ROWS.sweeper);
-  addSidedRoles("Defender", { left: "DL", centre: "DC", right: "DR" }, PITCH_ROWS.defence);
+  addSidedRoles(
+    "Defender",
+    { left: "DL", centre: "DC", right: "DR" },
+    PITCH_ROWS.defence,
+    "Defender",
+  );
   if (rated(positions["Wing back"])) {
+    const roleCount = roles.length;
     if (rated(sides["Left side"])) addRole("WBL", Math.min(positions["Wing back"], sides["Left side"]), PITCH_LANES.wideLeft, PITCH_ROWS.defensiveMidfield);
     if (rated(sides["Right side"])) addRole("WBR", Math.min(positions["Wing back"], sides["Right side"]), PITCH_LANES.wideRight, PITCH_ROWS.defensiveMidfield);
+    if (roles.length === roleCount) {
+      addRole(
+        "DMC",
+        positions["Wing back"],
+        PITCH_LANES.centre,
+        PITCH_ROWS.defensiveMidfield,
+        "Wing Back — side unspecified",
+        true,
+      );
+    }
   }
   const defensiveMidfield = positions["Def Midfielder"] ?? positions.Anchor;
   const attackingMidfield = positions["Att Midfielder"] ?? positions.Support;
   if (defensiveMidfield !== undefined) positions["Def Midfielder"] = defensiveMidfield;
   if (attackingMidfield !== undefined) positions["Att Midfielder"] = attackingMidfield;
-  addSidedRoles("Def Midfielder", { left: "DML", centre: "DMC", right: "DMR" }, PITCH_ROWS.defensiveMidfield);
-  addSidedRoles("Midfielder", { left: "ML", centre: "MC", right: "MR" }, PITCH_ROWS.midfield);
-  addSidedRoles("Att Midfielder", { left: "AML", centre: "AMC", right: "AMR" }, PITCH_ROWS.attackingMidfield);
+  addSidedRoles(
+    "Def Midfielder",
+    { left: "DML", centre: "DMC", right: "DMR" },
+    PITCH_ROWS.defensiveMidfield,
+    "Defensive Midfielder",
+    {
+      left: PITCH_LANES.defensiveLeft,
+      right: PITCH_LANES.defensiveRight,
+    },
+  );
+  addSidedRoles(
+    "Midfielder",
+    { left: "ML", centre: "MC", right: "MR" },
+    PITCH_ROWS.midfield,
+    "Midfielder",
+  );
+  addSidedRoles(
+    "Att Midfielder",
+    { left: "AML", centre: "AMC", right: "AMR" },
+    PITCH_ROWS.attackingMidfield,
+    "Attacking Midfielder",
+  );
   if (rated(positions.Attacker)) {
     const forward = positions.Attacker >= 18 && positions["Att Midfielder"] >= 18;
     if (rated(sides["Left side"])) addRole("LW", Math.min(positions.Attacker, sides["Left side"]), PITCH_LANES.left, PITCH_ROWS.striker, forward ? "Forward - Left" : null);
@@ -514,6 +856,7 @@ function renderPositionPanel(profile) {
   const roles = buildPitchRoles(ratings);
   const occupied = new Set(roles.map((role) => role.label));
   const primary = roles[0];
+  const hasUnspecifiedSides = roles.some((role) => role.sideUnspecified);
   return `
     <section class="profile-section positions-section" aria-label="Positions, sides and feet">
       <div class="position-layout">
@@ -521,13 +864,23 @@ function renderPositionPanel(profile) {
           <div class="position-pitch" aria-label="Playable positions">
             <div class="pitch-halfway"></div><div class="pitch-circle"></div>
             <div class="pitch-box pitch-box-top"></div><div class="pitch-box pitch-box-bottom"></div>
-            ${PITCH_SLOTS.filter((slot) => !occupied.has(slot.label)).map((slot) => `<div class="position-marker ghost" style="--x:${slot.x}%;--y:${slot.y}%" title="${escapeHtml(PITCH_ROLE_NAMES[slot.label])}"></div>`).join("")}
-            ${roles.map((role, index) => `<div class="position-marker position-tooltip ${role.level}${index === 0 ? " is-primary" : ""}${role.x <= 20 ? " tooltip-align-left" : ""}${role.x >= 80 ? " tooltip-align-right" : ""}${role.y >= 68 ? " tooltip-above" : ""}" style="--x:${role.x}%;--y:${role.y}%" data-info="${escapeHtml(`${role.longLabel} · ${role.levelLabel} · ${role.displayValue}`)}" aria-label="${escapeHtml(`${role.longLabel}: ${role.levelLabel} (${role.displayValue})`)}" tabindex="0"></div>`).join("")}
+            <div class="pitch-arc pitch-arc-top"></div><div class="pitch-arc pitch-arc-bottom"></div>
+            <div class="pitch-spot pitch-spot-top"></div><div class="pitch-spot pitch-spot-bottom"></div>
+            ${PITCH_SLOTS.filter((slot) => !occupied.has(slot.label))
+              .map(
+                (slot) =>
+                  `<div class="position-marker ghost" style="--x:${slot.x}%;--y:${slot.y}%" title="${escapeHtml(PITCH_ROLE_NAMES[slot.label])}"></div>`,
+              )
+              .join("")}
+            ${roles.map((role, index) => `<div class="position-marker position-tooltip ${role.level}${role.sideUnspecified ? " side-unspecified" : ""}${index === 0 ? " is-primary" : ""}${role.x <= 20 ? " tooltip-align-left" : ""}${role.x >= 80 ? " tooltip-align-right" : ""}${role.y >= 68 ? " tooltip-above" : ""}" style="--x:${role.x}%;--y:${role.y}%" data-info="${escapeHtml(`${role.longLabel} · ${role.levelLabel} · ${role.displayValue}`)}" aria-label="${escapeHtml(`${role.longLabel}: ${role.levelLabel} (${role.displayValue})`)}" tabindex="0"></div>`).join("")}
           </div>
           <div class="pitch-caption"><strong>${escapeHtml(primary?.longLabel || "No recognised position")}</strong></div>
-          <div class="position-legend">${usesLegacyPositionScale()
-            ? '<span><i class="legend-dot natural"></i>Natural 2</span><span><i class="legend-dot limited"></i>Limited 1</span>'
-            : '<span><i class="legend-dot natural"></i>Natural 18-20</span><span><i class="legend-dot accomplished"></i>Playable 15-17</span><span><i class="legend-dot limited"></i>Limited 12-14</span><span><i class="legend-dot weak"></i>Weak 9-11</span><span><i class="legend-dot awkward"></i>Awkward 6-8</span><span><i class="legend-dot very-awkward"></i>Very awkward 2-5</span>'}</div>
+          <div class="position-legend">${
+            usesLegacyPositionScale()
+              ? '<span><i class="legend-dot natural"></i>Natural 2</span><span><i class="legend-dot limited"></i>Limited 1</span>'
+              : '<span><i class="legend-dot natural"></i>Natural 18-20</span><span><i class="legend-dot accomplished"></i>Playable 15-17</span><span><i class="legend-dot limited"></i>Limited 12-14</span><span><i class="legend-dot weak"></i>Weak 9-11</span><span><i class="legend-dot awkward"></i>Awkward 6-8</span><span><i class="legend-dot very-awkward"></i>Very awkward 2-5</span>'
+          }
+            ${hasUnspecifiedSides ? '<span><i class="legend-dot side-unspecified"></i>Side unspecified</span>' : ""}</div>
         </div>
         <div class="position-details">
           <details class="position-ratings-toggle"><summary>Position ratings</summary><div class="position-values">${renderRatingRows([...ratings.positions, ...ratings.sides])}</div></details>
@@ -622,16 +975,20 @@ function renderHistory() {
             </tr>
           </thead>
           <tbody>
-            ${state.selectedHistory.map((row) => `
+            ${state.selectedHistory
+              .map(
+                (row) => `
               <tr>
                 <td>${escapeHtml(formatValue(row.season_year))}</td>
-                <td>${row.club_name ? `<button type="button" class="fact-filter table-filter" data-search-filter="club" data-search-value="${escapeHtml(row.club_name)}">${escapeHtml(row.club_name)}</button>` : "-"}</td>
+                <td>${row.club_name ? `<button type="button" class="fact-filter table-filter" data-search-filter="club" data-search-value="${escapeHtml(row.club_name)}">${escapeHtml(row.canonical_club_name || row.club_name)}</button>` : "-"}</td>
                 ${showLeague ? `<td>${row.league_name ? `<button type="button" class="fact-filter table-filter" data-search-filter="league" data-search-value="${escapeHtml(row.league_name)}">${escapeHtml(row.league_name)}</button>` : "-"}</td>` : ""}
                 <td class="history-number">${escapeHtml(formatNumber(row.apps))}</td>
                 <td class="history-number">${escapeHtml(formatNumber(row.goals))}</td>
                 <td>${Number(row.on_loan) ? "Yes" : "-"}</td>
               </tr>
-            `).join("")}
+            `,
+              )
+              .join("")}
           </tbody>
           <tfoot>
             <tr>
@@ -655,7 +1012,7 @@ function renderDetailContent(player, profile) {
   return `
     <div class="profile-body">
       <section class="facts api-profile-facts" aria-label="Player facts">
-        ${filterFact("Club", player.club_name, "club")}
+        ${filterFact("Club", player.club_name, "club", displayClubName(player))}
         ${latestLeague() ? filterFact("League", latestLeague(), "league") : ""}
         ${filterFact("Nation", player.nation_name, "nation")}
         ${fact("Position", player.position_text || "-")}
@@ -678,6 +1035,110 @@ function renderDetailContent(player, profile) {
   `;
 }
 
+const CLUB_COLOUR_PALETTE = [
+  "#000000",
+  "#ffffff",
+  "#808080",
+  "#707090",
+  "#e00000",
+  "#b00000",
+  "#901000",
+  "#ff7000",
+  "#e08000",
+  "#fff000",
+  "#ffd000",
+  "#008030",
+  "#006030",
+  "#002060",
+  "#002080",
+  "#0030a0",
+  "#0050d0",
+  "#60c0ff",
+  "#800040",
+  "#600060",
+  "#800020",
+  "#804000",
+  "#a05000",
+  "#ff9595",
+  "#d9b128",
+  "#c6c6c6",
+  "#ce84ce",
+  "#008888",
+  "#80c848",
+  "#ffaa00",
+  "#10a8a8",
+  "#056161",
+  "#df1e7a",
+  "#003e30",
+];
+
+const CLUB_COLOUR_CODES = {
+  BLA: "#000000",
+  WHI: "#ffffff",
+  GRE: "#808080",
+  RED: "#b00000",
+  ORA: "#e08000",
+  YEL: "#ffd000",
+  GRN: "#006030",
+  BLU: "#002080",
+  PUR: "#600060",
+  BRO: "#804000",
+  PIN: "#ff9595",
+  GOL: "#d9b128",
+};
+
+function clubColour(value) {
+  if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) {
+    return value.toLowerCase();
+  }
+  if (value === null || value === undefined || value === "") return "";
+  const codeColour = CLUB_COLOUR_CODES[String(value).trim().toUpperCase()];
+  if (codeColour) return codeColour;
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "";
+  const directIndex =
+    Number.isInteger(numeric) &&
+    numeric >= 0 &&
+    numeric < CLUB_COLOUR_PALETTE.length
+      ? numeric
+      : numeric >>> 24;
+  return CLUB_COLOUR_PALETTE[directIndex] || "";
+}
+
+function profileBannerTheme(player, profile) {
+  const colours = profile?.clubColors || player?.club_colors;
+  if (!colours) return { className: "", style: "" };
+
+  let background = clubColour(colours.background_colour);
+  let foreground = clubColour(colours.foreground_colour);
+
+  // Match the CM editor: "fore" is text and "back" is the fill.
+  // Prefer the canonical pair from the API, then use the current season.
+  if (!background || !foreground || background === foreground) {
+    const currentPair = [1, 2, 3]
+      .map((index) => ({
+        background: clubColour(colours[`back_colour${index}`]),
+        foreground: clubColour(colours[`fore_colour${index}`]),
+      }))
+      .find(
+        (pair) =>
+          pair.background &&
+          pair.foreground &&
+          pair.background !== pair.foreground,
+      );
+    background = currentPair?.background || "";
+    foreground = currentPair?.foreground || "";
+  }
+
+  if (!background || !foreground) return { className: "", style: "" };
+
+  return {
+    className: " has-club-colours",
+    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground}"`,
+  };
+}
+
 function renderProfile() {
   const player = state.selectedPlayer;
   document.body.classList.toggle("mobile-profile-open", Boolean(player));
@@ -689,26 +1150,26 @@ function renderProfile() {
 
   const profile = state.selectedProfile;
   const fullName = distinctFullName(player);
+  const bannerTheme = profileBannerTheme(player, profile);
   elements.profile.innerHTML = `
-    <div class="profile-banner">
+    <div class="profile-banner${bannerTheme.className}"${bannerTheme.style}>
       <button type="button" class="mobile-profile-back" data-mobile-back>Back to results</button>
       <div class="profile-title">
-        <h2>
-          <span class="profile-player-name">${escapeHtml(playerName(player))}</span>
-          ${
-            player.club_name
-              ? `<button type="button" class="profile-club-name fact-filter inline-filter" data-search-filter="club" data-search-value="${escapeHtml(player.club_name)}">(${escapeHtml(player.club_name)})</button>`
-              : ""
-          }
-        </h2>
+        <h2 class="profile-player-name">${escapeHtml(playerName(player))}</h2>
       </div>
-      ${renderSeasonLinks(player)}
       ${fullName ? `<p class="profile-full-name">${escapeHtml(fullName)}</p>` : ""}
-      <p class="born-line">
+      <p class="profile-summary">
         ${player.nation_name ? `<button type="button" class="fact-filter inline-filter" data-search-filter="nation" data-search-value="${escapeHtml(player.nation_name)}">${escapeHtml(player.nation_name)}</button>` : "Unknown nation"}
-        - ${escapeHtml(player.position_text || "No position")}
-        - ${escapeHtml(formatDate(player.date_of_birth))}
+        <span aria-hidden="true">-</span>
+        <span>${escapeHtml(summaryPosition(player.position_text))}</span>
+        <span aria-hidden="true">-</span>
+        ${
+          player.club_name
+            ? `<button type="button" class="profile-club-name fact-filter inline-filter" data-search-filter="club" data-search-value="${escapeHtml(player.club_name)}">${escapeHtml(displayClubName(player))}</button>`
+            : "<span>No club</span>"
+        }
       </p>
+      ${renderSeasonLinks(player)}
     </div>
     <div class="tabs api-detail-tabs" role="tablist" aria-label="Player detail sections">
       <button
@@ -965,11 +1426,70 @@ function readSearchInputs() {
 
 function scheduleSearch() {
   clearTimeout(searchTimer);
+  readSearchInputs();
+  renderActiveSearchFilters();
   searchTimer = setTimeout(() => {
-    readSearchInputs();
     state.page = 1;
     loadPlayers();
   }, SEARCH_DEBOUNCE_MS);
+}
+
+function bindAutocomplete(field) {
+  const config = autocompleteFields[field];
+
+  config.input.addEventListener("input", () => {
+    scheduleSearch();
+    renderAutocomplete(field);
+  });
+  config.input.addEventListener("focus", () => {
+    if (state.autocompleteField && state.autocompleteField !== field) {
+      closeAutocomplete(state.autocompleteField);
+    }
+    renderAutocomplete(field);
+  });
+  config.input.addEventListener("blur", () => closeAutocomplete(field));
+  config.input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeAutocomplete(field);
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (config.suggestions.hidden) renderAutocomplete(field);
+      const nextIndex =
+        event.key === "ArrowDown"
+          ? state.autocompleteIndex < 0
+            ? 0
+            : state.autocompleteIndex + 1
+          : state.autocompleteIndex < 0
+            ? -1
+            : state.autocompleteIndex - 1;
+      setAutocompleteIndex(field, nextIndex);
+      return;
+    }
+
+    if (
+      event.key === "Enter" &&
+      state.autocompleteField === field &&
+      state.autocompleteIndex >= 0
+    ) {
+      const options = config.suggestions.querySelectorAll(
+        "[data-autocomplete-value]",
+      );
+      const activeOption = options[state.autocompleteIndex];
+      if (activeOption) {
+        event.preventDefault();
+        chooseAutocompleteValue(field, activeOption.dataset.autocompleteValue);
+      }
+    }
+  });
+  config.suggestions.addEventListener("pointerdown", (event) => {
+    const option = event.target.closest("[data-autocomplete-value]");
+    if (!option) return;
+    event.preventDefault();
+    chooseAutocompleteValue(field, option.dataset.autocompleteValue);
+  });
 }
 
 function startFilterSearch(filter, value) {
@@ -1058,13 +1578,14 @@ function bindEvents() {
     state.page = 1;
     clearSelectedPlayer();
     renderSummary();
+    void loadFilterOptions();
     loadPlayers();
   });
 
   elements.nameSearch.addEventListener("input", scheduleSearch);
-  elements.clubSearch.addEventListener("input", scheduleSearch);
-  elements.leagueSearch.addEventListener("input", scheduleSearch);
-  elements.nationSearch.addEventListener("input", scheduleSearch);
+  bindAutocomplete("club");
+  bindAutocomplete("league");
+  bindAutocomplete("nation");
 
   elements.resultsList.addEventListener("click", (event) => {
     const row = event.target.closest("[data-player-key]");
@@ -1169,6 +1690,7 @@ async function init() {
     setStatus("Ready");
     renderSummary();
     renderResults("No search yet.");
+    void loadFilterOptions();
   } catch (error) {
     setStatus("Load failed");
     renderResults(`Error: ${error.message}`);

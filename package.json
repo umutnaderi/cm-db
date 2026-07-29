@@ -6,6 +6,16 @@
   "scripts": {
     "start": "node server.js",
     "cm4:cache": "node tools/cm4-cache.mjs",
-    "pages:build": "node tools/build-pages.mjs"
+    "pages:build": "node tools/build-pages.mjs",
+    "d1:build": "python tools/build_d1_serving_database.py",
+    "d1:export": "python tools/export_d1_sql.py",
+    "d1:club-colours": "python tools/build_canonical_club_colours.py",
+    "d1:club-names": "python tools/build_canonical_club_names.py",
+    "d1:player-names": "python tools/build_canonical_player_names.py",
+    "d1:player-name-updates": "python tools/build_player_canonical_name_updates.py",
+    "d1:player-search": "python tools/build_player_name_search.py",
+    "identity:audit": "python tools/identity/audit_all.py",
+    "identity:components": "python tools/identity/apply_player_component_resolutions.py",
+    "db:repair-club-colours": "python tools/repair_club_colours.py"
   }
 }

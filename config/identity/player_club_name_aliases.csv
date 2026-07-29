@@ -1,0 +1,8 @@
+database_slug,source_club_name,canonical_public_id,notes
+cm9798_vanilla_original,Monaco,club_as_monaco,Player rows omit the AS prefix
+cm0203_vanilla_original,AS Monaco FC,club_as_monaco,Later database adds the FC suffix
+cm0304_vanilla_original,AS Monaco FC,club_as_monaco,Later database adds the FC suffix
+cm0203_vanilla_original,São Paulo FC,club_sao_paulo_futebol_clube,Player club ID uses a conflicting namespace
+cm0304_vanilla_original,São Paulo FC,club_sao_paulo_futebol_clube,Player club ID uses a conflicting namespace
+cm0203_vanilla_original,AC Milan,club_ac_milan_italy,Player club ID uses a conflicting namespace
+cm0304_vanilla_original,AC Milan,club_ac_milan_italy,Player club ID uses a conflicting namespace

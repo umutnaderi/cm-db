@@ -1,1 +1,72 @@
 action,database_slug,source_club_id,canonical_public_id,canonical_name,team_type,notes
+link,cm0203_vanilla_original,213,club_sao_paulo_futebol_clube,São Paulo Futebol Clube,senior,CM 02/03 uses the shortened São Paulo FC name
+link,cm0304_vanilla_original,213,club_sao_paulo_futebol_clube,São Paulo Futebol Clube,senior,CM 03/04 uses the shortened São Paulo FC name
+link,cm0203_vanilla_original,785,club_ac_milan_italy,AC Milan,senior,CM 02/03 club export omits the nation context
+link,cm0304_vanilla_original,785,club_ac_milan_italy,AC Milan,senior,CM 03/04 club export omits the nation context
+link,cm0203_vanilla_original,558,club_as_monaco,AS Monaco,senior,CM 02/03 adds the FC suffix and omits nation context
+link,cm0304_vanilla_original,558,club_as_monaco,AS Monaco,senior,CM 03/04 adds the FC suffix and omits nation context
+link,cm9697_vanilla_original,0,club_f_c_barcelona_spain,F.C. Barcelona,senior,CM 96/97 omits punctuation in the FC prefix
+link,cm9798_vanilla_original,3372,club_f_c_barcelona_spain,F.C. Barcelona,senior,CM 97/98 omits punctuation in the FC prefix
+link,cm9697_vanilla_original,3,club_real_madrid_c_f_spain,Real Madrid C.F.,senior,CM 96/97 uses the shorter Real Madrid name
+link,cm9798_vanilla_original,3400,club_real_madrid_c_f_spain,Real Madrid C.F.,senior,CM 97/98 uses the shorter Real Madrid name
+link,cm9697_vanilla_original,15,club_galatasaray_sk_turkey,Galatasaray,senior,Canonical display omits later SK suffix
+link,cm9798_vanilla_original,3663,club_galatasaray_sk_turkey,Galatasaray,senior,Canonical display omits Istanbul suffix
+link,cm9899_vanilla_original,1275,club_galatasaray_sk_turkey,Galatasaray,senior,Canonical display across seasons
+link,cm9900_vanilla_original,1409,club_galatasaray_sk_turkey,Galatasaray,senior,Canonical display across seasons
+link,cm0001_vanilla_original,2026,club_galatasaray_sk_turkey,Galatasaray,senior,Canonical display omits SK suffix
+link,cm0102_vanilla_original,3458,club_galatasaray_sk_turkey,Galatasaray,senior,Canonical display omits SK suffix
+link,cm0203_vanilla_original,1424,club_galatasaray_sk_turkey,Galatasaray,senior,Later source omits nation context
+link,cm0304_vanilla_original,1423,club_galatasaray_sk_turkey,Galatasaray,senior,Later source omits nation context
+link,cm0203_vanilla_original,4738,club_centro_atletico_fenix_uruguay,Fénix,senior,Uruguayan Fénix separated from the ARG-labelled club
+link,cm0304_vanilla_original,4728,club_centro_atletico_fenix_uruguay,Fénix,senior,Uruguayan Fénix separated from the ARG-labelled club
+link,cm0203_vanilla_original,8365,club_club_atletico_fenix_argentina,Club Atlético Fénix,senior,ARG short-name marker identifies the Argentine club
+link,cm0304_vanilla_original,8673,club_club_atletico_fenix_argentina,Club Atlético Fénix,senior,ARG short-name marker identifies the Argentine club
+link,cm0203_vanilla_original,13940,club_kbs_poperinge_belgium,KBS Poperinge,senior,Cross-season Belgian club identity
+link,cm0304_vanilla_original,15169,club_kbs_poperinge_belgium,KBS Poperinge,senior,Duplicate source record for the same real club
+link,cm0304_vanilla_original,15358,club_kbs_poperinge_belgium,KBS Poperinge,senior,Duplicate historical source record for the same real club
+link,cm0203_vanilla_original,4987,club_llandrindod_wells_wales,Llandrindod Wells,senior,Cross-season Welsh club identity
+link,cm0304_vanilla_original,5073,club_llandrindod_wells_wales,Llandrindod Wells,senior,Current-roster source record
+link,cm0304_vanilla_original,5090,club_llandrindod_wells_wales,Llandrindod Wells,senior,Duplicate source record for the same real club
+link,cm0203_vanilla_original,207,club_paysandu_sport_club_brazil,Paysandu Sport Club,senior,Pará club separated from the Santa Catarina namesake
+link,cm0304_vanilla_original,207,club_paysandu_sport_club_brazil,Paysandu Sport Club,senior,Pará club separated from the Santa Catarina namesake
+link,cm0203_vanilla_original,4609,club_clube_esportivo_paysandu_brazil,Clube Esportivo Paysandu,senior,SC marker identifies the Brusque Santa Catarina club
+link,cm0304_vanilla_original,4599,club_clube_esportivo_paysandu_brazil,Clube Esportivo Paysandu,senior,SC marker identifies the Brusque Santa Catarina club
+link,cm0001_vanilla_original,4384,club_qwaqwa_stars_south_africa,QwaQwa Stars,senior,Cross-season South African club identity
+link,cm0102_vanilla_original,7379,club_qwaqwa_stars_south_africa,QwaQwa Stars,senior,Cross-season South African club identity
+link,cm0203_vanilla_original,1269,club_qwaqwa_stars_south_africa,QwaQwa Stars,senior,Cross-season South African club identity
+link,cm0304_vanilla_original,1268,club_qwaqwa_stars_south_africa,QwaQwa Stars,senior,Duplicate historical source record for the same real club
+link,cm0304_vanilla_original,3343,club_qwaqwa_stars_south_africa,QwaQwa Stars,senior,Case variant used by current-roster source record
+link,cm0203_vanilla_original,138,club_rfc_liege_belgium,RFC Liège,senior,Cross-season Belgian club identity
+link,cm0304_vanilla_original,138,club_rfc_liege_belgium,RFC Liège,senior,Historical source record for the same real club
+link,cm0304_vanilla_original,4179,club_rfc_liege_belgium,RFC Liège,senior,Current-roster source record for the same real club
+link,cm9899_vanilla_original,2870,club_royal_engineers_england,Royal Engineers,senior,Cross-season English club identity
+link,cm9900_vanilla_original,3166,club_royal_engineers_england,Royal Engineers,senior,Cross-season English club identity
+link,cm0001_vanilla_original,4628,club_royal_engineers_england,Royal Engineers,senior,Cross-season English club identity
+link,cm0102_vanilla_original,7797,club_royal_engineers_england,Royal Engineers,senior,Duplicate source record for the same real club
+link,cm0102_vanilla_original,7798,club_royal_engineers_england,Royal Engineers,senior,Duplicate source record for the same real club
+link,cm0203_vanilla_original,6568,club_royal_engineers_england,Royal Engineers,senior,Cross-season English club identity
+link,cm0304_vanilla_original,6694,club_royal_engineers_england,Royal Engineers,senior,Cross-season English club identity
+link,cm9899_vanilla_original,3258,club_stal_mielec_poland,Stal Mielec,senior,Cross-season Polish club identity
+link,cm9900_vanilla_original,3597,club_stal_mielec_poland,Stal Mielec,senior,Cross-season Polish club identity
+link,cm0001_vanilla_original,5253,club_stal_mielec_poland,Stal Mielec,senior,Historical source record for the same real club
+link,cm0001_vanilla_original,5254,club_stal_mielec_poland,Stal Mielec,senior,Duplicate source record for the same real club
+link,cm0102_vanilla_original,8847,club_stal_mielec_poland,Stal Mielec,senior,Cross-season Polish club identity
+link,cm0304_vanilla_original,7233,club_stal_mielec_poland,Stal Mielec,senior,Cross-season Polish club identity
+link,cm0001_vanilla_original,5482,club_textilschik_kamyshin_d_russia,Textilschik Kamyshin (D),senior,Duplicate defunct-club source record
+link,cm0001_vanilla_original,5483,club_textilschik_kamyshin_d_russia,Textilschik Kamyshin (D),senior,Duplicate historical source record
+link,cm0102_vanilla_original,9218,club_textilschik_kamyshin_d_russia,Textilschik Kamyshin (D),senior,Cross-season Russian defunct-club identity
+link,cm0203_vanilla_original,6163,club_textilschik_kamyshin_d_russia,Textilschik Kamyshin (D),senior,Cross-season Russian defunct-club identity
+link,cm0304_vanilla_original,6282,club_textilschik_kamyshin_d_russia,Textilschik Kamyshin (D),senior,Cross-season Russian defunct-club identity
+link,cm0304_vanilla_original,7522,club_tokyo_gakugei_university_japan,Tokyo Gakugei University,senior,Current-roster source record
+link,cm0304_vanilla_original,7531,club_tokyo_gakugei_university_japan,Tokyo Gakugei University,senior,Duplicate historical source record for the same university
+link,cm0203_vanilla_original,1893,club_zwart_wit_28_netherlands,Zwart-Wit '28,senior,Cross-season Dutch club identity
+link,cm0304_vanilla_original,1892,club_zwart_wit_28_netherlands,Zwart-Wit '28,senior,Acute-apostrophe source spelling
+link,cm0304_vanilla_original,8054,club_zwart_wit_28_netherlands,Zwart-Wit '28,senior,Straight-apostrophe duplicate source spelling
+link,cm9697_vanilla_original,73,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons
+link,cm9798_vanilla_original,2135,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons
+link,cm9899_vanilla_original,483,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons
+link,cm9900_vanilla_original,536,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons
+link,cm0001_vanilla_original,781,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons
+link,cm0102_vanilla_original,1374,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons
+link,cm0203_vanilla_original,797,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons; CM4 export omits nation context
+link,cm0304_vanilla_original,797,club_bologna_1909,Bologna,senior,Canonical Bologna identity across seasons; CM4 export omits nation context

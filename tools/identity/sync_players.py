@@ -4,15 +4,23 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import json
 import re
 from pathlib import Path
 
-from common import REGISTRY_DB, SCHEMA_PATH, SOURCE_DB, choose_column, normalize_name, registry_connection, sha256_text, source_connection, stable_json, table_columns
+from common import REGISTRY_DB, ROOT, SCHEMA_PATH, SOURCE_DB, choose_column, normalize_name, registry_connection, sha256_text, source_connection, stable_json, table_columns
 from create_registry import create_registry
+from player_components import (
+    COMPONENT_RESOLUTIONS,
+    component_field_overrides,
+    load_component_resolutions,
+)
 
 SEASON_YEAR={"cm9697_vanilla_original":1996,"cm9798_vanilla_original":1997,"cm9899_vanilla_original":1998,"cm9900_vanilla_original":1999,"cm0001_vanilla_original":2000,"cm0102_vanilla_original":2001,"cm0203_vanilla_original":2002,"cm0304_vanilla_original":2003}
+CLUB_NAME_ALIASES=ROOT/"config"/"identity"/"player_club_name_aliases.csv"
+PLAYER_FIELD_OVERRIDES=ROOT/"config"/"identity"/"player_field_overrides.csv"
 
 
 def position_group(value:object)->str:
@@ -45,23 +53,83 @@ def normalized_dob(value:object,season_age:object,season_year:int|None)->str|Non
     except (ValueError,TypeError):return None
 
 
-def resolution_maps(connection):
+def player_club_aliases(connection,path:Path):
+    canonical_ids={row["public_id"]:row["id"] for row in connection.execute("SELECT id,public_id FROM canonical_clubs")}
+    result={}
+    with path.open("r",encoding="utf-8-sig",newline="") as handle:
+        reader=csv.DictReader(handle);required={"database_slug","source_club_name","canonical_public_id","notes"}
+        if reader.fieldnames is None or required-set(reader.fieldnames):raise RuntimeError("Player club alias CSV has invalid columns")
+        for line,raw in enumerate(reader,2):
+            row={key:(value or "").strip() for key,value in raw.items()};key=(row["database_slug"],row["source_club_name"])
+            canonical_id=canonical_ids.get(row["canonical_public_id"])
+            if not all(key) or canonical_id is None or key in result:raise RuntimeError(f"Invalid player club alias line {line}")
+            result[key]=canonical_id
+    return result
+
+
+def player_field_overrides(path:Path):
+    result={}
+    with path.open("r",encoding="utf-8-sig",newline="") as handle:
+        reader=csv.DictReader(handle);required={"database_slug","source_person_id","normalized_date_of_birth","notes"}
+        if reader.fieldnames is None or required-set(reader.fieldnames):raise RuntimeError("Player field override CSV has invalid columns")
+        for line,raw in enumerate(reader,2):
+            row={key:(value or "").strip() for key,value in raw.items()};key=(row["database_slug"],row["source_person_id"])
+            try:corrected=dt.date.fromisoformat(row["normalized_date_of_birth"]).isoformat()
+            except ValueError as error:raise RuntimeError(f"Invalid player field override line {line}") from error
+            if not all(key) or key in result:raise RuntimeError(f"Invalid player field override line {line}")
+            result[key]=corrected
+    return result
+
+
+def resolution_maps(connection,club_aliases_path:Path):
     nation_direct={(r["database_slug"],r["source_nation_id"]):r["canonical_nation_id"] for r in connection.execute("SELECT database_slug,source_nation_id,canonical_nation_id FROM nation_identity_links")}
     nation_names={}
     for r in connection.execute("SELECT s.normalized_name,l.canonical_nation_id FROM source_nations s JOIN nation_identity_links l USING(database_slug,source_nation_id) WHERE s.active=1"):
         nation_names.setdefault(r["normalized_name"],set()).add(r["canonical_nation_id"])
     nation_names={key:next(iter(values)) for key,values in nation_names.items() if len(values)==1}
-    club_direct={(r["database_slug"],r["source_club_id"]):r["canonical_club_id"] for r in connection.execute("SELECT database_slug,source_club_id,canonical_club_id FROM club_identity_links")}
+    club_direct={
+        (r["database_slug"],r["source_club_id"]):(
+            r["canonical_club_id"],
+            r["normalized_name"],
+        )
+        for r in connection.execute(
+            """
+            SELECT l.database_slug,l.source_club_id,l.canonical_club_id,s.normalized_name
+            FROM club_identity_links l
+            JOIN source_clubs s USING(database_slug,source_club_id)
+            """
+        )
+    }
     club_names={}
-    for r in connection.execute("SELECT s.database_slug,s.normalized_name,l.canonical_club_id FROM source_clubs s JOIN club_identity_links l USING(database_slug,source_club_id) WHERE s.active=1"):
-        club_names.setdefault((r["database_slug"],r["normalized_name"]),set()).add(r["canonical_club_id"])
+    for r in connection.execute("SELECT s.database_slug,s.normalized_name,s.short_name,l.canonical_club_id FROM source_clubs s JOIN club_identity_links l USING(database_slug,source_club_id) WHERE s.active=1"):
+        names={r["normalized_name"],normalize_name(r["short_name"])}
+        for name in names:
+            if name:
+                club_names.setdefault((r["database_slug"],name),set()).add(r["canonical_club_id"])
     club_names={key:next(iter(values)) for key,values in club_names.items() if len(values)==1}
-    return nation_direct,nation_names,club_direct,club_names
+    return nation_direct,nation_names,club_direct,club_names,player_club_aliases(connection,club_aliases_path)
 
 
-def synchronize(source_path:Path,registry_path:Path)->dict[str,int]:
+def synchronize(
+    source_path: Path,
+    registry_path: Path,
+    club_aliases_path: Path = CLUB_NAME_ALIASES,
+    field_overrides_path: Path = PLAYER_FIELD_OVERRIDES,
+    component_resolutions_path: Path = COMPONENT_RESOLUTIONS,
+) -> dict[str, int]:
     source=source_connection(source_path); con=registry_connection(registry_path)
-    nation_direct,nation_names,club_direct,club_names=resolution_maps(con)
+    nation_direct,nation_names,club_direct,club_names,club_aliases=resolution_maps(con,club_aliases_path)
+    field_overrides=component_field_overrides(
+        load_component_resolutions(component_resolutions_path)
+    )
+    for key, corrected in player_field_overrides(field_overrides_path).items():
+        existing = field_overrides.get(key)
+        if existing is not None and existing != corrected:
+            raise RuntimeError(
+                f"Conflicting player DOB corrections for {key}: "
+                f"{existing} / {corrected}"
+            )
+        field_overrides[key] = corrected
     columns=table_columns(source,"player_search")
     db_col=choose_column(columns,("database_slug","db_slug","database"),"database slug");id_col=choose_column(columns,("source_person_id","person_id","source_id","id"),"person ID")
     selected=[name for name in (db_col,id_col,"display_name","full_name","first_name","second_name","common_name","date_of_birth","season_age","position_text","nation_id","nation_name","club_id","club_name") if name in columns]
@@ -93,8 +161,23 @@ def synchronize(source_path:Path,registry_path:Path)->dict[str,int]:
             row=dict(raw);db=str(row[db_col]);pid=str(row[id_col]);identity=row.get("full_name") or row.get("display_name") or row.get("common_name") or ""
             nation_id=None if row.get("nation_id") is None else str(row.get("nation_id"));club_id=None if row.get("club_id") in (None,"") else str(row.get("club_id"))
             canonical_nation=nation_direct.get((db,nation_id)) or nation_names.get(normalize_name(row.get("nation_name")))
-            canonical_club=club_direct.get((db,club_id)) or club_names.get((db,normalize_name(row.get("club_name"))))
-            age=row.get("season_age");parsed_dob=normalized_dob(row.get("date_of_birth"),age,SEASON_YEAR.get(db))
+            normalized_club_name=normalize_name(row.get("club_name"))
+            direct_club=club_direct.get((db,club_id))
+            named_club=club_names.get((db,normalized_club_name))
+            explicit_club=club_aliases.get((db,row.get("club_name") or ""))
+            if explicit_club:
+                canonical_club=explicit_club
+            elif direct_club and (
+                not normalized_club_name
+                or direct_club[1] == normalized_club_name
+            ):
+                canonical_club=direct_club[0]
+            else:
+                # Some converted databases contain player club IDs from a
+                # different namespace. Never let a conflicting ID attach the
+                # player to an unrelated club; use the unique name match.
+                canonical_club=named_club
+            age=row.get("season_age");parsed_dob=field_overrides.get((db,pid)) or normalized_dob(row.get("date_of_birth"),age,SEASON_YEAR.get(db))
             estimated=int(parsed_dob[:4]) if parsed_dob else ((SEASON_YEAR.get(db)-int(age)) if age is not None and db in SEASON_YEAR else None)
             payload=stable_json(row);derived=stable_json({"canonical_club_id":canonical_club,"canonical_nation_id":canonical_nation,"normalized_date_of_birth":parsed_dob,"position_group":position_group(row.get("position_text")),"source":json.loads(payload)})
             digest=sha256_text(derived)
@@ -120,5 +203,5 @@ def synchronize(source_path:Path,registry_path:Path)->dict[str,int]:
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument("--source",type=Path,default=SOURCE_DB);p.add_argument("--registry",type=Path,default=REGISTRY_DB);a=p.parse_args();create_registry(a.registry,SCHEMA_PATH);s=synchronize(a.source,a.registry);print("source players: {source}; inserted: {inserted}; changed: {changed}; unchanged: {unchanged}; inactive: {inactive}".format(**s))
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument("--source",type=Path,default=SOURCE_DB);p.add_argument("--registry",type=Path,default=REGISTRY_DB);p.add_argument("--club-aliases",type=Path,default=CLUB_NAME_ALIASES);p.add_argument("--field-overrides",type=Path,default=PLAYER_FIELD_OVERRIDES);p.add_argument("--component-resolutions",type=Path,default=COMPONENT_RESOLUTIONS);a=p.parse_args();create_registry(a.registry,SCHEMA_PATH);s=synchronize(a.source,a.registry,a.club_aliases,a.field_overrides,a.component_resolutions);print("source players: {source}; inserted: {inserted}; changed: {changed}; unchanged: {unchanged}; inactive: {inactive}".format(**s))
 if __name__=="__main__":main()

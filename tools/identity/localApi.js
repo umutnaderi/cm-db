@@ -1,16 +1,20 @@
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(".");
 const source = new DatabaseSync(resolve(root, "db", "retroball.sqlite"), { readOnly: true });
 const identity = new DatabaseSync(resolve(root, "identity", "retroball_identity.sqlite"), { readOnly: true });
+const leagueMap = JSON.parse(
+  readFileSync(resolve(root, "worker", "src", "league-map.json"), "utf8")
+);
 source.exec("PRAGMA query_only = ON");
 identity.exec("PRAGMA query_only = ON");
 
 const playerColumns = `
   database_slug, source_person_id, display_name, full_name, common_name,
-  club_name, nation_name, date_of_birth, season_age AS age, position_text,
+  club_id, club_name, nation_name, date_of_birth, season_age AS age, position_text,
   current_ability, potential_ability, value, wage
 `;
 
@@ -51,11 +55,326 @@ function ratingList(value) {
   return [];
 }
 
+const clubColourData = readFileSync(resolve(root, "01-02 dat", "colour.dat"));
+const clubColourOverrides = JSON.parse(
+  readFileSync(
+    resolve(root, "config", "identity", "club_colour_overrides.json"),
+    "utf8"
+  )
+);
+const clubColourPalette = Array.from(
+  { length: Math.floor(clubColourData.length / 58) },
+  (_, index) => {
+    const offset = index * 58;
+    return `#${[55, 56, 57]
+      .map((channel) => clubColourData[offset + channel].toString(16).padStart(2, "0"))
+      .join("")}`;
+  }
+);
+const clubSeasonOrder = new Map(
+  source.prepare("SELECT slug, season_order FROM cm_databases").all()
+    .map((row) => [String(row.slug), Number(row.season_order)])
+);
+const canonicalClubNameStatement = identity.prepare(`
+  SELECT c.preferred_name
+  FROM source_players s
+  JOIN canonical_clubs c ON c.id = s.canonical_club_id
+  WHERE s.database_slug = ?
+    AND s.club_name = ?
+    AND s.active = 1
+  GROUP BY c.id, c.preferred_name
+  LIMIT 2
+`);
+const canonicalClubNameCache = new Map();
+const canonicalPlayerStatement = identity.prepare(`
+  SELECT c.public_id, c.preferred_name
+  FROM player_identity_links l
+  JOIN canonical_players c ON c.id = l.canonical_player_id
+  WHERE l.database_slug = ? AND l.source_person_id = ?
+  LIMIT 1
+`);
+const canonicalPlayerCache = new Map();
+
+function canonicalClubName(database, sourceName) {
+  if (!database || !sourceName) return "";
+  const key = `${database}\u001f${sourceName}`;
+  if (canonicalClubNameCache.has(key)) return canonicalClubNameCache.get(key);
+  const rows = canonicalClubNameStatement.all(database, sourceName);
+  const name = rows.length === 1 ? String(rows[0].preferred_name) : "";
+  canonicalClubNameCache.set(key, name);
+  return name;
+}
+
+function withCanonicalClubName(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    canonical_club_name:
+      canonicalClubName(String(row.database_slug), String(row.club_name || ""))
+      || null
+  };
+}
+
+function canonicalPlayer(database, sourcePersonId) {
+  if (!database || sourcePersonId === null || sourcePersonId === undefined) return null;
+  const key = `${database}\u001f${sourcePersonId}`;
+  if (canonicalPlayerCache.has(key)) return canonicalPlayerCache.get(key);
+  const row = canonicalPlayerStatement.get(database, String(sourcePersonId));
+  const player = row
+    ? {
+        canonical_player_public_id: String(row.public_id),
+        canonical_player_name: String(row.preferred_name)
+      }
+    : null;
+  canonicalPlayerCache.set(key, player);
+  return player;
+}
+
+function withCanonicalIdentity(row) {
+  if (!row) return row;
+  return {
+    ...withCanonicalClubName(row),
+    ...canonicalPlayer(String(row.database_slug), row.source_person_id)
+  };
+}
+
+function decodeClubColour(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const text = String(value).trim();
+  if (/^#[0-9a-f]{6}$/i.test(text)) return text.toLowerCase();
+
+  const numeric = Number(text);
+  if (!Number.isInteger(numeric)) return "";
+  if (numeric >= 0 && numeric < clubColourPalette.length) {
+    return clubColourPalette[numeric];
+  }
+  const packed = numeric >>> 0;
+  if ((packed & 0x00ffffff) !== 0) return "";
+  return clubColourPalette[packed >>> 24] || "";
+}
+
+function canonicalClubColourOverride(publicId) {
+  const override = clubColourOverrides[String(publicId)] || null;
+  if (!override) return null;
+  const background = decodeClubColour(override.background);
+  const foreground = decodeClubColour(override.foreground);
+  return background && foreground && background !== foreground
+    ? {
+        background_colour: background,
+        foreground_colour: foreground,
+        colour_source_database_slug: "canonical_override",
+        colour_source_club_id: String(publicId),
+        colour_slot: 0
+      }
+    : null;
+}
+
+function chooseCanonicalClubColour(keys) {
+  const colourStatement = source.prepare(`
+    SELECT
+      fore_colour1, back_colour1,
+      fore_colour2, back_colour2,
+      fore_colour3, back_colour3
+    FROM clubs
+    WHERE database_slug = ? AND cast(source_club_id AS TEXT) = ?
+    LIMIT 1
+  `);
+  for (const slot of [1, 2, 3]) {
+    const candidates = keys.flatMap((key) => {
+      const row = colourStatement.get(key.database_slug, String(key.source_club_id));
+      if (!row) return [];
+      const foreground = decodeClubColour(row[`fore_colour${slot}`]);
+      const background = decodeClubColour(row[`back_colour${slot}`]);
+      if (!background || !foreground || background === foreground) return [];
+      return [{
+        background_colour: background,
+        foreground_colour: foreground,
+        colour_source_database_slug: String(key.database_slug),
+        colour_source_club_id: String(key.source_club_id),
+        colour_slot: slot,
+        season_order: clubSeasonOrder.get(String(key.database_slug)) || 0
+      }];
+    });
+    if (candidates.length) {
+      return candidates.sort((left, right) =>
+        right.season_order - left.season_order
+        || right.colour_source_database_slug.localeCompare(left.colour_source_database_slug)
+      )[0];
+    }
+  }
+  return null;
+}
+
+function canonicalClubColours(database, sourceClubId) {
+  const linkStatement = identity.prepare(`
+    SELECT
+      l.canonical_club_id,
+      c.public_id AS canonical_public_id,
+      s.normalized_name,
+      s.team_type
+    FROM club_identity_links l
+    JOIN canonical_clubs c ON c.id = l.canonical_club_id
+    JOIN source_clubs s
+      ON s.database_slug = l.database_slug
+     AND s.source_club_id = l.source_club_id
+    WHERE l.database_slug = ? AND l.source_club_id = ?
+    LIMIT 1
+  `);
+  linkStatement.setReadBigInts(true);
+  const link = linkStatement.get(database, String(sourceClubId));
+  if (!link) return null;
+
+  const exactOverride = canonicalClubColourOverride(link.canonical_public_id);
+  if (exactOverride) {
+    return {
+      ...exactOverride,
+      canonical_club_id: link.canonical_club_id.toString(),
+      colour_canonical_club_id: link.canonical_club_id.toString(),
+      colour_resolution_method: "canonical_override"
+    };
+  }
+
+  const linkedKeysStatement = identity.prepare(`
+    SELECT database_slug, source_club_id
+    FROM club_identity_links
+    WHERE canonical_club_id = ?
+  `);
+  const exactPair = chooseCanonicalClubColour(
+    linkedKeysStatement.all(link.canonical_club_id)
+  );
+  if (exactPair) {
+    return {
+      ...exactPair,
+      canonical_club_id: link.canonical_club_id.toString(),
+      colour_canonical_club_id: link.canonical_club_id.toString(),
+      colour_resolution_method: "canonical_link"
+    };
+  }
+
+  const candidateStatement = identity.prepare(`
+    SELECT DISTINCT l.canonical_club_id, c.public_id AS canonical_public_id
+    FROM source_clubs s
+    JOIN club_identity_links l
+      ON l.database_slug = s.database_slug
+     AND l.source_club_id = s.source_club_id
+    JOIN canonical_clubs c ON c.id = l.canonical_club_id
+    WHERE s.normalized_name = ? AND s.team_type = ? AND s.active = 1
+  `);
+  candidateStatement.setReadBigInts(true);
+  const colouredCandidates = candidateStatement
+    .all(link.normalized_name, link.team_type)
+    .flatMap((candidate) => {
+      const pair = canonicalClubColourOverride(candidate.canonical_public_id)
+        || chooseCanonicalClubColour(
+          linkedKeysStatement.all(candidate.canonical_club_id)
+        );
+      return pair ? [{ canonicalClubId: candidate.canonical_club_id, pair }] : [];
+    });
+  const uniqueCandidates = new Map(
+    colouredCandidates.map((candidate) => [
+      candidate.canonicalClubId.toString(),
+      candidate
+    ])
+  );
+  if (uniqueCandidates.size !== 1) return null;
+
+  const fallback = [...uniqueCandidates.values()][0];
+  return {
+    ...fallback.pair,
+    canonical_club_id: link.canonical_club_id.toString(),
+    colour_canonical_club_id: fallback.canonicalClubId.toString(),
+    colour_resolution_method: "unique_normalized_name"
+  };
+}
+
+function canonicalClubColoursByPlayerName(database, sourceClubName) {
+  if (!database || !sourceClubName) return null;
+  const canonicalStatement = identity.prepare(`
+    SELECT c.id AS canonical_club_id, c.public_id AS canonical_public_id
+    FROM source_players s
+    JOIN canonical_clubs c ON c.id = s.canonical_club_id
+    WHERE s.database_slug = ?
+      AND s.club_name = ?
+      AND s.active = 1
+    GROUP BY c.id, c.public_id
+    LIMIT 2
+  `);
+  canonicalStatement.setReadBigInts(true);
+  const candidates = canonicalStatement.all(database, sourceClubName);
+  if (candidates.length !== 1) return null;
+
+  const candidate = candidates[0];
+  const override = canonicalClubColourOverride(candidate.canonical_public_id);
+  const linkedKeysStatement = identity.prepare(`
+    SELECT database_slug, source_club_id
+    FROM club_identity_links
+    WHERE canonical_club_id = ?
+  `);
+  const pair = override || chooseCanonicalClubColour(
+    linkedKeysStatement.all(candidate.canonical_club_id)
+  );
+  if (!pair) return null;
+
+  return {
+    ...pair,
+    canonical_club_id: candidate.canonical_club_id.toString(),
+    colour_canonical_club_id: candidate.canonical_club_id.toString(),
+    colour_resolution_method: override
+      ? "canonical_override"
+      : "canonical_player_club_name"
+  };
+}
+
 function databases() {
   return {
     items: source.prepare(
       "SELECT slug, title, season_order, status FROM cm_databases ORDER BY season_order"
     ).all()
+  };
+}
+
+function filters(database) {
+  const clubs = source.prepare(`
+    SELECT DISTINCT club_name AS name
+    FROM player_search
+    WHERE database_slug = ? AND club_name IS NOT NULL AND club_name <> ''
+    ORDER BY club_name COLLATE NOCASE
+  `).all(database);
+  const nations = source.prepare(`
+    SELECT DISTINCT nation_name AS name
+    FROM player_search
+    WHERE database_slug = ? AND nation_name IS NOT NULL AND nation_name <> ''
+    ORDER BY nation_name COLLATE NOCASE
+  `).all(database);
+  const databaseLeagues = source.prepare(`
+    SELECT name
+    FROM (
+      SELECT league_name AS name
+      FROM player_search
+      WHERE database_slug = ? AND league_name IS NOT NULL AND league_name <> ''
+      UNION
+      SELECT league_name AS name
+      FROM person_history
+      WHERE database_slug = ? AND league_name IS NOT NULL AND league_name <> ''
+    )
+    ORDER BY name COLLATE NOCASE
+  `).all(database, database).map((row) => String(row.name));
+  const leagueDatabase = database === "cm0203"
+    ? "cm0203_vanilla_original"
+    : database === "cm0304"
+      ? "cm0304_vanilla_original"
+      : database;
+  const leagues = [
+    ...new Set([
+      ...databaseLeagues,
+      ...Object.values(leagueMap[leagueDatabase] || {}),
+    ]),
+  ].sort((left, right) => left.localeCompare(right)).map((name) => ({ name }));
+
+  return {
+    clubs,
+    nations,
+    leagues,
   };
 }
 
@@ -82,7 +401,11 @@ function searchPlayers(params) {
       params.get("nation") || ""
     ], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
     if (result.status === 0) {
-      return { items: JSON.parse(result.stdout), page, pageSize };
+      return {
+        items: JSON.parse(result.stdout).map(withCanonicalIdentity),
+        page,
+        pageSize
+      };
     }
 
     // Some restricted runtimes cannot spawn Python and Node's bundled SQLite
@@ -110,19 +433,73 @@ function searchPlayers(params) {
     WHERE ${clauses.join(" AND ")}
     ORDER BY coalesce(ps.current_ability, 0) DESC, ps.display_name, ps.source_person_id
     LIMIT ? OFFSET ?
-  `).all(...values, pageSize, (page - 1) * pageSize);
+  `).all(...values, pageSize, (page - 1) * pageSize).map(withCanonicalIdentity);
   return { items, page, pageSize };
 }
 
 function playerDetail(database, personId) {
-  const item = source.prepare(`
+  const item = withCanonicalIdentity(source.prepare(`
     SELECT ${playerColumns} FROM player_search
     WHERE database_slug = ? AND source_person_id = ?
-  `).get(database, personId) || null;
+  `).get(database, personId) || null);
   const row = source.prepare(`
     SELECT * FROM player_profile WHERE database_slug = ? AND source_person_id = ?
   `).get(database, personId);
   if (!row) return { item, profile: null };
+  const clubColors = source.prepare(`
+    SELECT
+      source_club_id,
+      coalesce(
+        nullif(fore_colour1, ''),
+        json_extract(raw_json, '$."Home Text Col"'),
+        json_extract(raw_json, '$."Home Col 1"')
+      ) AS fore_colour1,
+      coalesce(
+        nullif(back_colour1, ''),
+        json_extract(raw_json, '$."Home Back Col"'),
+        json_extract(raw_json, '$."Home Col 2"')
+      ) AS back_colour1,
+      coalesce(
+        nullif(fore_colour2, ''),
+        json_extract(raw_json, '$."Away Text Col"'),
+        json_extract(raw_json, '$."Away Col 1"')
+      ) AS fore_colour2,
+      coalesce(
+        nullif(back_colour2, ''),
+        json_extract(raw_json, '$."Away Back Col"'),
+        json_extract(raw_json, '$."Away Col 2"')
+      ) AS back_colour2,
+      nullif(fore_colour3, '') AS fore_colour3,
+      nullif(back_colour3, '') AS back_colour3
+    FROM clubs
+    WHERE database_slug = ?
+      AND (
+        source_club_id = ?
+        OR (? <> '' AND name = ?)
+      )
+    ORDER BY
+      CASE WHEN name = ? THEN 0 ELSE 1 END,
+      CASE WHEN source_club_id = ? THEN 0 ELSE 1 END
+    LIMIT 1
+  `).get(
+    database,
+    row.club_id || item?.club_id || "",
+    row.club_name || item?.club_name || "",
+    row.club_name || item?.club_name || "",
+    row.club_name || item?.club_name || "",
+    row.club_id || item?.club_id || ""
+  ) || null;
+  const resolvedClubColors = (
+    clubColors
+      ? canonicalClubColours(database, String(clubColors.source_club_id))
+      : null
+  ) || canonicalClubColoursByPlayerName(
+    database,
+    String(row.club_name || item?.club_name || "")
+  );
+  const mergedClubColors = clubColors || resolvedClubColors
+    ? { ...(clubColors || {}), ...(resolvedClubColors || {}) }
+    : null;
 
   const ratings = Object.fromEntries([
     "current_ability", "potential_ability", "home_reputation", "current_reputation",
@@ -135,7 +512,11 @@ function playerDetail(database, personId) {
     display_name: row.display_name,
     full_name: row.full_name,
     common_name: row.common_name,
+    ...canonicalPlayer(String(row.database_slug), row.source_person_id),
     club_name: row.club_name,
+    canonical_club_name:
+      canonicalClubName(String(row.database_slug), String(row.club_name || ""))
+      || null,
     nation_name: row.nation_name,
     date_of_birth: row.date_of_birth,
     age: row.season_age,
@@ -149,6 +530,7 @@ function playerDetail(database, personId) {
     attributes: ratingList(row.attributes_json),
     hiddenAttributes: ratingList(row.hidden_attributes_json),
     foot: ratingList(row.foot_json),
+    clubColors: mergedClubColors,
     profile: {}
   };
   return { item: item ? { ...item, profile } : null, profile };
@@ -161,7 +543,11 @@ function playerHistory(database, personId) {
       FROM person_history
       WHERE database_slug = ? AND source_person_id = ?
       ORDER BY season_year
-    `).all(database, personId)
+    `).all(database, personId).map((row) => ({
+      ...row,
+      canonical_club_name:
+        canonicalClubName(database, String(row.club_name || "")) || null
+    }))
   };
 }
 
@@ -191,6 +577,7 @@ function playerSeasons(database, personId) {
   const items = keys
     .map((key) => statement.get(key.database_slug, key.source_person_id))
     .filter(Boolean)
+    .map(withCanonicalIdentity)
     .map((item) => ({ ...item, label: seasonLabel(item.title) }))
     .sort((left, right) => left.season_order - right.season_order || left.title.localeCompare(right.title));
   return { items };
@@ -199,6 +586,9 @@ function playerSeasons(database, personId) {
 export function handleLocalApi(requestUrl) {
   const path = requestUrl.pathname.slice("/local-api".length);
   if (path === "/api/databases") return databases();
+  if (path === "/api/filters") {
+    return filters(requestUrl.searchParams.get("database") || "");
+  }
   if (path === "/api/players") return searchPlayers(requestUrl.searchParams);
   if (path === "/api/player-seasons") {
     return playerSeasons(

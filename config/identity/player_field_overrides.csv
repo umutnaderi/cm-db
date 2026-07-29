@@ -1,0 +1,3 @@
+database_slug,source_person_id,normalized_date_of_birth,notes
+cm9697_vanilla_original,4010,1965-02-05,Confirmed Gheorghe Hagi; raw 05.12.65 conflicts with every later source
+cm0102_vanilla_original,41216,1983-05-27,Confirmed Maxim Tsigalko; raw 1900-02-01 is a placeholder

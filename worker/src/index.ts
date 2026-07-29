@@ -131,7 +131,7 @@ function storeEdgeCache(
 
 function edgeCacheKey(request: Request | string): Request {
   const url = new URL(typeof request === "string" ? request : request.url);
-  url.searchParams.set("__cacheVersion", "26");
+  url.searchParams.set("__cacheVersion", "32");
   return new Request(url, typeof request === "string" ? undefined : request);
 }
 
@@ -145,13 +145,25 @@ function cleanPage(value: string | null): number {
   return Math.max(Number.isFinite(n) ? n : 1, 1);
 }
 
-function normalizeSearchTokens(input: string, stripDiacritics: boolean): string[] {
-  const value = stripDiacritics
-    ? input.normalize("NFKD").replace(/\p{M}/gu, "")
-    : input;
+function normalizeSearchText(input: string, stripDiacritics = true): string {
+  let value = input.normalize(stripDiacritics ? "NFKD" : "NFC").toLowerCase();
+  if (stripDiacritics) {
+    value = value
+      .replace(/\p{M}/gu, "")
+      // Letters such as Turkish dotless i do not decompose under NFKD.
+      .replace(/ı/g, "i")
+      .replace(/[ł]/g, "l")
+      .replace(/[đð]/g, "d")
+      .replace(/þ/g, "th")
+      .replace(/æ/g, "ae")
+      .replace(/œ/g, "oe")
+      .replace(/ø/g, "o");
+  }
+  return value;
+}
 
-  return value
-    .toLowerCase()
+function normalizeSearchTokens(input: string, stripDiacritics: boolean): string[] {
+  return normalizeSearchText(input, stripDiacritics)
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim()
     .split(/\s+/)
@@ -188,34 +200,37 @@ function searchResultKey(row: QueryRow): string {
 }
 
 function searchNameRank(row: QueryRow, query: string): number {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) return 2;
+  const normalizedQuery = normalizedName(query);
+  if (!normalizedQuery) return 4;
 
-  const display = textField(row, "display_name").toLowerCase();
-  const full = textField(row, "full_name").toLowerCase();
-  const common = textField(row, "common_name").toLowerCase();
-  const canonical = textField(row, "canonical_player_name").toLowerCase();
+  const variants = playerNameVariants(row);
+  if (variants.some((variant) => variant === normalizedQuery)) return 0;
 
+  const queryTokens = normalizedQuery.split(" ");
   if (
-    display === normalizedQuery
-    || full === normalizedQuery
-    || common === normalizedQuery
-    || canonical === normalizedQuery
-  ) {
-    return 0;
-  }
-  if (
-    display.startsWith(normalizedQuery)
-    || full.startsWith(normalizedQuery)
-    || common.startsWith(normalizedQuery)
-    || canonical.startsWith(normalizedQuery)
+    variants.some((variant) => {
+      const tokens = variant.split(" ");
+      return queryTokens.every((queryToken) => tokens.includes(queryToken));
+    })
   ) {
     return 1;
   }
-  return 2;
+
+  if (variants.some((variant) => variant.startsWith(normalizedQuery))) return 2;
+  if (
+    variants.some((variant) => {
+      const tokens = variant.split(" ");
+      return queryTokens.every((queryToken) =>
+        tokens.some((token) => token.startsWith(queryToken))
+      );
+    })
+  ) {
+    return 3;
+  }
+  return 4;
 }
 
-function sortPlayerSearchRows(rows: QueryRow[], query: string, isSingleTokenQuery: boolean): QueryRow[] {
+function sortPlayerSearchRows(rows: QueryRow[], query: string): QueryRow[] {
   return rows.slice().sort((left, right) => {
     const leftRank = searchNameRank(left, query);
     const rightRank = searchNameRank(right, query);
@@ -223,9 +238,6 @@ function sortPlayerSearchRows(rows: QueryRow[], query: string, isSingleTokenQuer
     const potentialDelta = numberField(right, "potential_ability") - numberField(left, "potential_ability");
     const nameDelta = textField(left, "full_name").localeCompare(textField(right, "full_name"));
 
-    if (isSingleTokenQuery) {
-      return abilityDelta || leftRank - rightRank || potentialDelta || nameDelta;
-    }
     return leftRank - rightRank || abilityDelta || potentialDelta || nameDelta;
   });
 }
@@ -640,7 +652,6 @@ export default {
         let orderBy = "ps.full_name";
 
         if (trimmedQ) {
-          const isSingleTokenQuery = normalizeSearchTokens(trimmedQ, true).length === 1;
           const nameRank = `
             CASE
               WHEN lower(coalesce(ps.display_name, '')) = lower(?) THEN 0
@@ -651,17 +662,11 @@ export default {
               ELSE 2
             END
           `;
-          orderBy = isSingleTokenQuery
-            ? `
-              coalesce(ps.current_ability, 0) DESC,
-              ${nameRank},
-              ps.full_name
-            `
-            : `
-              ${nameRank},
-              coalesce(ps.current_ability, 0) DESC,
-              ps.full_name
-            `;
+          orderBy = `
+            ${nameRank},
+            coalesce(ps.current_ability, 0) DESC,
+            ps.full_name
+          `;
           orderArgs.push(
             trimmedQ,
             trimmedQ,
@@ -735,11 +740,11 @@ export default {
           };
         };
 
-        const buildFtsSearchQuery = (tokens: string[]) => {
+        const buildFtsSearchQuery = (tokens: string[], limit: number) => {
           const ftsQuery = tokens.map((token) => `${token}*`).join(" ");
           const args: Array<string | number> = [ftsQuery, database];
           const where: string[] = [
-            "player_search_fts MATCH ?",
+            "player_name_search_fts MATCH ?",
             "ps.database_slug = ?",
           ];
 
@@ -769,13 +774,14 @@ export default {
           return {
             sql: `
               ${selectColumns}
-              JOIN player_search_fts f
-                ON f.rowid = ps.rowid
+              JOIN player_name_search_fts f
+                ON f.database_slug = ps.database_slug
+               AND f.source_person_id = cast(ps.source_person_id AS TEXT)
               WHERE ${where.join(" AND ")}
               ORDER BY ${orderBy}
-              LIMIT ? OFFSET ?
+              LIMIT ?
             `,
-            args: [...args, ...orderArgs, pageSize, offset],
+            args: [...args, ...orderArgs, limit],
           };
         };
 
@@ -968,19 +974,20 @@ export default {
             return json({ items: [], page, pageSize }, env);
           }
 
-          const isSingleTokenQuery = normalizedTokens.length === 1;
           const mergeLimit = Math.min(Math.max(offset + pageSize, pageSize) * 3, 120);
           const fallbackIds = staticNameFallbackIds(database, normalizedTokens);
           const searchQueries = [
             buildIndexedNameQuery("display_name", mergeLimit),
             buildIndexedNameQuery("full_name", mergeLimit),
             buildCanonicalNameQuery(mergeLimit),
+            buildFtsSearchQuery(normalizedTokens, mergeLimit),
             ...(fallbackIds.length ? [buildStaticTokenQuery(fallbackIds)] : []),
           ];
           const [
             displayResult,
             fullResult,
             canonicalResult,
+            ftsResult,
             tokenResult = { rows: [] },
           ] = await db.batch(searchQueries);
           const mergedRowsByKey = new Map<string, QueryRow>();
@@ -988,11 +995,12 @@ export default {
             ...displayResult.rows,
             ...fullResult.rows,
             ...canonicalResult.rows,
+            ...ftsResult.rows,
             ...tokenResult.rows,
           ]) {
             mergedRowsByKey.set(searchResultKey(row), row);
           }
-          const mergedRows = sortPlayerSearchRows([...mergedRowsByKey.values()], trimmedQ, isSingleTokenQuery);
+          const mergedRows = sortPlayerSearchRows([...mergedRowsByKey.values()], trimmedQ);
           result = {
             rows: mergedRows.slice(offset, offset + pageSize),
           };
@@ -1599,46 +1607,30 @@ export default {
         if (cached) return cached;
 
         return cachedJson(request, env, ctx, 86_400, async () => {
-          const clubs = await db.execute({
-            sql: `
-              SELECT name, nation_name
-              FROM (
-                SELECT club_name AS name, nation_name
-                FROM player_search
-                WHERE database_slug = ?
-                  AND club_name IS NOT NULL
-                  AND club_name <> ''
-                UNION
-                SELECT name, nation_name
-                FROM clubs
-                WHERE database_slug = ?
-                  AND name IS NOT NULL
-                  AND name <> ''
-              )
-              ORDER BY name COLLATE NOCASE
+          const [clubs, nations] = await db.batch([
+            {
+              sql: `
+              SELECT DISTINCT club_name AS name
+              FROM player_search
+              WHERE database_slug = ?
+                AND club_name IS NOT NULL
+                AND club_name <> ''
+              ORDER BY club_name COLLATE NOCASE
             `,
-            args: [database, database],
-          });
-          const nations = await db.execute({
-            sql: `
-              SELECT name
-              FROM (
-                SELECT nation_name AS name
-                FROM player_search
-                WHERE database_slug = ?
-                  AND nation_name IS NOT NULL
-                  AND nation_name <> ''
-                UNION
-                SELECT name
-                FROM nations
-                WHERE database_slug = ?
-                  AND name IS NOT NULL
-                  AND name <> ''
-              )
-              ORDER BY name COLLATE NOCASE
+              args: [database],
+            },
+            {
+              sql: `
+              SELECT DISTINCT nation_name AS name
+              FROM player_search
+              WHERE database_slug = ?
+                AND nation_name IS NOT NULL
+                AND nation_name <> ''
+              ORDER BY nation_name COLLATE NOCASE
             `,
-            args: [database, database],
-          });
+              args: [database],
+            },
+          ]);
           let leagueRows: unknown[] = [];
           try {
             const leagues = await db.execute({
@@ -1661,11 +1653,20 @@ export default {
               throw error;
             }
           }
+          const staticLeagueNames = Object.values(
+            resolvedLeagueMap[canonicalDatabaseSlug(database)] || {},
+          );
+          const leagueNames = [
+            ...new Set([
+              ...leagueRows.map((row) => textField(row as QueryRow, "name")),
+              ...staticLeagueNames,
+            ].filter(Boolean)),
+          ].sort((left, right) => left.localeCompare(right));
 
           return {
             clubs: clubs.rows,
             nations: nations.rows,
-            leagues: leagueRows,
+            leagues: leagueNames.map((name) => ({ name })),
           };
         });
       }

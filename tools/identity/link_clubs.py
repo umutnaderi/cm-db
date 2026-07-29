@@ -32,8 +32,24 @@ def overrides(path:Path)->dict[tuple[str,str],dict[str,str]]:
         return result
 
 
-def canonical(connection,name,nation_id,team_type,public_id,identity_cache,id_cache,public_cache):
+def canonical(connection,name,nation_id,team_type,public_id,identity_cache,id_cache,public_cache,allow_existing_public=False):
     normalized=normalize_name(name)
+    public_match=public_cache.get(public_id)
+    if public_match and allow_existing_public:
+        connection.execute(
+            """
+            UPDATE canonical_clubs
+               SET preferred_name = ?,
+                   updated_at = CASE
+                     WHEN preferred_name <> ?
+                     THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                   END
+             WHERE id = ?
+            """,
+            (name, name, public_match),
+        )
+        return public_match
     old=identity_cache.get((normalized,nation_id,team_type))
     if old:
         if public_id and public_id!=old[1]: raise RuntimeError(f"Stable club public ID conflict for {name}")
@@ -42,7 +58,7 @@ def canonical(connection,name,nation_id,team_type,public_id,identity_cache,id_ca
     if collision: raise RuntimeError(f"Club ID collision: {public_id} / {collision}")
     connection.execute("INSERT INTO canonical_clubs(id,public_id,preferred_name,normalized_name,canonical_nation_id,team_type) VALUES(?,?,?,?,?,?)",(integer,public_id,name,normalized,nation_id,team_type))
     identity_cache[(normalized,nation_id,team_type)]=(integer,public_id)
-    id_cache[integer]=public_id;public_cache[public_id]=public_id
+    id_cache[integer]=public_id;public_cache[public_id]=integer
     return integer
 
 
@@ -108,7 +124,7 @@ def link(registry_path:Path,overrides_path:Path)->dict[str,int]:
 
         existing=list(con.execute("SELECT id,public_id,normalized_name,canonical_nation_id,team_type FROM canonical_clubs"))
         identity_cache={(r["normalized_name"],r["canonical_nation_id"],r["team_type"]):(int(r["id"]),r["public_id"]) for r in existing}
-        id_cache={int(r["id"]):r["public_id"] for r in existing};public_cache={r["public_id"]:r["public_id"] for r in existing}
+        id_cache={int(r["id"]):r["public_id"] for r in existing};public_cache={r["public_id"]:int(r["id"]) for r in existing}
 
         con.execute("BEGIN IMMEDIATE")
         con.execute("""DELETE FROM club_identity_links WHERE NOT EXISTS(SELECT 1 FROM source_clubs s WHERE s.database_slug=club_identity_links.database_slug AND s.source_club_id=club_identity_links.source_club_id AND s.active=1)""")
@@ -123,7 +139,17 @@ def link(registry_path:Path,overrides_path:Path)->dict[str,int]:
             else: public=row["auto_public_id"]
             if not public:
                 raise RuntimeError(f"Ambiguous club override requires canonical_public_id: {key}")
-            target=canonical(con,name,row["canonical_nation_id"],kind,public,identity_cache,id_cache,public_cache)
+            target=canonical(
+                con,
+                name,
+                row["canonical_nation_id"],
+                kind,
+                public,
+                identity_cache,
+                id_cache,
+                public_cache,
+                bool(rule and rule["canonical_public_id"]),
+            )
             method="exact_context" if not rule else ("keep_separate" if rule["action"]=="keep_separate" else "manual_override")
             review="auto_accepted" if not rule else "manual_override"
             evidence=json.dumps({"canonical_nation_id":row["canonical_nation_id"],"city":row["city"],"source_name":row["source_name"],"stadium":row["stadium"],"team_type":kind},ensure_ascii=False,sort_keys=True,separators=(",",":"))

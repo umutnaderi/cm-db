@@ -9,14 +9,27 @@ from pathlib import Path
 
 from common import REGISTRY_DB, ROOT, normalize_name, registry_connection
 from link_players import load_overrides, stable_id
+from player_components import (
+    COMPONENT_RESOLUTIONS,
+    apply_component_fields,
+    load_component_resolutions,
+)
 
 OVERRIDES=ROOT/"config"/"identity"/"player_overrides.csv"
 
 
-def enforce(registry_path:Path,overrides_path:Path)->dict[str,int]:
+def enforce(
+    registry_path: Path,
+    overrides_path: Path,
+    component_resolutions_path: Path = COMPONENT_RESOLUTIONS,
+) -> dict[str, int]:
     con=registry_connection(registry_path);rules=load_overrides(overrides_path)
+    components=load_component_resolutions(component_resolutions_path)
     try:
         con.execute("BEGIN IMMEDIATE")
+        component_stats=apply_component_fields(
+            con,components,clear_quarantine=True
+        )
         unsafe=[row[0] for row in con.execute("""SELECT canonical_player_id FROM player_identity_links l JOIN source_players s USING(database_slug,source_person_id) WHERE s.normalized_date_of_birth IS NOT NULL GROUP BY canonical_player_id HAVING julianday(MAX(s.normalized_date_of_birth))-julianday(MIN(s.normalized_date_of_birth))>2""")]
         quarantined=0
         for canonical_id in unsafe:
@@ -46,11 +59,11 @@ def enforce(registry_path:Path,overrides_path:Path)->dict[str,int]:
             evidence=json.dumps({"action":rule["action"],"notes":rule["notes"],"source_name":source["display_name"] or source["full_name"]},ensure_ascii=False,sort_keys=True,separators=(",",":"))
             con.execute("""INSERT INTO player_identity_links(database_slug,source_person_id,canonical_player_id,match_method,confidence,review_status,evidence_json) VALUES(?,?,?,'manual_override',1.0,'manual_override',?) ON CONFLICT(database_slug,source_person_id) DO UPDATE SET canonical_player_id=excluded.canonical_player_id,match_method=excluded.match_method,confidence=excluded.confidence,review_status=excluded.review_status,evidence_json=excluded.evidence_json,linked_at=CASE WHEN player_identity_links.canonical_player_id<>excluded.canonical_player_id OR player_identity_links.evidence_json<>excluded.evidence_json THEN CURRENT_TIMESTAMP ELSE player_identity_links.linked_at END""",(*key,canonical_id,evidence));applied+=1
         con.commit()
-        return {"unsafe_components":len(unsafe),"quarantined_rows":quarantined,"overrides_applied":applied,"linked":con.execute("SELECT COUNT(*) FROM player_identity_links").fetchone()[0]}
+        return {"unsafe_components":len(unsafe),"quarantined_rows":quarantined,"overrides_applied":applied,"linked":con.execute("SELECT COUNT(*) FROM player_identity_links").fetchone()[0],"reviewed_components":component_stats["components"],"reviewed_members":component_stats["members"]}
     except Exception:con.rollback();raise
     finally:con.close()
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument("--registry",type=Path,default=REGISTRY_DB);p.add_argument("--overrides",type=Path,default=OVERRIDES);a=p.parse_args();s=enforce(a.registry,a.overrides);print("unsafe components quarantined: {unsafe_components}; source rows quarantined: {quarantined_rows}; overrides applied: {overrides_applied}; linked players: {linked}".format(**s))
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument("--registry",type=Path,default=REGISTRY_DB);p.add_argument("--overrides",type=Path,default=OVERRIDES);p.add_argument("--component-resolutions",type=Path,default=COMPONENT_RESOLUTIONS);a=p.parse_args();s=enforce(a.registry,a.overrides,a.component_resolutions);print("unsafe components quarantined: {unsafe_components}; source rows quarantined: {quarantined_rows}; overrides applied: {overrides_applied}; reviewed components: {reviewed_components}; reviewed members: {reviewed_members}; linked players: {linked}".format(**s))
 if __name__=="__main__":main()

@@ -278,13 +278,13 @@ const PITCH_LANES = {
 };
 
 const PITCH_ROWS = {
-  striker: 12,
+  striker: 2,
   attackingMidfield: 26,
   midfield: 40,
   defensiveMidfield: 54,
   defence: 68,
   sweeper: 82,
-  goalkeeper: 94
+  goalkeeper: 94,
 };
 
 const PITCH_SLOTS = [

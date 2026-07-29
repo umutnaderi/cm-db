@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Ultimate Database - Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260728-1">
+    <link rel="stylesheet" href="styles.css?v=20260729-17">
   </head>
   <body>
     <main class="shell">
@@ -31,22 +31,34 @@
         </label>
         <label>
           <span>Club</span>
-          <input id="clubSearch" type="search" placeholder="Real Madrid" autocomplete="off" disabled>
+          <div class="search-autocomplete">
+            <input id="clubSearch" type="search" placeholder="Real Madrid" autocomplete="off" aria-autocomplete="list" aria-controls="clubSuggestions" aria-expanded="false" disabled>
+            <div id="clubSuggestions" class="search-suggestions" role="listbox" hidden></div>
+          </div>
         </label>
         <label>
           <span>League</span>
-          <input id="leagueSearch" type="search" placeholder="Premier Division" autocomplete="off" disabled>
+          <div class="search-autocomplete">
+            <input id="leagueSearch" type="search" placeholder="Premier Division" autocomplete="off" aria-autocomplete="list" aria-controls="leagueSuggestions" aria-expanded="false" disabled>
+            <div id="leagueSuggestions" class="search-suggestions" role="listbox" hidden></div>
+          </div>
         </label>
         <label>
           <span>Nation</span>
-          <input id="nationSearch" type="search" placeholder="Brazil" autocomplete="off" disabled>
+          <div class="search-autocomplete">
+            <input id="nationSearch" type="search" placeholder="Brazil" autocomplete="off" aria-autocomplete="list" aria-controls="nationSuggestions" aria-expanded="false" disabled>
+            <div id="nationSuggestions" class="search-suggestions" role="listbox" hidden></div>
+          </div>
         </label>
       </section>
 
       <section class="workspace">
         <aside class="results" aria-label="Search results">
           <div class="results-head">
-            <h2>Players</h2>
+            <div class="results-heading">
+              <h2>Players</h2>
+              <div id="activeSearchFilters" class="active-search-filters" aria-label="Active search conditions"></div>
+            </div>
             <span id="resultCount">0 shown</span>
           </div>
           <div id="resultsList" class="results-list"></div>
@@ -62,6 +74,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="src/databaseSearch.js?v=20260728-1" type="module"></script>
+    <script src="src/databaseSearch.js?v=20260729-17" type="module"></script>
   </body>
 </html>

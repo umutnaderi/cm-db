@@ -8,3 +8,7 @@ link,cm0102_vanilla_original,98231,player_figo_portugal_1972,Figo,Sentinel cross
 link,cm0203_vanilla_original,540,player_figo_portugal_1972,Figo,Sentinel cross-database identity
 link,cm0304_vanilla_original,518,player_figo_portugal_1972,Figo,Sentinel cross-database identity
 link,cm9697_vanilla_original,4069,player_rivaldo_brazil_1972,Rivaldo,Sentinel: missing DOB in CM 96/97
+link,cm9697_vanilla_original,4,player_ryan_giggs_wales_1973,Ryan Giggs,Confirmed same player; early source row omits date of birth
+link,cm9697_vanilla_original,4010,player_gheorghe_hagi_romania_1965,Gheorghe Hagi,Confirmed typo variant; raw source name remains unchanged
+link,cm0203_vanilla_original,27749,player_kaka_brazil_1982,Kaká,Exact full name DOB and nation; missing from automatic component
+link,cm0102_vanilla_original,41216,player_maxim_tsigalko_belarus_1983,Maxim Tsigalko,Confirmed same player; source DOB is a 1900 placeholder

@@ -154,12 +154,13 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     }
     const pullTotal = tierPulls.reduce((sum, count) => sum + count, 0);
     globalThis.assert.ok(tierPulls[0] > 0 && tierPulls[0] / pullTotal < 0.04);
-    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.06 && tierPulls[1] / pullTotal < 0.14);
-    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.08 && tierPulls[2] / pullTotal < 0.17);
-    globalThis.assert.ok(tierPulls[3] / pullTotal > 0.37 && tierPulls[3] / pullTotal < 0.49);
-    globalThis.assert.ok(tierPulls[4] / pullTotal > 0.27 && tierPulls[4] / pullTotal < 0.38);
+    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.1 && tierPulls[1] / pullTotal < 0.18);
+    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.28 && tierPulls[2] / pullTotal < 0.4);
+    globalThis.assert.ok(tierPulls[3] / pullTotal > 0.3 && tierPulls[3] / pullTotal < 0.43);
+    globalThis.assert.ok(tierPulls[4] / pullTotal > 0.08 && tierPulls[4] / pullTotal < 0.18);
     globalThis.assert.ok(tierPulls[5] / pullTotal < 0.02);
-    globalThis.assert.ok(tierPulls[3] > tierPulls[1] + tierPulls[2]);
+    globalThis.assert.ok(tierPulls[2] > tierPulls[1]);
+    globalThis.assert.ok(tierPulls[3] > tierPulls[1]);
     state.premiumDrought = 4;
     const protectedPremiumRoll = chooseSuggestions(suggestionPool, 901);
     globalThis.assert.ok(
@@ -238,6 +239,7 @@ vm.runInNewContext(setupSource, {
 });
 const setupSourceText = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8");
 const setupHtml = fs.readFileSync(new URL("../draft-setup.html", import.meta.url), "utf8");
+const setupStyles = fs.readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 assert.ok(
   !setupSourceText.includes("if (!fit.slot || fit.score <= 0)"),
   "Zero-rated suggestions must remain selectable as emergency cover",
@@ -245,7 +247,19 @@ assert.ok(
 assert.ok(setupSourceText.includes('"is-emergency-target", "fit-none"'));
 assert.ok(setupHtml.includes('data-scenario="ucl0203"'));
 assert.ok(setupHtml.includes('data-scenario="ucl0304"'));
+assert.equal((setupHtml.match(/<small>Group Stages<\/small>/g) || []).length, 2);
 assert.ok(setupSourceText.includes("scenario: state.scenario"));
+assert.ok(setupSourceText.includes("state.rollNumber > 0"));
+assert.ok(setupSourceText.includes("selectedDraftSlotId"));
+assert.ok(setupSourceText.includes("state.captainSlotId = slotId"));
+assert.ok(setupSourceText.includes("state.captainSlotId = sourceSlotId"));
+assert.ok(setupStyles.includes(".formation-player.is-swap-source"));
+assert.ok(!setupStyles.includes('.formation-pitch[data-style="defensive"] .formation-player'));
+assert.ok(!setupStyles.includes('.formation-pitch[data-style="attacking"] .formation-player'));
+const emptyPositionRules = [...setupStyles.matchAll(/\.formation-player\s*\{[^}]+\}/g)];
+assert.ok(emptyPositionRules.length >= 1);
+assert.ok(emptyPositionRules.filter((match) => match[0].includes("border: 2px solid")).length >= 2);
+assert.ok(emptyPositionRules.every((match) => !match[0].includes("border: 2px dashed")));
 
 const runHtml = fs.readFileSync(new URL("../draft-run.html", import.meta.url), "utf8");
 const runSourceText = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8");

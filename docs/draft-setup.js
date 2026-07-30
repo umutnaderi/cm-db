@@ -111,6 +111,7 @@ const state = {
   mode: "Classic",
   suggestions: [],
   selectedCandidateKey: "",
+  selectedDraftSlotId: "",
   drafted: new Map(),
   captainSlotId: "",
   rolling: false,
@@ -566,10 +567,10 @@ function seededShuffle(items, seed) {
 
 const ABILITY_DROP_TABLE = [
   { minimum: 185, maximum: Infinity, share: 0.02 },
-  { minimum: 170, maximum: 184, share: 0.09 },
-  { minimum: 156, maximum: 169, share: 0.12 },
-  { minimum: 140, maximum: 155, share: 0.4 },
-  { minimum: 120, maximum: 139, share: 0.3 },
+  { minimum: 170, maximum: 184, share: 0.13 },
+  { minimum: 156, maximum: 169, share: 0.32 },
+  { minimum: 140, maximum: 155, share: 0.34 },
+  { minimum: 120, maximum: 139, share: 0.12 },
   { minimum: -Infinity, maximum: 119, share: 0.005 },
 ];
 
@@ -704,6 +705,12 @@ function pitchMarkings() {
 function renderPitch() {
   pitch.replaceChildren(pitchMarkings());
   pitch.dataset.style = state.style.toLowerCase();
+  const setupLocked = state.rolling || state.rollNumber > 0 || state.drafted.size > 0;
+  for (const container of [formationChoices, styleChoices, modeChoices]) {
+    container.querySelectorAll("button").forEach((button) => {
+      button.disabled = setupLocked;
+    });
+  }
   const selected = state.suggestions.find(
     (candidate) => candidateKey(candidate) === state.selectedCandidateKey,
   );
@@ -719,7 +726,11 @@ function renderPitch() {
     marker.style.top = `${item.y}%`;
     marker.title = drafted
       ? state.drafted.size >= 11
-        ? `${playerName(drafted)} · click to select as captain`
+        ? state.captainSlotId
+          ? state.selectedDraftSlotId
+            ? `${playerName(drafted)} · click to swap positions`
+            : `${playerName(drafted)} · select to move`
+          : `${playerName(drafted)} · click to select as captain`
         : `${playerName(drafted)} · locked at ${item.effectiveRole}`
       : selected
         ? fit.score > 0
@@ -738,6 +749,7 @@ function renderPitch() {
       );
       if (draftedFit.level !== "natural") marker.classList.add("is-out-of-position");
       if (isCaptain) marker.classList.add("is-captain");
+      if (state.selectedDraftSlotId === item.id) marker.classList.add("is-swap-source");
       if (state.drafted.size < 11) {
         marker.classList.add("is-locked-position");
         marker.disabled = true;
@@ -794,7 +806,9 @@ function renderPitch() {
       ? playerName(state.drafted.get(state.captainSlotId))
       : "Select your Captain";
     captainPrompt.querySelector("small").textContent = state.captainSlotId
-      ? "Select another player on the pitch to change the captain."
+      ? state.selectedDraftSlotId
+        ? "Now select another player to swap their positions."
+        : "Select a player, then another player, to swap their positions."
       : "Select one of the eleven players on the pitch.";
   }
   progress.textContent = state.drafted.size < 11
@@ -868,6 +882,7 @@ function resetDraft(message) {
   state.captainSlotId = "";
   state.suggestions = [];
   state.selectedCandidateKey = "";
+  state.selectedDraftSlotId = "";
   state.rollNumber = 0;
   state.rerollsRemaining = 3;
   state.qualityDrought = 0;
@@ -944,7 +959,14 @@ Object.keys(formations).forEach((formation) => {
 function bindChoiceGroup(container, key) {
   container.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-value]");
-    if (!button || state[key] === button.dataset.value) return;
+    if (
+      !button
+      || button.disabled
+      || state.rolling
+      || state.rollNumber > 0
+      || state.drafted.size > 0
+      || state[key] === button.dataset.value
+    ) return;
     state[key] = button.dataset.value;
     container.querySelectorAll("button").forEach((item) => {
       item.classList.toggle("is-selected", item === button);
@@ -988,9 +1010,36 @@ pitch.addEventListener("click", (event) => {
   if (state.drafted.has(slotId) && !state.selectedCandidateKey) {
     const drafted = state.drafted.get(slotId);
     if (state.drafted.size >= 11) {
-      state.captainSlotId = slotId;
-      rollIntro.textContent = `${playerName(drafted)} selected as captain. The hidden boost will apply in matches.`;
-      suggestionHelp.textContent = "Click another player to change the captain.";
+      if (!state.captainSlotId) {
+        state.captainSlotId = slotId;
+        state.selectedDraftSlotId = "";
+        rollIntro.textContent = `${playerName(drafted)} selected as captain. The hidden boost will apply in matches.`;
+        suggestionHelp.textContent = "Select a player, then another player, to swap their positions.";
+        renderPitch();
+        return;
+      }
+      if (!state.selectedDraftSlotId) {
+        state.selectedDraftSlotId = slotId;
+        suggestionHelp.textContent = `${playerName(drafted)} selected. Choose another player to swap positions.`;
+        renderPitch();
+        return;
+      }
+      if (state.selectedDraftSlotId === slotId) {
+        state.selectedDraftSlotId = "";
+        suggestionHelp.textContent = "Position switch cancelled. Select a player to move.";
+        renderPitch();
+        return;
+      }
+      const sourceSlotId = state.selectedDraftSlotId;
+      const sourcePlayer = state.drafted.get(sourceSlotId);
+      const targetPlayer = state.drafted.get(slotId);
+      state.drafted.set(sourceSlotId, targetPlayer);
+      state.drafted.set(slotId, sourcePlayer);
+      if (state.captainSlotId === sourceSlotId) state.captainSlotId = slotId;
+      else if (state.captainSlotId === slotId) state.captainSlotId = sourceSlotId;
+      state.selectedDraftSlotId = "";
+      rollIntro.textContent = `${playerName(sourcePlayer)} and ${playerName(targetPlayer)} switched positions.`;
+      suggestionHelp.textContent = "Select another pair of players to switch positions.";
       renderPitch();
       return;
     }
@@ -1008,6 +1057,7 @@ pitch.addEventListener("click", (event) => {
   state.drafted.set(slotId, candidate);
   state.suggestions = [];
   state.selectedCandidateKey = "";
+  state.selectedDraftSlotId = "";
   rollIntro.textContent = fit.score > 0
     ? `${playerName(candidate)} drafted at ${target.effectiveRole} (${fit.label.toLowerCase()}).`
     : `${playerName(candidate)} drafted as emergency cover at ${target.effectiveRole}; the severe out-of-position penalty will apply.`;

@@ -222,6 +222,18 @@ function playerKey(player) {
   return `${player.database_slug}:${player.source_person_id}`;
 }
 
+function playerDeepLink(player) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("database", player.database_slug);
+  url.searchParams.set("player", player.source_person_id);
+  return url;
+}
+
+function syncPlayerUrl(player, replace = false) {
+  const method = replace ? "replaceState" : "pushState";
+  window.history[method]({}, "", playerDeepLink(player));
+}
+
 function seasonEntryKey(entry) {
   return `${entry.database_slug}:${entry.source_person_id}`;
 }
@@ -1480,6 +1492,7 @@ function selectSeasonEntry(entry) {
   state.seasonError = "";
   renderSummary();
   renderResults();
+  syncPlayerUrl(entry);
   loadPlayerDetail(entry);
 }
 
@@ -1711,6 +1724,7 @@ function bindEvents() {
     state.selectedProfile = null;
     state.detailError = "";
     renderResults();
+    syncPlayerUrl(player);
     loadPlayerDetail(player);
     if (window.matchMedia("(max-width: 640px)").matches) {
       window.scrollTo({ top: 0, behavior: "auto" });
@@ -1796,7 +1810,12 @@ async function init() {
         return option;
       }),
     );
-    state.selectedDatabase = latestDatabase.slug;
+    const deepLink = new URLSearchParams(window.location.search);
+    const requestedDatabase = deepLink.get("database") || "";
+    const requestedPlayer = deepLink.get("player") || "";
+    state.selectedDatabase = state.databases.some((database) => database.slug === requestedDatabase)
+      ? requestedDatabase
+      : latestDatabase.slug;
     elements.databaseSelect.value = state.selectedDatabase;
     elements.databaseSelect.disabled = false;
     elements.nameSearch.disabled = false;
@@ -1807,8 +1826,22 @@ async function init() {
     renderSummary();
     state.page = 1;
     state.hasMorePlayers = true;
-    void loadPlayers({ append: false });
     void loadFilterOptions();
+    if (requestedPlayer && state.selectedDatabase === requestedDatabase) {
+      const detail = await getPlayer(state.selectedDatabase, requestedPlayer);
+      if (!detail.item) throw new Error("The linked player could not be found.");
+      state.items = [detail.item];
+      state.selectedPlayer = detail.item;
+      state.selectedProfile = detail.profile || null;
+      state.detailCache.set(playerKey(detail.item), detail);
+      renderResults();
+      renderProfile();
+      syncPlayerUrl(detail.item, true);
+      void loadPlayerSeasons(detail.item);
+      void loadPlayerHistory(detail.item);
+    } else {
+      void loadPlayers({ append: false });
+    }
   } catch (error) {
     setStatus("Load failed");
     renderResults(`Error: ${error.message}`);

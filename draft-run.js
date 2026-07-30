@@ -1,4 +1,9 @@
-import { getPlayer, searchPlayers } from "./src/lib/retroballApi.js";
+import {
+  getDraftRecords,
+  getPlayer,
+  saveDraftRecord,
+  searchPlayers,
+} from "./src/lib/retroballApi.js";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
@@ -54,6 +59,11 @@ const elements = {
   bracketPanel: document.querySelector("#runBracketPanel"),
   bracket: document.querySelector("#runBracket"),
   resultCard: document.querySelector("#runResultCard"),
+  recordsPanel: document.querySelector("#runRecordsPanel"),
+  recordForm: document.querySelector("#runRecordForm"),
+  recordUsername: document.querySelector("#runRecordUsername"),
+  recordStatus: document.querySelector("#runRecordStatus"),
+  recordRows: document.querySelector("#runRecordRows"),
 };
 
 function readJsonStorage(key, fallback) {
@@ -143,6 +153,9 @@ const state = {
   knockoutPath: [],
   busy: false,
   completed: false,
+  champion: false,
+  outcomeStage: "",
+  savedUsername: "",
   userRecord: {
     played: 0,
     wins: 0,
@@ -151,6 +164,7 @@ const state = {
     gf: 0,
     ga: 0,
     scorers: {},
+    matches: [],
   },
   table: new Map(),
   matchNumber: 0,
@@ -220,7 +234,7 @@ function userPlayers() {
     ...entry.player,
     role: entry.role,
     line: entry.line,
-    overall: Math.round((Number(entry.player?.current_ability) || 0) / 2),
+    overall: clamp(0, 99, Math.round((Number(entry.player?.current_ability) || 0) / 2)),
     isCaptain: entry.isCaptain,
   }));
 }
@@ -228,9 +242,9 @@ function userPlayers() {
 function visibleSquadRatings() {
   const entries = team.players.map((entry) => ({
     line: entry.line,
-    overall: Math.round(
+    overall: clamp(0, 99, Math.round(
       (Number(entry.player?.current_ability) || Number(entry.overall) * 2 || 0) / 2,
-    ),
+    )),
   }));
   const lineAverage = (line) => Math.round(average(
     entries.filter((entry) => entry.line === line).map((entry) => entry.overall),
@@ -385,6 +399,11 @@ function buildTimeline({
         side: spec.side,
         goal: true,
         scorer: playerName(scorer),
+        scorerPlayer: {
+          name: playerName(scorer),
+          database: scorer?.database_slug || DATABASE,
+          sourcePersonId: String(scorer?.source_person_id || ""),
+        },
         text: `${playerName(scorer)} keeps calm and beats ${playerName(keeper)}.`,
       });
       continue;
@@ -622,6 +641,132 @@ function applyStanding(leftKey, rightKey, leftGoals, rightGoals) {
   }
 }
 
+function playerHref(player) {
+  const database = player?.database || player?.database_slug;
+  const sourcePersonId = player?.sourcePersonId || player?.source_person_id;
+  if (!database || !sourcePersonId) return "";
+  const params = new URLSearchParams({
+    database: String(database),
+    player: String(sourcePersonId),
+  });
+  return `database.html?${params}`;
+}
+
+function topScorerSummary() {
+  const [name = "—", entry = { goals: 0, player: null }] = Object.entries(state.userRecord.scorers)
+    .sort((left, right) =>
+      Number(right[1]?.goals || 0) - Number(left[1]?.goals || 0)
+      || left[0].localeCompare(right[0]))[0] || [];
+  return { name, goals: Number(entry.goals || 0), player: entry.player || null };
+}
+
+function currentRecordStage() {
+  if (state.champion) return { label: "Champion", rank: 8 };
+  if (state.outcomeStage) {
+    const rank = Math.max(1, KNOCKOUT_STAGES.indexOf(state.outcomeStage) + 4);
+    return { label: state.outcomeStage, rank };
+  }
+  const latest = state.userRecord.matches.at(-1)?.stage || "Group stage";
+  const knockoutRank = KNOCKOUT_STAGES.indexOf(latest);
+  return {
+    label: latest.startsWith("Group") ? `Group · ${state.userRecord.played}/3` : latest,
+    rank: knockoutRank >= 0 ? knockoutRank + 4 : Math.min(3, state.userRecord.played),
+  };
+}
+
+function recordPayload(username) {
+  const captain = team.players.find((entry) => entry.isCaptain)?.player;
+  const top = topScorerSummary();
+  const stage = currentRecordStage();
+  return {
+    runId: `${runSeed}:${team.teamName}`,
+    username,
+    teamName: team.teamName,
+    stage: stage.label,
+    stageRank: stage.rank,
+    champion: state.champion ? 1 : 0,
+    captainName: playerName(captain),
+    captainDatabase: captain?.database_slug || "",
+    captainSourcePersonId: String(captain?.source_person_id || ""),
+    topScorerName: top.name,
+    topScorerDatabase: top.player?.database || "",
+    topScorerSourcePersonId: top.player?.sourcePersonId || "",
+    topScorerGoals: top.goals,
+    played: state.userRecord.played,
+    wins: state.userRecord.wins,
+    draws: state.userRecord.draws,
+    losses: state.userRecord.losses,
+    goalsFor: state.userRecord.gf,
+    goalsAgainst: state.userRecord.ga,
+  };
+}
+
+function linkedRecordPlayer(name, database, sourcePersonId, suffix = "") {
+  const href = playerHref({ database, sourcePersonId });
+  const label = `${name || "—"}${suffix}`;
+  return href
+    ? `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`
+    : escapeHtml(label);
+}
+
+function renderRecordRows(items = []) {
+  elements.recordRows.replaceChildren();
+  if (!items.length) {
+    elements.recordRows.innerHTML = '<tr><td colspan="4">No saved runs yet.</td></tr>';
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <th>${escapeHtml(item.username)}</th>
+      <td>${escapeHtml(item.champion ? "Champion" : item.stage)}</td>
+      <td>${linkedRecordPlayer(item.captain_name, item.captain_database, item.captain_source_person_id)}</td>
+      <td>${linkedRecordPlayer(item.top_scorer_name, item.top_scorer_database, item.top_scorer_source_person_id, ` · ${item.top_scorer_goals}`)}</td>
+    `;
+    elements.recordRows.append(row);
+  });
+}
+
+async function loadRecordTable() {
+  try {
+    const payload = await getDraftRecords();
+    renderRecordRows(Array.isArray(payload.items) ? payload.items : []);
+  } catch {
+    renderRecordRows([]);
+    elements.recordStatus.textContent = "Records are temporarily unavailable.";
+  }
+}
+
+function renderRecordOpportunity() {
+  if (!state.userRecord.played) return;
+  elements.recordsPanel.hidden = false;
+  const stage = currentRecordStage();
+  elements.recordStatus.textContent = `Save your current ${stage.label.toLowerCase()} record.`;
+  void loadRecordTable();
+}
+
+async function saveCurrentRecord(event) {
+  event.preventDefault();
+  const username = elements.recordUsername.value.trim();
+  if (username.length < 2) {
+    elements.recordStatus.textContent = "Enter at least two characters.";
+    return;
+  }
+  const button = elements.recordForm.querySelector("button");
+  button.disabled = true;
+  elements.recordStatus.textContent = "Saving record…";
+  try {
+    await saveDraftRecord(recordPayload(username));
+    state.savedUsername = username;
+    elements.recordStatus.textContent = "Record saved. Saving again updates this run.";
+    await loadRecordTable();
+  } catch (error) {
+    elements.recordStatus.textContent = error.message || "Could not save this record.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function updateUserRecord(result) {
   const record = state.userRecord;
   record.played += 1;
@@ -633,8 +778,22 @@ function updateUserRecord(result) {
   [...result.events, ...result.extraTimeEvents]
     .filter((event) => event.goal && event.side === "user")
     .forEach((event) => {
-      record.scorers[event.scorer] = (record.scorers[event.scorer] || 0) + 1;
+      const existing = record.scorers[event.scorer] || {
+        goals: 0,
+        player: event.scorerPlayer || null,
+      };
+      existing.goals += 1;
+      if (!existing.player && event.scorerPlayer) existing.player = event.scorerPlayer;
+      record.scorers[event.scorer] = existing;
     });
+  record.matches.push({
+    stage: result.stage,
+    opponent: result.opponentName,
+    userGoals: result.userGoals,
+    rivalGoals: result.rivalGoals,
+    shootout: result.shootout || null,
+  });
+  renderRecordOpportunity();
 }
 
 function sortedTable() {
@@ -677,9 +836,9 @@ function renderSquad() {
   `;
   elements.squadList.replaceChildren();
   team.players.forEach((entry) => {
-    const visibleOverall = Math.round(
+    const visibleOverall = clamp(0, 99, Math.round(
       (Number(entry.player?.current_ability) || Number(entry.overall) * 2 || 0) / 2,
-    );
+    ));
     const item = document.createElement("li");
     item.innerHTML = `
       <span>${escapeHtml(entry.role)}</span>
@@ -765,7 +924,10 @@ async function animatePenaltyShootout(result, article, scoreDisplay) {
     if (attempt.opponentScored) theirs += 1;
     penaltyScore.textContent = `${ours} – ${theirs}`;
     list.insertAdjacentHTML("beforeend", `
-      <li><b>${attempt.round}</b><span class="${attempt.userScored ? "is-scored" : "is-missed"}">${escapeHtml(attempt.userText)}</span><span class="${attempt.opponentScored ? "is-scored" : "is-missed"}">${escapeHtml(attempt.opponentText)}</span></li>
+      <li>
+        <span class="${attempt.userScored ? "is-scored" : "is-missed"}">${escapeHtml(attempt.userTaker)} <b aria-label="${attempt.userScored ? "scored" : "missed"}">${attempt.userScored ? "○" : "×"}</b></span>
+        <span class="${attempt.opponentScored ? "is-scored" : "is-missed"}"><b aria-label="${attempt.opponentScored ? "scored" : "missed"}">${attempt.opponentScored ? "○" : "×"}</b> ${escapeHtml(attempt.opponentTaker)}</span>
+      </li>
     `);
   }
   scoreDisplay.textContent = `${result.userGoals} – ${result.rivalGoals} (${ours}–${theirs} pens)`;
@@ -954,12 +1116,26 @@ function renderBracket() {
 
 function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" } = {}) {
   state.completed = true;
+  state.champion = champion;
+  state.outcomeStage = champion ? "Champion" : eliminatedStage || "Group stage";
   elements.nextButton.disabled = true;
   elements.nextButton.hidden = true;
   const record = state.userRecord;
-  const [topScorer = "—", topGoals = 0] = Object.entries(record.scorers)
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0] || [];
+  const top = topScorerSummary();
   const captain = team.players.find((entry) => entry.isCaptain);
+  const captainLink = playerHref(captain?.player);
+  const topScorerLink = playerHref(top.player);
+  const matchSummary = champion
+    ? `<div class="run-result-matches">
+        <h3>Road to the trophy</h3>
+        <ol>${record.matches.map((match) => `
+          <li>
+            <span>${escapeHtml(match.stage)} · ${escapeHtml(match.opponent)}</span>
+            <strong>${match.userGoals}–${match.rivalGoals}${match.shootout ? ` (${match.shootout[0]}–${match.shootout[1]} pens)` : ""}</strong>
+          </li>`).join("")}
+        </ol>
+      </div>`
+    : "";
   elements.resultCard.hidden = false;
   elements.resultCard.className = `run-result-card ${champion ? "is-champion" : "is-eliminated"}`;
   elements.resultCard.innerHTML = `
@@ -979,15 +1155,20 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
       <span><strong>${state.groupPlace || "—"}</strong><small>Group place</small></span>
     </div>
     <div class="run-result-honours">
-      <span><small>Captain</small><strong>${escapeHtml(playerName(captain?.player))}</strong></span>
-      <span><small>Top scorer</small><strong>${escapeHtml(topScorer)} · ${topGoals} goal${topGoals === 1 ? "" : "s"}</strong></span>
+      <span><small>Captain</small><strong>${captainLink ? `<a href="${escapeHtml(captainLink)}">${escapeHtml(playerName(captain?.player))}</a>` : escapeHtml(playerName(captain?.player))}</strong></span>
+      <span><small>Top scorer</small><strong>${topScorerLink ? `<a href="${escapeHtml(topScorerLink)}">${escapeHtml(top.name)}</a>` : escapeHtml(top.name)} · ${top.goals} goal${top.goals === 1 ? "" : "s"}</strong></span>
       <span><small>Exit stage</small><strong>${escapeHtml(champion ? "Winner" : eliminatedStage || "Group stage")}</strong></span>
     </div>
+    ${matchSummary}
     <div class="run-result-actions">
       <button type="button" data-replay>Replay run</button>
       <a href="draft-setup.html">Edit team</a>
     </div>
   `;
+  renderRecordOpportunity();
+  if (state.savedUsername) {
+    void saveDraftRecord(recordPayload(state.savedUsername)).then(loadRecordTable).catch(() => {});
+  }
   elements.resultCard.querySelector("[data-replay]").addEventListener("click", () => window.location.reload());
   elements.resultCard.scrollIntoView({ behavior: "smooth", block: "center" });
 }
@@ -1114,6 +1295,7 @@ function showMissingTeam() {
 }
 
 elements.nextButton.addEventListener("click", playNext);
+elements.recordForm.addEventListener("submit", saveCurrentRecord);
 elements.seed.textContent = `Offline UCL 03/04 · Seed #${runSeed}`;
 
 if (!team?.players || team.players.length !== 11 || !team.captainSlotId) {

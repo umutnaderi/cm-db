@@ -75,7 +75,7 @@ function json(data: unknown, _env: Env, status = 200, cacheSeconds = 60): Respon
     headers: {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers": "content-type",
       "cache-control": `public, max-age=${cacheSeconds}`,
     },
@@ -614,6 +614,86 @@ export default {
     const db = d1Client(env.DB);
 
     try {
+      if (url.pathname === "/api/draft-records") {
+        if (request.method === "GET") {
+          const result = await env.DB.prepare(`
+            SELECT
+              id, username, team_name, stage, stage_rank, champion,
+              captain_name, captain_database, captain_source_person_id,
+              top_scorer_name, top_scorer_database, top_scorer_source_person_id,
+              top_scorer_goals, played, wins, draws, losses,
+              goals_for, goals_against, updated_at
+            FROM draft_records
+            ORDER BY
+              champion DESC, stage_rank DESC, wins DESC,
+              (goals_for - goals_against) DESC, goals_for DESC, updated_at ASC
+            LIMIT 50
+          `).all<QueryRow>();
+          return json({ items: result.results }, env, 200, 0);
+        }
+
+        if (request.method !== "POST") {
+          return json({ error: "Method not allowed." }, env, 405, 0);
+        }
+
+        const body = await request.json<Record<string, unknown>>().catch(() => null);
+        const text = (key: string, maximum: number) =>
+          typeof body?.[key] === "string" ? String(body[key]).trim().slice(0, maximum) : "";
+        const integer = (key: string, maximum = 999) =>
+          Math.min(maximum, Math.max(0, Math.trunc(Number(body?.[key]) || 0)));
+        const username = text("username", 24);
+        const usernameKey = username.toLocaleLowerCase("en-US");
+        const runId = text("runId", 80);
+        const stage = text("stage", 40);
+        const captainName = text("captainName", 100);
+        const topScorerName = text("topScorerName", 100);
+
+        if (username.length < 2 || !runId || !stage || !captainName || !topScorerName) {
+          return json({ error: "Username and run details are required." }, env, 400, 0);
+        }
+
+        await env.DB.prepare(`
+          INSERT INTO draft_records (
+            run_id, username, username_key, team_name, stage, stage_rank, champion,
+            captain_name, captain_database, captain_source_person_id,
+            top_scorer_name, top_scorer_database, top_scorer_source_person_id,
+            top_scorer_goals, played, wins, draws, losses, goals_for, goals_against
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(run_id, username_key) DO UPDATE SET
+            username = excluded.username,
+            team_name = excluded.team_name,
+            stage = excluded.stage,
+            stage_rank = excluded.stage_rank,
+            champion = excluded.champion,
+            captain_name = excluded.captain_name,
+            captain_database = excluded.captain_database,
+            captain_source_person_id = excluded.captain_source_person_id,
+            top_scorer_name = excluded.top_scorer_name,
+            top_scorer_database = excluded.top_scorer_database,
+            top_scorer_source_person_id = excluded.top_scorer_source_person_id,
+            top_scorer_goals = excluded.top_scorer_goals,
+            played = excluded.played,
+            wins = excluded.wins,
+            draws = excluded.draws,
+            losses = excluded.losses,
+            goals_for = excluded.goals_for,
+            goals_against = excluded.goals_against,
+            updated_at = CURRENT_TIMESTAMP
+        `).bind(
+          runId, username, usernameKey, text("teamName", 60) || "Ultimate XI",
+          stage, integer("stageRank", 10), integer("champion", 1),
+          captainName, text("captainDatabase", 80) || null,
+          text("captainSourcePersonId", 80) || null,
+          topScorerName, text("topScorerDatabase", 80) || null,
+          text("topScorerSourcePersonId", 80) || null,
+          integer("topScorerGoals", 99), integer("played", 20),
+          integer("wins", 20), integer("draws", 20), integer("losses", 20),
+          integer("goalsFor", 99), integer("goalsAgainst", 99),
+        ).run();
+
+        return json({ ok: true }, env, 200, 0);
+      }
+
       if (url.pathname === "/api/databases") {
         return cachedJson(request, env, ctx, 86_400, async () => {
           const result = await db.execute(`

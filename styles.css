@@ -3829,6 +3829,7 @@ select:focus {
 
 .run-event-team {
   min-height: 1em;
+  font-family: "Titillium Web", Arial, sans-serif;
 }
 
 .run-event-team-user {
@@ -3909,15 +3910,26 @@ select:focus {
 
 .run-penalty-list li {
   display: grid;
-  grid-template-columns: 30px 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
   padding: 8px 10px;
   background: #09130d;
   font-size: 0.66rem;
 }
 
-.run-penalty-list li > b {
-  color: #6f9880;
+.run-penalty-list li span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.run-penalty-list li span:last-child {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.run-penalty-list li b {
+  font: 800 1rem "Titillium Web", Arial, sans-serif;
 }
 
 .run-penalty-list .is-scored {
@@ -4179,6 +4191,117 @@ select:focus {
 .run-result-honours strong {
   color: #f4f0e4;
   font-family: "Titillium Web", Arial, sans-serif;
+}
+
+.run-result-honours a,
+.run-record-table a {
+  color: inherit;
+  text-decoration-color: #3d8d58;
+  text-underline-offset: 3px;
+}
+
+.run-result-matches {
+  margin: 0 0 20px;
+  border: 1px solid #284f35;
+  background: #09130d;
+}
+
+.run-result-matches h3 {
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #284f35;
+  color: #f4d94f;
+  font: 800 0.76rem "Titillium Web", Arial, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.run-result-matches ol {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  background: #203b29;
+  list-style: none;
+}
+
+.run-result-matches li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 12px;
+  background: #09130d;
+  font-family: "Titillium Web", Arial, sans-serif;
+}
+
+.run-record-form {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  font-family: "Titillium Web", Arial, sans-serif;
+}
+
+.run-record-form label {
+  color: #f4d94f;
+  font-weight: 700;
+}
+
+.run-record-form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.run-record-form input,
+.run-record-form button {
+  min-height: 36px;
+  border: 1px solid #3b6647;
+  background: #09130d;
+  color: #f4f0e4;
+  font: 600 0.72rem "Titillium Web", Arial, sans-serif;
+}
+
+.run-record-form input {
+  min-width: 0;
+  padding: 7px 9px;
+}
+
+.run-record-form button {
+  padding: 7px 11px;
+  color: #071008;
+  background: #f4d94f;
+  cursor: pointer;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.run-record-form small {
+  color: #71927b;
+}
+
+.run-record-table-wrap {
+  max-height: 280px;
+  margin-top: 12px;
+  overflow: auto;
+}
+
+.run-record-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 600 0.62rem "Titillium Web", Arial, sans-serif;
+}
+
+.run-record-table th,
+.run-record-table td {
+  padding: 7px 5px;
+  border-bottom: 1px solid #203b29;
+  text-align: left;
+  vertical-align: top;
+}
+
+.run-record-table thead {
+  color: #71927b;
+  text-transform: uppercase;
 }
 
 .run-result-actions button,

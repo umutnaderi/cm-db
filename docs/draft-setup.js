@@ -115,6 +115,7 @@ const state = {
   captainSlotId: "",
   rolling: false,
   rollNumber: 0,
+  rerollsRemaining: 3,
 };
 
 const formationChoices = document.querySelector("#formationChoices");
@@ -255,7 +256,7 @@ function squadLine(role) {
 }
 
 function draftedOverall(candidate) {
-  return Math.round((Number(candidate.current_ability) || 0) / 2);
+  return Math.min(99, Math.max(0, Math.round((Number(candidate.current_ability) || 0) / 2)));
 }
 
 function averageOverall(values) {
@@ -618,7 +619,7 @@ function renderPitch() {
       : "Starting XI complete";
     captainPrompt.querySelector("strong").textContent = state.captainSlotId
       ? playerName(state.drafted.get(state.captainSlotId))
-      : "Choose your Captain";
+      : "Select your Captain";
     captainPrompt.querySelector("small").textContent = state.captainSlotId
       ? "Select another player on the pitch to change the captain."
       : "Select one of the eleven players on the pitch.";
@@ -627,8 +628,16 @@ function renderPitch() {
     ? `${state.drafted.size} / 11`
     : state.captainSlotId
       ? `11 / 11 · ${playerName(state.drafted.get(state.captainSlotId))} (C)`
-      : "11 / 11 · Choose captain";
-  rollButton.disabled = state.rolling || state.mode !== "Classic" || state.drafted.size >= 11;
+      : "11 / 11 · Select captain";
+  const isReroll = state.suggestions.length > 0;
+  rollButton.innerHTML = isReroll
+    ? `Re-roll <span>${state.rerollsRemaining} left</span>`
+    : 'Roll the Dice <span aria-hidden="true">🎲</span>';
+  rollButton.disabled =
+    state.rolling
+    || state.mode !== "Classic"
+    || state.drafted.size >= 11
+    || (isReroll && state.rerollsRemaining <= 0);
   renderSquadSummary();
 }
 
@@ -687,6 +696,7 @@ function resetDraft(message) {
   state.suggestions = [];
   state.selectedCandidateKey = "";
   state.rollNumber = 0;
+  state.rerollsRemaining = 3;
   rollIntro.textContent = message;
   suggestionHelp.textContent = "Roll the dice for six database-backed choices.";
   renderSuggestions();
@@ -695,6 +705,10 @@ function resetDraft(message) {
 
 async function rollPlayers() {
   if (state.mode !== "Classic" || state.rolling || state.drafted.size >= 11) return;
+  const isReroll = state.suggestions.length > 0;
+  if (isReroll && state.rerollsRemaining <= 0) return;
+  const previousSuggestions = state.suggestions;
+  if (isReroll) state.rerollsRemaining -= 1;
   state.rolling = true;
   state.selectedCandidateKey = "";
   rollIntro.textContent = "Rolling through eight classic databases…";
@@ -711,13 +725,16 @@ async function rollPlayers() {
       throw new Error("No suitable players were found for the remaining positions.");
     }
     rollIntro.textContent = `${state.suggestions.length} players rolled from different seasons.`;
-    suggestionHelp.textContent = "Select a player, then choose one of the highlighted pitch positions.";
+    suggestionHelp.textContent = state.rerollsRemaining > 0
+      ? `Select a player and position, or use one of ${state.rerollsRemaining} remaining re-rolls.`
+      : "Final choices for this position. Select a player, then choose a highlighted pitch position.";
     renderSuggestions();
   } catch (error) {
-    state.suggestions = [];
+    state.suggestions = isReroll ? previousSuggestions : [];
+    if (isReroll) state.rerollsRemaining += 1;
     rollIntro.textContent = "The database roll failed.";
     suggestionHelp.textContent = error.message || "Please try rolling again.";
-    renderSuggestions("Could not load player choices.");
+    renderSuggestions(isReroll ? "" : "Could not load player choices.");
   } finally {
     state.rolling = false;
     renderPitch();
@@ -804,7 +821,7 @@ pitch.addEventListener("click", (event) => {
   state.selectedCandidateKey = "";
   rollIntro.textContent = `${playerName(candidate)} drafted at ${target.effectiveRole} (${fit.label.toLowerCase()}).`;
   suggestionHelp.textContent = state.drafted.size >= 11
-    ? "Starting XI complete. Click one of the eleven players to select the captain and apply the captain boost."
+    ? "Starting XI complete. Select one of the eleven players as your captain."
     : "Signing complete for this roll. Roll again for six fresh choices.";
   renderSuggestions(
     state.drafted.size >= 11

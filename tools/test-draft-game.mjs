@@ -3,7 +3,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8")
-  .replace(/^import .*;\r?\n/, "")
+  .replace(/^import[\s\S]*?;\r?\n/, "")
   .split("Object.keys(formations).forEach")[0]
   .concat(`
     const expected = {
@@ -60,6 +60,8 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       } }),
       { background: "#0030a0", secondary: "#a50044", foreground: "#ffffff" },
     );
+    globalThis.assert.equal(draftedOverall({ current_ability: 200 }), 99);
+    globalThis.assert.equal(draftedOverall({ current_ability: 178 }), 89);
   `);
 
 vm.runInNewContext(setupSource, {
@@ -116,7 +118,7 @@ const savedTeam = {
 };
 
 const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8")
-  .replace(/^import .*;\r?\n/, "")
+  .replace(/^import[\s\S]*?;\r?\n/, "")
   .split("elements.nextButton.addEventListener")[0]
   .concat(`
     (async () => {

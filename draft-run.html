@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Championship Run · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260730-34">
+    <link rel="stylesheet" href="styles.css?v=20260730-35">
   </head>
   <body class="draft-run-page">
     <main class="draft-run-shell">
@@ -74,12 +74,33 @@
             <div class="run-line-ratings" id="runLineRatings"></div>
             <ol class="run-squad-list" id="runSquadList"></ol>
           </section>
+
+          <section class="run-records-card" id="runRecordsPanel" hidden>
+            <div class="run-section-heading">
+              <span class="draft-panel-kicker">Hall of fame</span>
+              <h2>Run records</h2>
+            </div>
+            <form class="run-record-form" id="runRecordForm">
+              <label for="runRecordUsername">Save this run</label>
+              <div>
+                <input id="runRecordUsername" name="username" maxlength="24" minlength="2" placeholder="Username" required>
+                <button type="submit">Save</button>
+              </div>
+              <small id="runRecordStatus">Save your progress after each match.</small>
+            </form>
+            <div class="run-record-table-wrap">
+              <table class="run-record-table">
+                <thead><tr><th>User</th><th>Stage</th><th>Captain</th><th>Top scorer</th></tr></thead>
+                <tbody id="runRecordRows"></tbody>
+              </table>
+            </div>
+          </section>
         </aside>
       </section>
 
       <section class="run-result-card" id="runResultCard" hidden></section>
     </main>
 
-    <script src="draft-run.js?v=20260730-34" type="module"></script>
+    <script src="draft-run.js?v=20260730-35" type="module"></script>
   </body>
 </html>

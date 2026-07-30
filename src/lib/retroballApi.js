@@ -295,3 +295,18 @@ export async function getPlayerHistory(database, sourcePersonId, options = {}) {
     { signal: options.signal, cacheMs: PLAYER_CACHE_MS },
   );
 }
+
+export async function getDraftRecords(options = {}) {
+  return requestJson("/api/draft-records", {
+    signal: options.signal,
+  });
+}
+
+export async function saveDraftRecord(record, options = {}) {
+  return requestJson("/api/draft-records", {
+    method: "POST",
+    signal: options.signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(record),
+  });
+}

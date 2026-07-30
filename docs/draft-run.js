@@ -4,7 +4,7 @@ import {
   getPlayerMetrics,
   saveDraftRecord,
   searchPlayers,
-} from "./src/lib/retroballApi.js?v=20260730-39";
+} from "./src/lib/retroballApi.js?v=20260730-40";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";

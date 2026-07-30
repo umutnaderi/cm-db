@@ -77,7 +77,7 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       "midfielder", "attacking midfielder", "attacker",
       "left side", "right side", "central",
     ].map((label) => ({ label, value: 20 }));
-    const tierAbilities = [185, 170, 150, 130, 105];
+    const tierAbilities = [190, 175, 162, 150, 130, 105];
     const suggestionPool = tierAbilities.flatMap((ability, tierIndex) => (
       Array.from({ length: 60 }, (_, index) => ({
         database_slug: "db-" + tierIndex + "-" + index,
@@ -87,17 +87,28 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
         position_ratings: universalRatings,
       }))
     ));
-    const tierPulls = [0, 0, 0, 0, 0];
+    const tierPulls = [0, 0, 0, 0, 0, 0];
     for (let seed = 1; seed <= 400; seed += 1) {
       for (const candidate of chooseSuggestions(suggestionPool, seed)) {
         tierPulls[abilityDropTier(candidate)] += 1;
       }
     }
     const pullTotal = tierPulls.reduce((sum, count) => sum + count, 0);
-    globalThis.assert.ok(tierPulls[0] > 0 && tierPulls[0] / pullTotal < 0.03);
-    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.03 && tierPulls[1] / pullTotal < 0.12);
-    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.16 && tierPulls[2] / pullTotal < 0.32);
-    globalThis.assert.ok(tierPulls[3] > tierPulls[2]);
+    globalThis.assert.ok(tierPulls[0] > 0 && tierPulls[0] / pullTotal < 0.04);
+    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.04 && tierPulls[1] / pullTotal < 0.12);
+    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.04 && tierPulls[2] / pullTotal < 0.13);
+    globalThis.assert.ok(tierPulls[3] / pullTotal > 0.27 && tierPulls[3] / pullTotal < 0.42);
+    globalThis.assert.ok(tierPulls[3] > tierPulls[1] + tierPulls[2]);
+    state.premiumDrought = 4;
+    const protectedPremiumRoll = chooseSuggestions(suggestionPool, 901);
+    globalThis.assert.ok(
+      protectedPremiumRoll.some((candidate) => {
+        const ability = Number(candidate.current_ability || 0);
+        return ability >= 170 && ability < 185;
+      }),
+      "Four premium-free rolls should produce a high-Gold choice",
+    );
+    state.premiumDrought = 0;
     suggestionPool.slice(0, -1).forEach((candidate) => {
       state.offeredPlayerIds.add(candidateIdentity(candidate));
     });

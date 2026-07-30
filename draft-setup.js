@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-39";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-40";
 
 const PITCH_ROWS = {
   F: 14,
@@ -117,6 +117,7 @@ const state = {
   rollNumber: 0,
   rerollsRemaining: 3,
   qualityDrought: 0,
+  premiumDrought: 0,
   offeredPlayerIds: new Set(),
 };
 
@@ -523,11 +524,12 @@ function seededShuffle(items, seed) {
 }
 
 const ABILITY_DROP_TABLE = [
-  { minimum: 180, maximum: Infinity, share: 0.01 },
-  { minimum: 160, maximum: 179, share: 0.07 },
-  { minimum: 140, maximum: 159, share: 0.24 },
-  { minimum: 120, maximum: 139, share: 0.42 },
-  { minimum: -Infinity, maximum: 119, share: 0.26 },
+  { minimum: 185, maximum: Infinity, share: 0.015 },
+  { minimum: 170, maximum: 184, share: 0.075 },
+  { minimum: 156, maximum: 169, share: 0.08 },
+  { minimum: 140, maximum: 155, share: 0.34 },
+  { minimum: 120, maximum: 139, share: 0.32 },
+  { minimum: -Infinity, maximum: 119, share: 0.17 },
 ];
 
 function abilityDropTier(candidate) {
@@ -593,11 +595,26 @@ function chooseSuggestions(pool, seed) {
       eligible.filter((candidate) => {
         const ability = Number(candidate.current_ability || 0);
         const identity = candidateIdentity(candidate);
-        return ability >= 140 && ability < 160 && !usedPlayers.has(identity);
+        return ability >= 140 && ability <= 155 && !usedPlayers.has(identity);
       }),
       seed + 701,
     );
     if (pityCandidates[0]) replaceWith(pityCandidates[0]);
+  }
+
+  if (
+    state.premiumDrought >= 4
+    && !selected.some((candidate) => Number(candidate.current_ability || 0) >= 170)
+  ) {
+    const premiumCandidates = seededShuffle(
+      eligible.filter((candidate) => {
+        const ability = Number(candidate.current_ability || 0);
+        const identity = candidateIdentity(candidate);
+        return ability >= 170 && ability < 185 && !usedPlayers.has(identity);
+      }),
+      seed + 1701,
+    );
+    if (premiumCandidates[0]) replaceWith(premiumCandidates[0]);
   }
 
   if (
@@ -812,6 +829,7 @@ function resetDraft(message) {
   state.rollNumber = 0;
   state.rerollsRemaining = 3;
   state.qualityDrought = 0;
+  state.premiumDrought = 0;
   state.offeredPlayerIds.clear();
   rollIntro.textContent = message;
   suggestionHelp.textContent = "Roll the dice for six database-backed choices.";
@@ -846,6 +864,11 @@ async function rollPlayers() {
     )
       ? 0
       : state.qualityDrought + 1;
+    state.premiumDrought = state.suggestions.some(
+      (candidate) => Number(candidate.current_ability || 0) >= 170,
+    )
+      ? 0
+      : state.premiumDrought + 1;
     state.rollNumber += 1;
     if (!state.suggestions.length) {
       throw new Error("No suitable players were found for the remaining positions.");

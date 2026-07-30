@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Draft Setup · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260730-44">
+    <link rel="stylesheet" href="styles.css?v=20260730-45">
   </head>
   <body class="draft-setup-page">
     <main class="draft-setup-shell">
@@ -96,6 +96,20 @@
                   <li>No players selected.</li>
                 </ol>
                 <p class="draft-overall-note">OVR = CA ÷ 2. The captain boost stays hidden and does not alter displayed ratings.</p>
+                <fieldset class="draft-scenario-picker">
+                  <legend>Championship scenario</legend>
+                  <div class="draft-scenario-choices" id="draftScenarioChoices">
+                    <button type="button" data-scenario="ucl0304" class="is-selected">
+                      <strong>Champions League 03–04</strong>
+                      <small>Round of 16 route</small>
+                    </button>
+                    <button type="button" data-scenario="ucl0203">
+                      <strong>Champions League 02–03</strong>
+                      <small>Quarter-final route</small>
+                    </button>
+                  </div>
+                  <p>Your group will be drawn when the run begins.</p>
+                </fieldset>
                 <button class="draft-simulate-button" id="draftSimulateButton" type="button" disabled>
                   Simulate the Championship <span aria-hidden="true">→</span>
                 </button>
@@ -110,6 +124,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="draft-setup.js?v=20260730-44" type="module"></script>
+    <script src="draft-setup.js?v=20260730-45" type="module"></script>
   </body>
 </html>

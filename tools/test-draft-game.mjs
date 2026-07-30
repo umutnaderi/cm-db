@@ -235,11 +235,15 @@ vm.runInNewContext(setupSource, {
   console,
 });
 const setupSourceText = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8");
+const setupHtml = fs.readFileSync(new URL("../draft-setup.html", import.meta.url), "utf8");
 assert.ok(
   !setupSourceText.includes("if (!fit.slot || fit.score <= 0)"),
   "Zero-rated suggestions must remain selectable as emergency cover",
 );
 assert.ok(setupSourceText.includes('"is-emergency-target", "fit-none"'));
+assert.ok(setupHtml.includes('data-scenario="ucl0203"'));
+assert.ok(setupHtml.includes('data-scenario="ucl0304"'));
+assert.ok(setupSourceText.includes("scenario: state.scenario"));
 
 const runHtml = fs.readFileSync(new URL("../draft-run.html", import.meta.url), "utf8");
 const runSourceText = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8");
@@ -251,6 +255,8 @@ assert.ok(
 );
 assert.ok(runSourceText.includes("data-share-squad"), "Finished runs must offer squad sharing");
 assert.ok(runSourceText.includes("squadSeed: sharedSquad.seed"), "Records must carry the squad seed");
+assert.ok(runSourceText.includes("group-draw"), "The run must seed a random group draw");
+assert.ok(runSourceText.includes("scenario.database"), "Opponent searches must use the selected season");
 
 const sharedSquadHtml = fs.readFileSync(new URL("../draft-squad.html", import.meta.url), "utf8");
 const sharedSquadSource = fs.readFileSync(new URL("../draft-squad.js", import.meta.url), "utf8");
@@ -294,6 +300,7 @@ const opponentRoster = [
 ];
 const savedTeam = {
   teamName: "Test XI",
+  scenario: "ucl0203",
   captainSlotId: "slot-9",
   overalls: { team: 85, attack: 90, midfield: 84, defence: 78 },
   players: userRoster.map((item, index) => ({
@@ -384,18 +391,50 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
       const withCaptain = teamModel(captainLineup).overall;
       const withoutCaptain = teamModel(captainLineup.map((player) => ({ ...player, isCaptain: false }))).overall;
       globalThis.assert.ok(withCaptain > withoutCaptain && withCaptain - withoutCaptain < 2);
+      globalThis.assert.equal(SCENARIOS.ucl0203.database, "cm0203_vanilla_original");
+      globalThis.assert.equal(SCENARIOS.ucl0304.database, "cm0304_vanilla_original");
+      globalThis.assert.deepEqual(
+        Object.fromEntries(Object.entries(SCENARIOS.ucl0203.groups).map(([key, value]) => [key, value.replace])),
+        { A: "newcastle", B: "roma", C: "lokomotiv", D: "basel" },
+      );
+      globalThis.assert.deepEqual(
+        Object.fromEntries(Object.entries(SCENARIOS.ucl0304.groups).map(([key, value]) => [key, value.replace])),
+        {
+          A: "anderlecht", B: "dynamo", C: "aek", D: "olympiacos",
+          E: "rangers", F: "partizan", G: "lazio", H: "celta",
+        },
+      );
+      globalThis.assert.equal(SCENARIOS.ucl0203.entryPairs.length, 4);
+      globalThis.assert.equal(SCENARIOS.ucl0304.entryPairs.length, 8);
+      for (const config of Object.values(SCENARIOS)) {
+        const pairedSeeds = config.entryPairs.flat().slice().sort();
+        const availableSeeds = Object.keys(config.seeds).sort();
+        globalThis.assert.deepEqual(
+          pairedSeeds,
+          availableSeeds,
+          config.key + " must place every group winner and runner-up exactly once",
+        );
+        globalThis.assert.equal(
+          config.stages.length,
+          Math.log2(config.entryPairs.length) + 1,
+          config.key + " must have one named stage per knockout round",
+        );
+      }
       state.groupPlace = 1;
-      state.knockoutIndex = 0;
+      state.groupCompanion = groupOpponents[0];
+      initializeKnockoutBracket();
       const firstPlaceRound = currentRoundFixtures();
-      globalThis.assert.deepEqual(firstPlaceRound[3], ["milan", "arsenal"]);
-      globalThis.assert.deepEqual(firstPlaceRound[6], ["sparta", "user"]);
+      globalThis.assert.equal(firstPlaceRound.flat().filter((key) => key === "user").length, 1);
+      globalThis.assert.equal(firstPlaceRound.flat().filter((key) => key === state.groupCompanion).length, 1);
+      globalThis.assert.ok(currentKnockoutOpponent());
       state.groupPlace = 2;
+      initializeKnockoutBracket();
       const secondPlaceRound = currentRoundFixtures();
-      globalThis.assert.deepEqual(secondPlaceRound[3], ["user", "arsenal"]);
-      globalThis.assert.deepEqual(secondPlaceRound[6], ["sparta", "milan"]);
-      state.groupCompanion = "ajax";
-      globalThis.assert.deepEqual(currentRoundFixtures()[6], ["sparta", "ajax"]);
-      state.groupCompanion = "milan";
+      globalThis.assert.equal(secondPlaceRound.flat().filter((key) => key === "user").length, 1);
+      globalThis.assert.equal(secondPlaceRound.flat().filter((key) => key === state.groupCompanion).length, 1);
+      const openingFixtureCount = secondPlaceRound.length;
+      globalThis.assert.ok(advanceKnockoutBracket());
+      globalThis.assert.equal(currentRoundFixtures().length, openingFixtureCount / 2);
       const takers = await penaltyTakers(userPlayers(), new Set(), "user");
       globalThis.assert.ok(takers.length > 0);
       globalThis.assert.ok(takers.slice(0, 5).every((item) => !item.defender));

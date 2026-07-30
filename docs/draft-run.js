@@ -5,48 +5,110 @@ import {
   saveDraftRecord,
   saveDraftSquad,
   searchPlayers,
-} from "./src/lib/retroballApi.js?v=20260730-44";
+} from "./src/lib/retroballApi.js?v=20260730-45";
 import {
   createDraftSquad,
   formatDraftSquadText,
-} from "./src/lib/draftSquad.js?v=20260730-44";
+} from "./src/lib/draftSquad.js?v=20260730-45";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
-const DATABASE = "cm0304_vanilla_original";
-const GROUP_TEAMS = ["user", "milan", "ajax", "brugge"];
 const CLUBS = {
-  bayern: { name: "Bayern Munich" },
-  real: { name: "Real Madrid" },
-  lokomotiv: { name: "Lokomotiv Moscow" },
-  milan: { name: "AC Milan", club: "AC Milan" },
+  aek: { name: "AEK Athens", club: "AEK Athens" },
   ajax: { name: "Ajax", club: "AFC Ajax" },
-  brugge: { name: "Club Brugge", club: "Club Brugge KV" },
-  stuttgart: { name: "VfB Stuttgart" },
+  anderlecht: { name: "Anderlecht", club: "RSC Anderlecht" },
   arsenal: { name: "Arsenal", club: "Arsenal" },
+  barcelona: { name: "Barcelona", club: "F.C. Barcelona" },
+  basel: { name: "Basel", club: "FC Basel" },
+  bayern: { name: "Bayern Munich", club: "FC Bayern München" },
+  besiktas: { name: "Beşiktaş", club: "Besiktas JK", club0203: "Besiktas A.S." },
+  brugge: { name: "Club Brugge", club: "Club Brugge KV" },
+  celta: { name: "Celta Vigo", club: "R.C. Celta de Vigo SAD", club0203: "Real Club Celta de Vigo SAD" },
+  celtic: { name: "Celtic", club: "Celtic" },
   chelsea: { name: "Chelsea", club: "Chelsea" },
+  deportivo: { name: "Deportivo La Coruña", club: "R.C. Deportivo de La Coruña SAD" },
+  dortmund: { name: "Borussia Dortmund", club: "Borussia Dortmund" },
+  dynamo: { name: "Dynamo Kyiv", club: "Dinamo Kiev" },
+  galatasaray: { name: "Galatasaray", club: "Galatasaray SK" },
+  inter: { name: "Internazionale", club: "Internazionale" },
+  juventus: { name: "Juventus", club: "Juventus" },
+  lazio: { name: "Lazio", club: "Lazio" },
+  leverkusen: { name: "Bayer Leverkusen", club: "Bayer 04 Leverkusen" },
+  lokomotiv: { name: "Lokomotiv Moscow", club: "Lokomotiv Moscow" },
+  lyon: { name: "Lyon", club: "Olympique Lyonnais" },
+  marseille: { name: "Marseille", club: "Olympique de Marseille", club0203: "Olympique Marseille" },
+  milan: { name: "AC Milan", club: "AC Milan" },
   monaco: { name: "Monaco", club: "AS Monaco FC" },
+  newcastle: { name: "Newcastle United", club: "Newcastle United" },
+  olympiacos: { name: "Olympiacos", club: "Olympiakos SF Piraeus", club0203: "Olympiakos Piraeus" },
+  panathinaikos: { name: "Panathinaikos", club: "Panathinaikos AO", club0203: "Panathinaikos" },
+  partizan: { name: "Partizan", club: "FK Partizan Beograd", club0203: "FC Partizan Belgrade" },
   porto: { name: "Porto", club: "Futebol Clube do Porto" },
-  united: { name: "Manchester United" },
-  sociedad: { name: "Real Sociedad" },
-  lyon: { name: "Lyon" },
+  psv: { name: "PSV Eindhoven", club: "PSV" },
+  rangers: { name: "Rangers", club: "Rangers FC" },
+  real: { name: "Real Madrid", club: "Real Madrid C.F." },
+  roma: { name: "Roma", club: "AS Roma" },
+  sociedad: { name: "Real Sociedad", club: "Real Sociedad C.F. SAD" },
   sparta: { name: "Sparta Prague", club: "Sparta Prague" },
-  juventus: { name: "Juventus" },
-  deportivo: {
-    name: "Deportivo La Coruña",
-    club: "R.C. Deportivo de La Coruña SAD",
+  stuttgart: { name: "VfB Stuttgart", club: "VfB Stuttgart" },
+  united: { name: "Manchester United", club: "Manchester United" },
+  valencia: { name: "Valencia", club: "Valencia C.F. SAD" },
+};
+
+const SCENARIOS = {
+  ucl0203: {
+    key: "ucl0203",
+    label: "Champions League 02–03",
+    shortLabel: "UCL 02/03",
+    database: "cm0203_vanilla_original",
+    replacementLabel: { A: "Newcastle United", B: "Roma", C: "Lokomotiv Moscow", D: "Basel" },
+    groups: {
+      A: { replace: "newcastle", teams: ["barcelona", "inter", "newcastle", "leverkusen"] },
+      B: { replace: "roma", teams: ["valencia", "ajax", "arsenal", "roma"] },
+      C: { replace: "lokomotiv", teams: ["milan", "real", "dortmund", "lokomotiv"] },
+      D: { replace: "basel", teams: ["united", "juventus", "basel", "deportivo"] },
+    },
+    seeds: {
+      A1: "barcelona", A2: "inter", B1: "valencia", B2: "ajax",
+      C1: "milan", C2: "real", D1: "united", D2: "juventus",
+    },
+    entryPairs: [["C2", "D1"], ["D2", "A1"], ["B2", "C1"], ["A2", "B1"]],
+    stages: ["Quarter-final", "Semi-final", "Final"],
+    finalVenue: "Manchester",
+  },
+  ucl0304: {
+    key: "ucl0304",
+    label: "Champions League 03–04",
+    shortLabel: "UCL 03/04",
+    database: "cm0304_vanilla_original",
+    replacementLabel: {
+      A: "Anderlecht", B: "Dynamo Kyiv", C: "AEK Athens", D: "Olympiacos",
+      E: "Rangers", F: "Partizan", G: "Lazio", H: "Celta Vigo",
+    },
+    groups: {
+      A: { replace: "anderlecht", teams: ["lyon", "bayern", "celtic", "anderlecht"] },
+      B: { replace: "dynamo", teams: ["arsenal", "lokomotiv", "inter", "dynamo"] },
+      C: { replace: "aek", teams: ["monaco", "deportivo", "psv", "aek"] },
+      D: { replace: "olympiacos", teams: ["juventus", "sociedad", "galatasaray", "olympiacos"] },
+      E: { replace: "rangers", teams: ["united", "stuttgart", "panathinaikos", "rangers"] },
+      F: { replace: "partizan", teams: ["real", "porto", "marseille", "partizan"] },
+      G: { replace: "lazio", teams: ["chelsea", "sparta", "besiktas", "lazio"] },
+      H: { replace: "celta", teams: ["milan", "celta", "brugge", "ajax"] },
+    },
+    seeds: {
+      A1: "lyon", A2: "bayern", B1: "arsenal", B2: "lokomotiv",
+      C1: "monaco", C2: "deportivo", D1: "juventus", D2: "sociedad",
+      E1: "united", E2: "stuttgart", F1: "real", F2: "porto",
+      G1: "chelsea", G2: "sparta", H1: "milan", H2: "celta",
+    },
+    entryPairs: [
+      ["A2", "F1"], ["B2", "C1"], ["E2", "G1"], ["H2", "B1"],
+      ["F2", "E1"], ["D2", "A1"], ["G2", "H1"], ["C2", "D1"],
+    ],
+    stages: ["Round of 16", "Quarter-final", "Semi-final", "Final"],
+    finalVenue: "Gelsenkirchen",
   },
 };
-const GROUP_ROUNDS = [
-  { userOpponent: "milan", hidden: ["ajax", "brugge"] },
-  { userOpponent: "ajax", hidden: ["milan", "brugge"] },
-  { userOpponent: "brugge", hidden: ["milan", "ajax"] },
-];
-const KNOCKOUT_PATHS = {
-  1: ["sparta", "deportivo", "porto", "monaco"],
-  2: ["arsenal", "chelsea", "monaco", "porto"],
-};
-const KNOCKOUT_STAGES = ["Round of 16", "Quarter-final", "Semi-final", "Final"];
 
 const elements = {
   seed: document.querySelector("#runSeed"),
@@ -58,6 +120,7 @@ const elements = {
   nextButton: document.querySelector("#runNextButton"),
   matches: document.querySelector("#runMatches"),
   tableBody: document.querySelector("#runTableBody"),
+  groupHeading: document.querySelector("#runGroupHeading"),
   lineRatings: document.querySelector("#runLineRatings"),
   squadList: document.querySelector("#runSquadList"),
   bracketPanel: document.querySelector("#runBracketPanel"),
@@ -146,6 +209,17 @@ function playerName(player) {
 const team = readJsonStorage(TEAM_STORAGE_KEY, null);
 const sharedSquad = createDraftSquad(team);
 const runSeed = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
+const scenario = SCENARIOS[team?.scenario] || SCENARIOS.ucl0304;
+const groupKeys = Object.keys(scenario.groups);
+const groupRandom = seededRandom(hashString(`${runSeed}:${scenario.key}:group-draw`));
+const groupName = groupKeys[Math.floor(groupRandom() * groupKeys.length)];
+const drawnGroup = scenario.groups[groupName];
+const groupTeams = drawnGroup.teams.map((key) => key === drawnGroup.replace ? "user" : key);
+const groupOpponents = groupTeams.filter((key) => key !== "user");
+const groupRounds = groupOpponents.map((userOpponent) => ({
+  userOpponent,
+  hidden: groupOpponents.filter((key) => key !== userOpponent),
+}));
 const opponentCache = readJsonStorage(OPPONENT_CACHE_KEY, {});
 const rosterMemory = new Map();
 const penaltyRatingCache = new Map();
@@ -154,9 +228,9 @@ const state = {
   phase: "group",
   groupRound: 0,
   groupPlace: 0,
-  groupCompanion: "milan",
+  groupCompanion: groupOpponents[0],
   knockoutIndex: 0,
-  knockoutPath: [],
+  knockoutRounds: [],
   busy: false,
   completed: false,
   champion: false,
@@ -191,7 +265,7 @@ function emptyStanding(key) {
   };
 }
 
-for (const key of GROUP_TEAMS) state.table.set(key, emptyStanding(key));
+for (const key of groupTeams) state.table.set(key, emptyStanding(key));
 
 function teamLabel(key) {
   return key === "user" ? team.teamName : CLUBS[key]?.name || key;
@@ -210,24 +284,31 @@ function validRoster(players) {
 }
 
 async function opponentRoster(key) {
-  if (rosterMemory.has(key)) return rosterMemory.get(key);
-  if (Array.isArray(opponentCache[key]) && opponentCache[key].length) {
-    const cached = validRoster(opponentCache[key]);
-    rosterMemory.set(key, cached);
+  const cacheKey = `${scenario.database}:${key}`;
+  if (rosterMemory.has(cacheKey)) return rosterMemory.get(cacheKey);
+  if (Array.isArray(opponentCache[cacheKey]) && opponentCache[cacheKey].length) {
+    const cached = validRoster(opponentCache[cacheKey]);
+    rosterMemory.set(cacheKey, cached);
     return cached;
   }
 
   const club = CLUBS[key];
+  if (!club) throw new Error(`Unknown opponent: ${key}.`);
+  const clubName = scenario.key === "ucl0203" && club.club0203
+    ? club.club0203
+    : club.club;
   const response = await searchPlayers({
-    database: DATABASE,
+    database: scenario.database,
     q: "",
-    club: club.club,
+    club: clubName,
     pageSize: 60,
   });
   const roster = validRoster(response.items);
-  if (!roster.length) throw new Error(`No 03/04 players found for ${club.name}.`);
-  rosterMemory.set(key, roster);
-  opponentCache[key] = roster;
+  if (!roster.length) {
+    throw new Error(`No ${scenario.shortLabel} players found for ${club.name}.`);
+  }
+  rosterMemory.set(cacheKey, roster);
+  opponentCache[cacheKey] = roster;
   writeJsonStorage(OPPONENT_CACHE_KEY, opponentCache);
   return roster;
 }
@@ -446,13 +527,13 @@ function weightedPlayer(players, random, preferredLine = "", score = attackerSco
 }
 
 function playerIdentity(player) {
-  return `${player?.database_slug || DATABASE}:${player?.source_person_id || playerName(player)}`;
+  return `${player?.database_slug || scenario.database}:${player?.source_person_id || playerName(player)}`;
 }
 
 function playerReference(player) {
   return {
     name: playerName(player),
-    database: player?.database_slug || DATABASE,
+    database: player?.database_slug || scenario.database,
     sourcePersonId: String(player?.source_person_id || ""),
   };
 }
@@ -649,7 +730,7 @@ function manOfTheMatch(events, userModel, rivalModel, random, winnerSide) {
     });
   }
   for (const event of events) {
-    const key = `${event.side}:${event.scorerPlayer?.database || DATABASE}:${event.scorerPlayer?.sourcePersonId || event.scorer}`;
+    const key = `${event.side}:${event.scorerPlayer?.database || scenario.database}:${event.scorerPlayer?.sourcePersonId || event.scorer}`;
     const entry = scores.get(key);
     if (!entry) continue;
     if (event.goal) entry.score += 4.4;
@@ -783,7 +864,7 @@ async function penaltyRating(player) {
   let rating = Math.max(1, Math.round((Number(player.current_ability) || 100) / 20));
   try {
     const response = await getPlayer(
-      player.database_slug || DATABASE,
+      player.database_slug || scenario.database,
       String(player.source_person_id),
     );
     rating = attributeValue(response.profile, "Penalties") || rating;
@@ -942,13 +1023,13 @@ function dominatorSummary() {
 }
 
 function currentRecordStage() {
-  if (state.champion) return { label: "Champion", rank: 8 };
+  if (state.champion) return { label: "Champion", rank: scenario.stages.length + 4 };
   if (state.outcomeStage) {
-    const rank = Math.max(1, KNOCKOUT_STAGES.indexOf(state.outcomeStage) + 4);
+    const rank = Math.max(1, scenario.stages.indexOf(state.outcomeStage) + 4);
     return { label: state.outcomeStage, rank };
   }
   const latest = state.userRecord.matches.at(-1)?.stage || "Group stage";
-  const knockoutRank = KNOCKOUT_STAGES.indexOf(latest);
+  const knockoutRank = scenario.stages.indexOf(latest);
   return {
     label: latest.startsWith("Group") ? `Group · ${state.userRecord.played}/3` : latest,
     rank: knockoutRank >= 0 ? knockoutRank + 4 : Math.min(3, state.userRecord.played),
@@ -961,7 +1042,7 @@ function recordPayload(username) {
   const dominator = dominatorSummary();
   const stage = currentRecordStage();
   return {
-    runId: `${runSeed}:${team.teamName}`,
+    runId: `${scenario.key}:${groupName}:${runSeed}:${team.teamName}`,
     squadSeed: sharedSquad.seed,
     username,
     teamName: team.teamName,
@@ -1401,14 +1482,14 @@ async function animateMatch(result) {
 
 function currentFixture() {
   if (state.phase === "group") {
-    const round = GROUP_ROUNDS[state.groupRound];
+    const round = groupRounds[state.groupRound];
     return round
       ? { stage: `Group stage · Matchday ${state.groupRound + 1}`, opponentKey: round.userOpponent }
       : null;
   }
-  const opponentKey = state.knockoutPath[state.knockoutIndex];
+  const opponentKey = currentKnockoutOpponent();
   return opponentKey
-    ? { stage: KNOCKOUT_STAGES[state.knockoutIndex], opponentKey }
+    ? { stage: scenario.stages[state.knockoutIndex], opponentKey }
     : null;
 }
 
@@ -1434,40 +1515,62 @@ function renderPendingFixture() {
   elements.matches.append(shell);
 }
 
+function initializeKnockoutBracket() {
+  const seeds = { ...scenario.seeds };
+  seeds[`${groupName}${state.groupPlace}`] = "user";
+  seeds[`${groupName}${state.groupPlace === 1 ? 2 : 1}`] = state.groupCompanion;
+  state.knockoutIndex = 0;
+  state.knockoutRounds = [
+    scenario.entryPairs.map(([left, right]) => [seeds[left], seeds[right]]),
+  ];
+}
+
 function currentRoundFixtures() {
-  const groupWinner = state.groupPlace === 1 ? "user" : state.groupCompanion;
-  const groupRunnerUp = state.groupPlace === 2 ? "user" : state.groupCompanion;
-  if (state.knockoutIndex === 0) {
-    return [
-      ["bayern", "real"],
-      ["lokomotiv", "monaco"],
-      ["stuttgart", "chelsea"],
-      [groupRunnerUp, "arsenal"],
-      ["porto", "united"],
-      ["sociedad", "lyon"],
-      ["sparta", groupWinner],
-      ["deportivo", "juventus"],
-    ];
+  return state.knockoutRounds[state.knockoutIndex] || [];
+}
+
+function currentKnockoutOpponent() {
+  const fixture = currentRoundFixtures().find(([left, right]) =>
+    left === "user" || right === "user");
+  return fixture?.find((key) => key !== "user") || "";
+}
+
+const CLUB_STRENGTH = {
+  real: 94, milan: 93, juventus: 91, arsenal: 90, united: 89,
+  barcelona: 89, inter: 88, chelsea: 87, porto: 87, bayern: 86,
+  valencia: 85, monaco: 84, deportivo: 84, ajax: 83, lyon: 82,
+  sociedad: 80, stuttgart: 80, lokomotiv: 78, sparta: 77,
+};
+
+function simulatedBracketWinner([left, right], roundIndex, fixtureIndex) {
+  const random = seededRandom(hashString(
+    `${runSeed}:${scenario.key}:bracket:${roundIndex}:${fixtureIndex}:${left}:${right}`,
+  ));
+  const leftScore = (CLUB_STRENGTH[left] || 74) + random() * 18;
+  const rightScore = (CLUB_STRENGTH[right] || 74) + random() * 18;
+  return leftScore >= rightScore ? left : right;
+}
+
+function advanceKnockoutBracket() {
+  const fixtures = currentRoundFixtures();
+  const winners = fixtures.map((fixture, index) =>
+    fixture.includes("user")
+      ? "user"
+      : simulatedBracketWinner(fixture, state.knockoutIndex, index));
+  if (winners.length === 1) return false;
+  const nextRound = [];
+  for (let index = 0; index < winners.length; index += 2) {
+    nextRound.push([winners[index], winners[index + 1]]);
   }
-  if (state.knockoutIndex === 1) {
-    return state.groupPlace === 1
-      ? [["real", "monaco"], ["chelsea", "arsenal"], ["porto", "lyon"], ["user", "deportivo"]]
-      : [["real", "monaco"], ["user", "chelsea"], ["porto", "lyon"], [state.groupCompanion, "deportivo"]];
-  }
-  if (state.knockoutIndex === 2) {
-    return state.groupPlace === 1
-      ? [["monaco", "chelsea"], ["porto", "user"]]
-      : [["monaco", "user"], ["porto", "deportivo"]];
-  }
-  return state.groupPlace === 1
-    ? [["user", "monaco"]]
-    : [["user", "porto"]];
+  state.knockoutRounds.push(nextRound);
+  state.knockoutIndex += 1;
+  return true;
 }
 
 function renderBracket() {
   elements.bracket.replaceChildren();
   if (state.completed) return;
-  const stage = KNOCKOUT_STAGES[state.knockoutIndex];
+  const stage = scenario.stages[state.knockoutIndex];
   const round = document.createElement("section");
   round.className = "run-bracket-round";
   round.innerHTML = `
@@ -1530,10 +1633,10 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
     <span class="draft-panel-kicker">${champion ? "Champions of Europe" : "Run complete"}</span>
     <h2>${champion ? `${escapeHtml(team.teamName)} win the cup!` : `${escapeHtml(team.teamName)} are eliminated`}</h2>
     <p>${champion
-      ? "The drafted XI complete the 2003–04 route and lift the trophy in Gelsenkirchen."
+      ? `The drafted XI complete the ${escapeHtml(scenario.label)} route and lift the trophy in ${escapeHtml(scenario.finalVenue)}.`
       : eliminatedBy
         ? `Eliminated in the ${escapeHtml(eliminatedStage)} by ${escapeHtml(eliminatedBy)}.`
-        : `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group H.`}</p>
+        : `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group ${escapeHtml(groupName)}.`}</p>
     <div class="run-result-stats">
       <span><strong>${record.gf}</strong><small>Goals for</small></span>
       <span><strong>${record.ga}</strong><small>Against</small></span>
@@ -1579,9 +1682,9 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
 }
 
 async function playGroupRound() {
-  const round = GROUP_ROUNDS[state.groupRound];
+  const round = groupRounds[state.groupRound];
   elements.nextButton.disabled = true;
-  elements.stageDescription.textContent = "Loading both 03/04 squads and calculating the match model…";
+  elements.stageDescription.textContent = `Loading both ${scenario.shortLabel} squads and calculating the match model…`;
   const [opponentBase, hiddenLeft, hiddenRight] = await Promise.all([
     opponentRoster(round.userOpponent),
     opponentRoster(round.hidden[0]),
@@ -1607,8 +1710,8 @@ async function playGroupRound() {
   state.groupRound += 1;
   renderTable();
 
-  if (state.groupRound < GROUP_ROUNDS.length) {
-    elements.stageTitle.textContent = `Group H · Matchday ${state.groupRound + 1}`;
+  if (state.groupRound < groupRounds.length) {
+    elements.stageTitle.textContent = `Group ${groupName} · Matchday ${state.groupRound + 1}`;
     elements.stageDescription.textContent = "Standings updated. The next opponent is ready.";
     elements.nextButton.textContent = `Play Matchday ${state.groupRound + 1} →`;
     elements.nextButton.disabled = false;
@@ -1619,7 +1722,7 @@ async function playGroupRound() {
   const standings = sortedTable();
   state.groupPlace = standings.findIndex((item) => item.key === "user") + 1;
   if (state.groupPlace > 2) {
-    elements.stageTitle.textContent = `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group H`;
+    elements.stageTitle.textContent = `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group ${groupName}`;
     elements.stageDescription.textContent = "The knockout places are out of reach.";
     showResult({ eliminatedStage: "Group stage" });
     return;
@@ -1627,22 +1730,24 @@ async function playGroupRound() {
 
   state.groupCompanion = standings
     .slice(0, 2)
-    .find((item) => item.key !== "user")?.key || "milan";
+    .find((item) => item.key !== "user")?.key || groupOpponents[0];
   state.phase = "knockout";
-  state.knockoutPath = KNOCKOUT_PATHS[state.groupPlace];
+  initializeKnockoutBracket();
+  const nextOpponent = currentKnockoutOpponent();
+  const openingStage = scenario.stages[0];
   elements.bracketPanel.hidden = false;
   elements.stageKicker.textContent = "Qualified";
-  elements.stageTitle.textContent = `${state.groupPlace === 1 ? "Group winners" : "Group runners-up"} · Round of 16`;
-  elements.stageDescription.textContent = `Next: ${CLUBS[state.knockoutPath[0]].name}. Future opponents remain hidden.`;
-  elements.nextButton.textContent = `Play ${CLUBS[state.knockoutPath[0]].name} →`;
+  elements.stageTitle.textContent = `${state.groupPlace === 1 ? "Group winners" : "Group runners-up"} · ${openingStage}`;
+  elements.stageDescription.textContent = `Next: ${CLUBS[nextOpponent].name}. Future opponents remain hidden.`;
+  elements.nextButton.textContent = `Play ${CLUBS[nextOpponent].name} →`;
   elements.nextButton.disabled = false;
   renderBracket();
   renderPendingFixture();
 }
 
 async function playKnockoutRound() {
-  const opponentKey = state.knockoutPath[state.knockoutIndex];
-  const stage = KNOCKOUT_STAGES[state.knockoutIndex];
+  const opponentKey = currentKnockoutOpponent();
+  const stage = scenario.stages[state.knockoutIndex];
   elements.nextButton.disabled = true;
   elements.stageTitle.textContent = `${stage} · ${team.teamName} vs ${CLUBS[opponentKey].name}`;
   elements.stageDescription.textContent = "Loading the opponent squad and calculating the tie…";
@@ -1666,8 +1771,7 @@ async function playKnockoutRound() {
     return;
   }
 
-  state.knockoutIndex += 1;
-  if (state.knockoutIndex >= state.knockoutPath.length) {
+  if (!advanceKnockoutBracket()) {
     elements.stageTitle.textContent = "Champions of Europe";
     elements.stageDescription.textContent = "The final whistle confirms the title.";
     showResult({ champion: true });
@@ -1675,9 +1779,9 @@ async function playKnockoutRound() {
   }
 
   renderBracket();
-  const nextOpponent = state.knockoutPath[state.knockoutIndex];
-  elements.stageKicker.textContent = KNOCKOUT_STAGES[state.knockoutIndex];
-  elements.stageTitle.textContent = `${KNOCKOUT_STAGES[state.knockoutIndex]} · ${CLUBS[nextOpponent].name}`;
+  const nextOpponent = currentKnockoutOpponent();
+  elements.stageKicker.textContent = scenario.stages[state.knockoutIndex];
+  elements.stageTitle.textContent = `${scenario.stages[state.knockoutIndex]} · ${CLUBS[nextOpponent].name}`;
   elements.stageDescription.textContent = `${CLUBS[opponentKey].name} eliminated. The next tie is ready.`;
   elements.nextButton.textContent = `Play ${CLUBS[nextOpponent].name} →`;
   elements.nextButton.disabled = false;
@@ -1709,7 +1813,12 @@ function showMissingTeam() {
 
 elements.nextButton.addEventListener("click", playNext);
 elements.recordForm.addEventListener("submit", saveCurrentRecord);
-elements.seed.textContent = `Offline UCL 03/04 · Seed #${runSeed}`;
+elements.seed.textContent = `Offline ${scenario.shortLabel} · Seed #${runSeed}`;
+elements.groupHeading.textContent = `Group ${groupName}`;
+elements.stageTitle.textContent = `Group ${groupName} · Matchday 1`;
+elements.stageDescription.textContent =
+  `The group draw replaces ${scenario.replacementLabel[groupName]} with ${team?.teamName || "your XI"}.`;
+elements.nextButton.textContent = "Play Matchday 1 →";
 
 if (!team?.players || team.players.length !== 11 || !team.captainSlotId) {
   showMissingTeam();

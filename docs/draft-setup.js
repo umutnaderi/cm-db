@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-44";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-45";
 
 const PITCH_ROWS = {
   F: 14,
@@ -119,6 +119,7 @@ const state = {
   qualityDrought: 0,
   premiumDrought: 0,
   offeredPlayerIds: new Set(),
+  scenario: "ucl0304",
 };
 
 const formationChoices = document.querySelector("#formationChoices");
@@ -142,6 +143,7 @@ const midfieldOverall = document.querySelector("#draftMidfieldOverall");
 const defenceOverall = document.querySelector("#draftDefenceOverall");
 const simulateButton = document.querySelector("#draftSimulateButton");
 const squadPanel = document.querySelector(".draft-squad-panel");
+const scenarioChoices = document.querySelector("#draftScenarioChoices");
 const DRAFT_TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 
 function effectiveRole(item) {
@@ -333,6 +335,7 @@ function squadSnapshot() {
     formation: state.formation,
     style: state.style,
     captainSlotId: state.captainSlotId,
+    scenario: state.scenario,
     players,
     overalls: {
       attack: averageOverall(lineValues("attack", "overall")),
@@ -1021,6 +1024,15 @@ pitch.addEventListener("click", (event) => {
 
 rollButton.addEventListener("click", rollPlayers);
 teamNameInput.addEventListener("input", persistSquad);
+scenarioChoices.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-scenario]");
+  if (!button || button.dataset.scenario === state.scenario) return;
+  state.scenario = button.dataset.scenario;
+  scenarioChoices.querySelectorAll("[data-scenario]").forEach((item) => {
+    item.classList.toggle("is-selected", item === button);
+  });
+  persistSquad();
+});
 simulateButton.addEventListener("click", () => {
   persistSquad();
   window.location.href = "draft-run.html";

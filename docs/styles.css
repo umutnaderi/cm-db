@@ -3584,6 +3584,66 @@ select:focus {
   font-size: 0.57rem;
 }
 
+.draft-scenario-picker {
+  display: grid;
+  gap: 0.55rem;
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.draft-scenario-picker legend {
+  margin-bottom: 0.45rem;
+  color: #f4d94f;
+  font: 700 0.75rem "Titillium Web", Arial, sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.draft-scenario-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.draft-scenario-choices button {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.75rem;
+  color: #e8f2eb;
+  background: #0c110e;
+  border: 1px solid #385341;
+  text-align: left;
+}
+
+.draft-scenario-choices button:hover,
+.draft-scenario-choices button.is-selected {
+  color: #071009;
+  background: #ead34e;
+  border-color: #fff08a;
+}
+
+.draft-scenario-choices strong,
+.draft-scenario-choices small,
+.draft-scenario-picker > p {
+  font-family: "Titillium Web", Arial, sans-serif;
+}
+
+.draft-scenario-choices strong {
+  font-size: 0.82rem;
+}
+
+.draft-scenario-choices small,
+.draft-scenario-picker > p {
+  color: inherit;
+  font-size: 0.68rem;
+}
+
+.draft-scenario-picker > p {
+  margin: 0;
+  color: #567562;
+}
+
 .draft-simulate-button,
 .run-next-button {
   width: 100%;
@@ -4699,6 +4759,10 @@ select:focus {
 }
 
 @media (max-width: 620px) {
+  .draft-scenario-choices {
+    grid-template-columns: 1fr;
+  }
+
   .run-result-squad {
     padding: 10px;
   }

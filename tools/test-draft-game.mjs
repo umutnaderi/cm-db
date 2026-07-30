@@ -48,6 +48,18 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     globalThis.assert.equal(forwards.find((item) => item.effectiveRole === "FC").y, 14);
     globalThis.assert.equal(forwards.find((item) => item.effectiveRole === "FL").y, 18);
     globalThis.assert.equal(forwards.find((item) => item.effectiveRole === "FR").y, 18);
+    globalThis.assert.deepEqual(
+      clubTheme({ canonical_club_name: "Fenerbahçe SK", club_colors: {
+        background_colour: "#b00000", foreground_colour: "#0030a0",
+      } }),
+      { background: "#ffd000", secondary: "#0030a0", foreground: "#ffffff" },
+    );
+    globalThis.assert.deepEqual(
+      clubTheme({ canonical_club_name: "F.C. Barcelona", club_colors: {
+        background_colour: "#e00000", foreground_colour: "#e00000",
+      } }),
+      { background: "#0030a0", secondary: "#a50044", foreground: "#ffffff" },
+    );
   `);
 
 vm.runInNewContext(setupSource, {
@@ -109,10 +121,12 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
   .concat(`
     (async () => {
       const opponentRoster = globalThis.testOpponentRoster;
+      let redCards = 0;
       for (let index = 0; index < 180; index += 1) {
         state.matchNumber = index;
         const result = matchSimulation("milan", opponentRoster, index % 2 ? "Group stage" : "Round of 16");
         const allEvents = [...result.events, ...result.extraTimeEvents];
+        redCards += allEvents.filter((event) => event.card === "red").length;
         const userGoals = allEvents.filter((event) => event.goal && event.side === "user").length;
         const rivalGoals = allEvents.filter((event) => event.goal && event.side === "opponent").length;
         globalThis.assert.equal(userGoals, result.userGoals);
@@ -131,6 +145,22 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
           globalThis.assert.equal(laterAction, undefined, event.scorer + " acted after a red card");
         }
       }
+      globalThis.assert.ok(redCards <= 12, "Red cards are too frequent: " + redCards);
+      const visibleRatings = visibleSquadRatings();
+      globalThis.assert.equal(visibleRatings.attack, 91);
+      globalThis.assert.ok(boostedSquadOverall() > visibleRatings.team);
+      state.groupPlace = 1;
+      state.knockoutIndex = 0;
+      const firstPlaceRound = currentRoundFixtures();
+      globalThis.assert.deepEqual(firstPlaceRound[3], ["milan", "arsenal"]);
+      globalThis.assert.deepEqual(firstPlaceRound[6], ["sparta", "user"]);
+      state.groupPlace = 2;
+      const secondPlaceRound = currentRoundFixtures();
+      globalThis.assert.deepEqual(secondPlaceRound[3], ["user", "arsenal"]);
+      globalThis.assert.deepEqual(secondPlaceRound[6], ["sparta", "milan"]);
+      state.groupCompanion = "ajax";
+      globalThis.assert.deepEqual(currentRoundFixtures()[6], ["sparta", "ajax"]);
+      state.groupCompanion = "milan";
       const takers = await penaltyTakers(userPlayers(), new Set(), "user");
       globalThis.assert.ok(takers.length > 0);
       globalThis.assert.ok(takers.slice(0, 5).every((item) => !item.defender));

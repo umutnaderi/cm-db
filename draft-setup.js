@@ -126,6 +126,8 @@ const summary = document.querySelector("#draftSetupSummary");
 const rollIntro = document.querySelector("#draftRollIntro");
 const rollButton = document.querySelector("#draftRollButton");
 const suggestions = document.querySelector("#draftSuggestions");
+const suggestionsPanel = document.querySelector(".draft-suggestions-panel");
+const captainPrompt = document.querySelector("#draftCaptainPrompt");
 const suggestionHelp = document.querySelector("#draftSuggestionHelp");
 const progress = document.querySelector("#draftProgress");
 const squadList = document.querySelector("#draftSquadList");
@@ -197,13 +199,46 @@ function shortPlayerName(candidate) {
   return parts.length > 1 ? parts.at(-1) : name;
 }
 
+function normalizedClubName(candidate) {
+  return String(candidate.canonical_club_name || candidate.club_name || "")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function readableClubText(background, secondary) {
+  const luminance = (hex) => {
+    const channels = hex.match(/[0-9a-f]{2}/gi)
+      ?.map((value) => Number.parseInt(value, 16) / 255) || [];
+    return channels.length === 3
+      ? channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+      : 0;
+  };
+  return (luminance(background) + luminance(secondary)) / 2 > 0.62
+    ? "#071008"
+    : "#ffffff";
+}
+
 function clubTheme(candidate) {
   const colours = candidate.club_colors || {};
-  const background = String(colours.background_colour || "");
-  const foreground = String(colours.foreground_colour || "");
+  const club = normalizedClubName(candidate);
+  const override = /(^| )fenerbahce( sk| istanbul|$)/.test(club)
+    ? { background: "#ffd000", secondary: "#0030a0" }
+    : ["barcelona", "f c barcelona"].includes(club)
+      ? { background: "#0030a0", secondary: "#a50044" }
+      : null;
+  const sourceBackground = String(colours.background_colour || "");
+  const sourceSecondary = String(colours.foreground_colour || "");
+  const background = override?.background
+    || (/^#[0-9a-f]{6}$/i.test(sourceBackground) ? sourceBackground : "#0d1310");
+  const secondary = override?.secondary
+    || (/^#[0-9a-f]{6}$/i.test(sourceSecondary) ? sourceSecondary : background);
   return {
-    background: /^#[0-9a-f]{6}$/i.test(background) ? background : "#0d1310",
-    foreground: /^#[0-9a-f]{6}$/i.test(foreground) ? foreground : "#ffffff",
+    background,
+    secondary,
+    foreground: readableClubText(background, secondary),
   };
 }
 
@@ -249,20 +284,26 @@ function squadSnapshot() {
         player: candidate,
       };
     });
-  const lineValues = (line) => players
+  const lineValues = (line, key) => players
     .filter((item) => item.line === line)
-    .map((item) => item.effectiveOverall);
+    .map((item) => item[key]);
   return {
-    version: 2,
+    version: 3,
     teamName: teamNameInput.value.trim() || "Ultimate XI",
     formation: state.formation,
     style: state.style,
     captainSlotId: state.captainSlotId,
     players,
     overalls: {
-      attack: averageOverall(lineValues("attack")),
-      midfield: averageOverall(lineValues("midfield")),
-      defence: averageOverall(lineValues("defence")),
+      attack: averageOverall(lineValues("attack", "overall")),
+      midfield: averageOverall(lineValues("midfield", "overall")),
+      defence: averageOverall(lineValues("defence", "overall")),
+      team: averageOverall(players.map((item) => item.overall)),
+    },
+    boostedOveralls: {
+      attack: averageOverall(lineValues("attack", "effectiveOverall")),
+      midfield: averageOverall(lineValues("midfield", "effectiveOverall")),
+      defence: averageOverall(lineValues("defence", "effectiveOverall")),
       team: averageOverall(players.map((item) => item.effectiveOverall)),
     },
   };
@@ -532,10 +573,21 @@ function renderPitch() {
         marker.disabled = true;
       }
       marker.style.setProperty("--club-bg", theme.background);
+      marker.style.setProperty("--club-secondary", theme.secondary);
       marker.style.setProperty("--club-fg", theme.foreground);
+      const season = document.createElement("span");
+      season.className = "formation-player-season";
+      season.textContent = seasonLabel(drafted);
+      marker.append(season);
+      if (isCaptain) {
+        const captain = document.createElement("span");
+        captain.className = "formation-player-captain";
+        captain.textContent = "C";
+        marker.append(captain);
+      }
       const role = document.createElement("span");
       role.className = "formation-player-role";
-      role.textContent = `${item.effectiveRole}${isCaptain ? " · C" : ""}`;
+      role.textContent = item.effectiveRole;
       const name = document.createElement("span");
       name.className = "formation-player-name";
       name.textContent = shortPlayerName(drafted);
@@ -557,6 +609,20 @@ function renderPitch() {
 
   caption.textContent = `${state.formation} · ${state.style}`;
   summary.textContent = `${state.formation} · ${state.style} · ${state.mode}`;
+  const lineupComplete = state.drafted.size >= 11;
+  suggestionsPanel.classList.toggle("is-collapsed", lineupComplete);
+  captainPrompt.hidden = !lineupComplete;
+  if (lineupComplete) {
+    captainPrompt.querySelector("span").textContent = state.captainSlotId
+      ? "Captain selected"
+      : "Starting XI complete";
+    captainPrompt.querySelector("strong").textContent = state.captainSlotId
+      ? playerName(state.drafted.get(state.captainSlotId))
+      : "Choose your Captain";
+    captainPrompt.querySelector("small").textContent = state.captainSlotId
+      ? "Select another player on the pitch to change the captain."
+      : "Select one of the eleven players on the pitch.";
+  }
   progress.textContent = state.drafted.size < 11
     ? `${state.drafted.size} / 11`
     : state.captainSlotId
@@ -589,6 +655,7 @@ function renderSuggestions(message = "") {
     }
     const theme = clubTheme(candidate);
     button.style.setProperty("--club-bg", theme.background);
+    button.style.setProperty("--club-secondary", theme.secondary);
     button.style.setProperty("--club-fg", theme.foreground);
 
     const heading = document.createElement("span");
@@ -712,7 +779,7 @@ pitch.addEventListener("click", (event) => {
     const drafted = state.drafted.get(slotId);
     if (state.drafted.size >= 11) {
       state.captainSlotId = slotId;
-      rollIntro.textContent = `${playerName(drafted)} selected as captain. The captain boost is included in the team ratings.`;
+      rollIntro.textContent = `${playerName(drafted)} selected as captain. The hidden boost will apply in matches.`;
       suggestionHelp.textContent = "Click another player to change the captain.";
       renderPitch();
       return;

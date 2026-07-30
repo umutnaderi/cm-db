@@ -5,14 +5,22 @@ const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
 const DATABASE = "cm0304_vanilla_original";
 const GROUP_TEAMS = ["user", "milan", "ajax", "brugge"];
 const CLUBS = {
+  bayern: { name: "Bayern Munich" },
+  real: { name: "Real Madrid" },
+  lokomotiv: { name: "Lokomotiv Moscow" },
   milan: { name: "AC Milan", club: "AC Milan" },
   ajax: { name: "Ajax", club: "AFC Ajax" },
   brugge: { name: "Club Brugge", club: "Club Brugge KV" },
+  stuttgart: { name: "VfB Stuttgart" },
   arsenal: { name: "Arsenal", club: "Arsenal" },
   chelsea: { name: "Chelsea", club: "Chelsea" },
   monaco: { name: "Monaco", club: "AS Monaco FC" },
   porto: { name: "Porto", club: "Futebol Clube do Porto" },
+  united: { name: "Manchester United" },
+  sociedad: { name: "Real Sociedad" },
+  lyon: { name: "Lyon" },
   sparta: { name: "Sparta Prague", club: "Sparta Prague" },
+  juventus: { name: "Juventus" },
   deportivo: {
     name: "Deportivo La Coruña",
     club: "R.C. Deportivo de La Coruña SAD",
@@ -130,6 +138,7 @@ const state = {
   phase: "group",
   groupRound: 0,
   groupPlace: 0,
+  groupCompanion: "milan",
   knockoutIndex: 0,
   knockoutPath: [],
   busy: false,
@@ -214,6 +223,34 @@ function userPlayers() {
     overall: Math.round((Number(entry.player?.current_ability) || 0) / 2),
     isCaptain: entry.isCaptain,
   }));
+}
+
+function visibleSquadRatings() {
+  const entries = team.players.map((entry) => ({
+    line: entry.line,
+    overall: Math.round(
+      (Number(entry.player?.current_ability) || Number(entry.overall) * 2 || 0) / 2,
+    ),
+  }));
+  const lineAverage = (line) => Math.round(average(
+    entries.filter((entry) => entry.line === line).map((entry) => entry.overall),
+  ));
+  return {
+    attack: lineAverage("attack"),
+    midfield: lineAverage("midfield"),
+    defence: lineAverage("defence"),
+    team: Math.round(average(entries.map((entry) => entry.overall))),
+  };
+}
+
+function boostedSquadOverall() {
+  if (Number(team.boostedOveralls?.team)) return Number(team.boostedOveralls.team);
+  return Math.round(average(team.players.map((entry) => {
+    const overall = Math.round(
+      (Number(entry.player?.current_ability) || Number(entry.overall) * 2 || 0) / 2,
+    );
+    return overall * (entry.isCaptain ? 2 : 1);
+  })));
 }
 
 function weightedPlayer(players, random, preferredLine = "") {
@@ -310,12 +347,15 @@ function buildTimeline({
       const cardPool = cardEligible.length ? cardEligible : players;
       const repeatCandidates = cardPool.filter((player) =>
         yellows.get(`${spec.side}:${playerIdentity(player)}`) === 1);
-      const player = repeatCandidates.length && random() < 0.38
+      const unbookedCandidates = cardPool.filter((player) =>
+        !yellows.has(`${spec.side}:${playerIdentity(player)}`));
+      const secondYellowIncident = repeatCandidates.length > 0 && random() < 0.025;
+      const player = secondYellowIncident
         ? pick(repeatCandidates)
-        : pick(cardPool);
+        : pick(unbookedCandidates.length ? unbookedCandidates : cardPool);
       const identity = `${spec.side}:${playerIdentity(player)}`;
-      const directRed = random() < 0.1;
-      const secondYellow = (yellows.get(identity) || 0) >= 1;
+      const directRed = random() < 0.005;
+      const secondYellow = secondYellowIncident && (yellows.get(identity) || 0) >= 1;
       if (directRed || secondYellow) sentOff.add(identity);
       else yellows.set(identity, 1);
       events.push({
@@ -374,10 +414,11 @@ function buildTimeline({
 
 function matchSimulation(opponentKey, roster, stage, hidden = false) {
   const random = seededRandom(hashString(`${runSeed}:${stage}:${opponentKey}:${state.matchNumber}:${hidden}`));
-  const userOvr = Number(team.overalls.team) || 70;
+  const userOvr = visibleSquadRatings().team || 70;
+  const boostedUserOvr = boostedSquadOverall() || userOvr;
   const rivalOvr = opponentOverall(roster);
   const rngRoll = Math.round(random() * 100);
-  const edge = (userOvr - rivalOvr) / 18;
+  const edge = (boostedUserOvr - rivalOvr) / 18;
   const swing = (rngRoll - 50) / 45;
   const userLambda = clamp(0.2, 3.8, 1.25 + edge + swing);
   const rivalLambda = clamp(0.2, 3.8, 1.25 - edge - swing * 0.55);
@@ -395,7 +436,7 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
     start: 3,
     end: 89,
     highlightCount: 8 + Math.floor(random() * 4),
-    cardCount: 2 + Math.floor(random() * 4),
+    cardCount: 1 + Math.floor(random() * 3),
   });
   const events = regularTimeline.events;
   let extraTimeEvents = [];
@@ -626,12 +667,13 @@ function renderTable() {
 }
 
 function renderSquad() {
+  const ratings = visibleSquadRatings();
   elements.teamName.textContent = team.teamName;
-  elements.teamOverall.textContent = `${team.overalls.team} OVR`;
+  elements.teamOverall.textContent = `${ratings.team} OVR`;
   elements.lineRatings.innerHTML = `
-    <span><small>Attack</small><strong>${team.overalls.attack}</strong></span>
-    <span><small>Midfield</small><strong>${team.overalls.midfield}</strong></span>
-    <span><small>Defence</small><strong>${team.overalls.defence}</strong></span>
+    <span><small>Attack</small><strong>${ratings.attack}</strong></span>
+    <span><small>Midfield</small><strong>${ratings.midfield}</strong></span>
+    <span><small>Defence</small><strong>${ratings.defence}</strong></span>
   `;
   elements.squadList.replaceChildren();
   team.players.forEach((entry) => {
@@ -656,10 +698,12 @@ function eventMarkup(event) {
       : event.goal
         ? "● "
         : "";
+  const actor = `<strong>${marker}${escapeHtml(event.scorer)}</strong>`;
   return `
     <li class="${event.goal ? "is-goal" : ""} ${event.card ? `is-${event.card}-card` : ""} ${event.side === "opponent" ? "is-opponent" : ""}">
-      <time>${event.minute}'</time>
-      <span><strong>${marker}${escapeHtml(event.scorer)}</strong>${escapeHtml(event.text)}</span>
+      <span class="run-event-team run-event-team-user">${event.side === "user" ? actor : ""}</span>
+      <span class="run-event-commentary"><time>${event.minute}'</time><span>${escapeHtml(event.text)}</span></span>
+      <span class="run-event-team run-event-team-opponent">${event.side === "opponent" ? actor : ""}</span>
     </li>
   `;
 }
@@ -803,9 +847,16 @@ async function animateMatch(result) {
     ? `${result.userGoals}–${result.rivalGoals}, pens ${result.shootout[0]}–${result.shootout[1]}`
     : `${result.userGoals}–${result.rivalGoals}`;
   summaryScore.textContent = finalScore;
+  shell.classList.add("is-score-docking");
   elements.clockStatus.textContent = "Full time";
-  await delay(500);
+  await delay(850);
+  shell.classList.remove("is-score-docking");
+  shell.classList.add("is-finished");
+  await delay(850);
+  shell.classList.add("is-collapsing");
+  await delay(800);
   shell.open = false;
+  shell.classList.remove("is-collapsing");
 }
 
 function currentFixture() {
@@ -843,18 +894,62 @@ function renderPendingFixture() {
   elements.matches.append(shell);
 }
 
+function currentRoundFixtures() {
+  const groupWinner = state.groupPlace === 1 ? "user" : state.groupCompanion;
+  const groupRunnerUp = state.groupPlace === 2 ? "user" : state.groupCompanion;
+  if (state.knockoutIndex === 0) {
+    return [
+      ["bayern", "real"],
+      ["lokomotiv", "monaco"],
+      ["stuttgart", "chelsea"],
+      [groupRunnerUp, "arsenal"],
+      ["porto", "united"],
+      ["sociedad", "lyon"],
+      ["sparta", groupWinner],
+      ["deportivo", "juventus"],
+    ];
+  }
+  if (state.knockoutIndex === 1) {
+    return state.groupPlace === 1
+      ? [["real", "monaco"], ["chelsea", "arsenal"], ["porto", "lyon"], ["user", "deportivo"]]
+      : [["real", "monaco"], ["user", "chelsea"], ["porto", "lyon"], [state.groupCompanion, "deportivo"]];
+  }
+  if (state.knockoutIndex === 2) {
+    return state.groupPlace === 1
+      ? [["monaco", "chelsea"], ["porto", "user"]]
+      : [["monaco", "user"], ["porto", "deportivo"]];
+  }
+  return state.groupPlace === 1
+    ? [["user", "monaco"]]
+    : [["user", "porto"]];
+}
+
 function renderBracket() {
   elements.bracket.replaceChildren();
-  const opponentKey = state.knockoutPath[state.knockoutIndex];
-  if (!opponentKey || state.completed) return;
-  const node = document.createElement("div");
-  node.className = "run-bracket-node is-current";
-  node.innerHTML = `
-    <span>${KNOCKOUT_STAGES[state.knockoutIndex]}</span>
-    <strong>${escapeHtml(team.teamName)}</strong>
-    <small>vs ${escapeHtml(CLUBS[opponentKey].name)}</small>
+  if (state.completed) return;
+  const stage = KNOCKOUT_STAGES[state.knockoutIndex];
+  const round = document.createElement("section");
+  round.className = "run-bracket-round";
+  round.innerHTML = `
+    <header>
+      <span>${escapeHtml(stage)}</span>
+      <small>${currentRoundFixtures().length * 2} teams remain</small>
+    </header>
+    <div class="run-bracket-fixtures"></div>
   `;
-  elements.bracket.append(node);
+  const fixtures = round.querySelector(".run-bracket-fixtures");
+  currentRoundFixtures().forEach(([left, right]) => {
+    const match = document.createElement("article");
+    match.className = "run-bracket-match";
+    if (left === "user" || right === "user") match.classList.add("is-current");
+    match.innerHTML = `
+      <span>${escapeHtml(teamLabel(left))}</span>
+      <b>vs</b>
+      <span>${escapeHtml(teamLabel(right))}</span>
+    `;
+    fixtures.append(match);
+  });
+  elements.bracket.append(round);
 }
 
 function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" } = {}) {
@@ -940,6 +1035,9 @@ async function playGroupRound() {
     return;
   }
 
+  state.groupCompanion = standings
+    .slice(0, 2)
+    .find((item) => item.key !== "user")?.key || "milan";
   state.phase = "knockout";
   state.knockoutPath = KNOCKOUT_PATHS[state.groupPlace];
   elements.bracketPanel.hidden = false;
@@ -975,7 +1073,6 @@ async function playKnockoutRound() {
   }
 
   state.knockoutIndex += 1;
-  renderBracket();
   if (state.knockoutIndex >= state.knockoutPath.length) {
     elements.stageTitle.textContent = "Champions of Europe";
     elements.stageDescription.textContent = "The final whistle confirms the title.";
@@ -983,6 +1080,7 @@ async function playKnockoutRound() {
     return;
   }
 
+  renderBracket();
   const nextOpponent = state.knockoutPath[state.knockoutIndex];
   elements.stageKicker.textContent = KNOCKOUT_STAGES[state.knockoutIndex];
   elements.stageTitle.textContent = `${KNOCKOUT_STAGES[state.knockoutIndex]} · ${CLUBS[nextOpponent].name}`;

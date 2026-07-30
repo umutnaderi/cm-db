@@ -124,6 +124,14 @@ const rollButton = document.querySelector("#draftRollButton");
 const suggestions = document.querySelector("#draftSuggestions");
 const suggestionHelp = document.querySelector("#draftSuggestionHelp");
 const progress = document.querySelector("#draftProgress");
+const squadList = document.querySelector("#draftSquadList");
+const teamNameInput = document.querySelector("#draftTeamName");
+const teamOverall = document.querySelector("#draftTeamOverall");
+const attackOverall = document.querySelector("#draftAttackOverall");
+const midfieldOverall = document.querySelector("#draftMidfieldOverall");
+const defenceOverall = document.querySelector("#draftDefenceOverall");
+const simulateButton = document.querySelector("#draftSimulateButton");
+const DRAFT_TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 
 function effectiveRole(item) {
   if (item.styleRoles) return item.styleRoles[state.style] || item.role;
@@ -174,6 +182,115 @@ function clubTheme(candidate) {
 function seasonLabel(candidate) {
   const match = String(candidate.database_title || "").match(/(\d{2})\/(\d{2})/);
   return match ? `${match[1]}-${match[2]}` : candidate.database_title || candidate.database_slug;
+}
+
+function squadLine(role) {
+  const prefix = rolePrefix(role);
+  if (prefix === "F") return "attack";
+  if (["D", "WB", "SW", "GK"].includes(prefix)) return "defence";
+  return "midfield";
+}
+
+function draftedOverall(candidate, slotId) {
+  const captainMultiplier = state.captainSlotId === slotId ? 2 : 1;
+  return Math.round(((Number(candidate.current_ability) || 0) * captainMultiplier) / 2);
+}
+
+function averageOverall(values) {
+  return values.length
+    ? Math.round(values.reduce((total, value) => total + value, 0) / values.length)
+    : 0;
+}
+
+function squadSnapshot() {
+  const slots = currentSlots();
+  const players = slots
+    .filter((item) => state.drafted.has(item.id))
+    .map((item) => {
+      const candidate = state.drafted.get(item.id);
+      const isCaptain = item.id === state.captainSlotId;
+      return {
+        slotId: item.id,
+        role: item.effectiveRole,
+        line: squadLine(item.effectiveRole),
+        isCaptain,
+        overall: draftedOverall(candidate, item.id),
+        effective_current_ability:
+          (Number(candidate.current_ability) || 0) * (isCaptain ? 2 : 1),
+        player: candidate,
+      };
+    });
+  const lineValues = (line) => players
+    .filter((item) => item.line === line)
+    .map((item) => item.overall);
+  return {
+    version: 1,
+    teamName: teamNameInput.value.trim() || "Ultimate XI",
+    formation: state.formation,
+    style: state.style,
+    captainSlotId: state.captainSlotId,
+    players,
+    overalls: {
+      attack: averageOverall(lineValues("attack")),
+      midfield: averageOverall(lineValues("midfield")),
+      defence: averageOverall(lineValues("defence")),
+      team: averageOverall(players.map((item) => item.overall)),
+    },
+  };
+}
+
+function persistSquad() {
+  if (state.drafted.size !== 11 || !state.captainSlotId) return;
+  try {
+    localStorage.setItem(DRAFT_TEAM_STORAGE_KEY, JSON.stringify(squadSnapshot()));
+  } catch {
+    // The run remains usable in-memory when browser storage is unavailable.
+  }
+}
+
+function clearPersistedSquad() {
+  try {
+    localStorage.removeItem(DRAFT_TEAM_STORAGE_KEY);
+  } catch {
+    // Ignore storage restrictions.
+  }
+}
+
+function renderSquadSummary() {
+  const snapshot = squadSnapshot();
+  teamOverall.textContent = snapshot.players.length ? snapshot.overalls.team : "--";
+  attackOverall.textContent = snapshot.overalls.attack || "--";
+  midfieldOverall.textContent = snapshot.overalls.midfield || "--";
+  defenceOverall.textContent = snapshot.overalls.defence || "--";
+  squadList.replaceChildren();
+
+  if (!snapshot.players.length) {
+    const empty = document.createElement("li");
+    empty.textContent = "No players selected.";
+    squadList.append(empty);
+  } else {
+    snapshot.players
+      .slice()
+      .sort((left, right) => {
+        const order = { attack: 0, midfield: 1, defence: 2 };
+        return order[left.line] - order[right.line] || left.role.localeCompare(right.role);
+      })
+      .forEach((item) => {
+        const row = document.createElement("li");
+        if (item.isCaptain) row.classList.add("is-captain");
+        const role = document.createElement("span");
+        role.textContent = item.role;
+        const name = document.createElement("strong");
+        name.textContent = `${playerName(item.player)}${item.isCaptain ? " (C)" : ""}`;
+        const overall = document.createElement("b");
+        overall.textContent = item.overall;
+        row.append(role, name, overall);
+        squadList.append(row);
+      });
+  }
+
+  simulateButton.disabled = snapshot.players.length !== 11 || !state.captainSlotId;
+  if (!simulateButton.disabled) persistSquad();
 }
 
 function ratingMap(candidate) {
@@ -411,6 +528,7 @@ function renderPitch() {
       ? `11 / 11 · ${playerName(state.drafted.get(state.captainSlotId))} (C)`
       : "11 / 11 · Choose captain";
   rollButton.disabled = state.rolling || state.mode !== "Classic" || state.drafted.size >= 11;
+  renderSquadSummary();
 }
 
 function renderSuggestions(message = "") {
@@ -457,6 +575,7 @@ function renderSuggestions(message = "") {
 }
 
 function resetDraft(message) {
+  clearPersistedSquad();
   state.drafted.clear();
   state.captainSlotId = "";
   state.suggestions = [];
@@ -561,6 +680,7 @@ pitch.addEventListener("click", (event) => {
     }
     const removed = drafted;
     state.drafted.delete(slotId);
+    clearPersistedSquad();
     if (state.captainSlotId === slotId) state.captainSlotId = "";
     rollIntro.textContent = `${playerName(removed)} removed from the draft.`;
     renderPitch();
@@ -594,6 +714,11 @@ pitch.addEventListener("click", (event) => {
 });
 
 rollButton.addEventListener("click", rollPlayers);
+teamNameInput.addEventListener("input", persistSquad);
+simulateButton.addEventListener("click", () => {
+  persistSquad();
+  window.location.href = "draft-run.html";
+});
 
 renderSuggestions();
 renderPitch();

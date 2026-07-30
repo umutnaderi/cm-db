@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Draft Setup · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260729-31">
+    <link rel="stylesheet" href="styles.css?v=20260730-32">
   </head>
   <body class="draft-setup-page">
     <main class="draft-setup-shell">
@@ -53,21 +53,49 @@
               <div class="formation-pitch" id="formationPitch"></div>
               <p class="formation-caption" id="formationCaption">4-3-3 · Balanced</p>
             </div>
-            <aside class="draft-suggestions-panel" aria-live="polite">
-              <div class="draft-suggestions-head">
-                <div>
-                  <span class="draft-panel-kicker">Classic roll</span>
-                  <h2>Player choices</h2>
+            <div class="draft-side-column">
+              <aside class="draft-suggestions-panel" aria-live="polite">
+                <div class="draft-suggestions-head">
+                  <div>
+                    <span class="draft-panel-kicker">Classic roll</span>
+                    <h2>Player choices</h2>
+                  </div>
+                  <span id="draftProgress">0 / 11</span>
                 </div>
-                <span id="draftProgress">0 / 11</span>
-              </div>
-              <p class="draft-suggestion-help" id="draftSuggestionHelp">
-                Roll the dice for six database-backed choices.
-              </p>
-              <div class="draft-suggestions" id="draftSuggestions">
-                <div class="draft-suggestions-empty">No players rolled yet.</div>
-              </div>
-            </aside>
+                <p class="draft-suggestion-help" id="draftSuggestionHelp">
+                  Roll the dice for six database-backed choices.
+                </p>
+                <div class="draft-suggestions" id="draftSuggestions">
+                  <div class="draft-suggestions-empty">No players rolled yet.</div>
+                </div>
+              </aside>
+
+              <aside class="draft-squad-panel" aria-label="Selected squad">
+                <div class="draft-squad-head">
+                  <div>
+                    <span class="draft-panel-kicker">Squad</span>
+                    <h2>Selected XI</h2>
+                  </div>
+                  <strong id="draftTeamOverall">--</strong>
+                </div>
+                <label class="draft-team-name">
+                  <span>Team name</span>
+                  <input id="draftTeamName" type="text" maxlength="28" value="Ultimate XI">
+                </label>
+                <div class="draft-line-overalls">
+                  <span><small>Attack</small><strong id="draftAttackOverall">--</strong></span>
+                  <span><small>Midfield</small><strong id="draftMidfieldOverall">--</strong></span>
+                  <span><small>Defence</small><strong id="draftDefenceOverall">--</strong></span>
+                </div>
+                <ol class="draft-squad-list" id="draftSquadList">
+                  <li>No players selected.</li>
+                </ol>
+                <p class="draft-overall-note">OVR = CA ÷ 2. The captain's doubled CA is included.</p>
+                <button class="draft-simulate-button" id="draftSimulateButton" type="button" disabled>
+                  Simulate the Championship <span aria-hidden="true">→</span>
+                </button>
+              </aside>
+            </div>
           </div>
         </section>
       </section>
@@ -77,6 +105,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="draft-setup.js?v=20260729-31" type="module"></script>
+    <script src="draft-setup.js?v=20260730-32" type="module"></script>
   </body>
 </html>

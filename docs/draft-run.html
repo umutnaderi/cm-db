@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The Championship Run · Old-School-Football</title>
+    <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
+    <link rel="stylesheet" href="styles.css?v=20260730-32">
+  </head>
+  <body class="draft-run-page">
+    <main class="draft-run-shell">
+      <header class="draft-run-header">
+        <div>
+          <a class="eyebrow home-link" href="draft-setup.html">The Ultimate Draft</a>
+          <span class="draft-run-seed" id="runSeed">Offline UCL 03/04</span>
+          <h1>The Championship Run</h1>
+        </div>
+        <div class="draft-run-team">
+          <span id="runTeamName">Ultimate XI</span>
+          <strong id="runTeamOverall">-- OVR</strong>
+        </div>
+      </header>
+
+      <section class="run-stage-card">
+        <div>
+          <span class="draft-panel-kicker" id="runStageKicker">Group stage</span>
+          <h2 id="runStageTitle">Group H · Matchday 1</h2>
+          <p id="runStageDescription">Your drafted team takes Celta Vigo's place.</p>
+        </div>
+        <button class="run-next-button" id="runNextButton" type="button">Play Matchday 1 →</button>
+      </section>
+
+      <section class="run-layout">
+        <div class="run-main-column">
+          <section class="run-matches" id="runMatches" aria-live="polite">
+            <div class="run-empty">Your first fixture is ready.</div>
+          </section>
+
+          <section class="run-bracket-panel" id="runBracketPanel" hidden>
+            <div class="run-section-heading">
+              <span class="draft-panel-kicker">Knockout phase</span>
+              <h2>Your route to Gelsenkirchen</h2>
+            </div>
+            <div class="run-bracket" id="runBracket"></div>
+          </section>
+        </div>
+
+        <aside class="run-sidebar">
+          <section class="run-clock-card">
+            <span>Match clock</span>
+            <strong id="runClock">--'</strong>
+            <small id="runClockStatus">Waiting for kick-off</small>
+          </section>
+
+          <section class="run-table-card">
+            <div class="run-section-heading">
+              <span class="draft-panel-kicker">Standings</span>
+              <h2>Group H</h2>
+            </div>
+            <table class="run-table">
+              <thead>
+                <tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr>
+              </thead>
+              <tbody id="runTableBody"></tbody>
+            </table>
+            <p class="run-table-note">The other group fixture is simulated privately each matchday.</p>
+          </section>
+
+          <section class="run-squad-card">
+            <div class="run-section-heading">
+              <span class="draft-panel-kicker">Your XI</span>
+              <h2>Squad OVR</h2>
+            </div>
+            <div class="run-line-ratings" id="runLineRatings"></div>
+            <ol class="run-squad-list" id="runSquadList"></ol>
+          </section>
+        </aside>
+      </section>
+
+      <section class="run-result-card" id="runResultCard" hidden></section>
+    </main>
+
+    <script src="draft-run.js?v=20260730-32" type="module"></script>
+  </body>
+</html>

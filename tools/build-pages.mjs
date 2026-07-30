@@ -10,6 +10,8 @@ const frontendFiles = [
   "draft.html",
   "draft-setup.html",
   "draft-setup.js",
+  "draft-run.html",
+  "draft-run.js",
   "styles.css",
   "MadeleinaSans.otf",
   "orpheis.regular.otf",

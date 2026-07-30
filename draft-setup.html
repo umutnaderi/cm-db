@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Draft Setup · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260730-32">
+    <link rel="stylesheet" href="styles.css?v=20260730-33">
   </head>
   <body class="draft-setup-page">
     <main class="draft-setup-shell">
@@ -70,7 +70,7 @@
                 </div>
               </aside>
 
-              <aside class="draft-squad-panel" aria-label="Selected squad">
+              <aside class="draft-squad-panel" aria-label="Selected squad" hidden>
                 <div class="draft-squad-head">
                   <div>
                     <span class="draft-panel-kicker">Squad</span>
@@ -90,7 +90,7 @@
                 <ol class="draft-squad-list" id="draftSquadList">
                   <li>No players selected.</li>
                 </ol>
-                <p class="draft-overall-note">OVR = CA ÷ 2. The captain's doubled CA is included.</p>
+                <p class="draft-overall-note">OVR = CA ÷ 2. The captain boost is included in team ratings.</p>
                 <button class="draft-simulate-button" id="draftSimulateButton" type="button" disabled>
                   Simulate the Championship <span aria-hidden="true">→</span>
                 </button>
@@ -105,6 +105,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="draft-setup.js?v=20260730-32" type="module"></script>
+    <script src="draft-setup.js?v=20260730-33" type="module"></script>
   </body>
 </html>

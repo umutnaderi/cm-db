@@ -2969,6 +2969,15 @@ select:focus {
   opacity: 0.34;
 }
 
+.formation-player.is-locked,
+.formation-player.is-locked-position {
+  cursor: not-allowed;
+}
+
+.formation-player.is-locked-position {
+  opacity: 1;
+}
+
 .formation-player.is-fit-target {
   border-style: solid;
   opacity: 1;
@@ -3165,6 +3174,13 @@ select:focus {
   outline: none;
 }
 
+.draft-suggestion-card.is-locked,
+.draft-suggestion-card:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.9);
+  opacity: 0.42;
+}
+
 .draft-suggestion-card.is-selected {
   box-shadow:
     inset 0 0 16px color-mix(in srgb, var(--fit-color) 12%, transparent),
@@ -3264,6 +3280,7 @@ select:focus {
   padding: 14px;
   border: 1px solid var(--line);
   background: rgba(7, 20, 13, 0.96);
+  font-family: "Titillium Web", Arial, Helvetica, sans-serif;
 }
 
 .draft-squad-head,
@@ -3467,7 +3484,7 @@ select:focus {
 
 .run-stage-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 24px;
   margin: 20px 0;
@@ -3525,6 +3542,69 @@ select:focus {
   border: 1px solid #244a31;
   border-left: 4px solid #557762;
   background: #070d09;
+}
+
+.run-match-shell {
+  border: 1px solid #244a31;
+  background: #070d09;
+}
+
+.run-match-shell > summary {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-match-shell > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-match-shell > summary span {
+  color: #70a983;
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.run-match-shell > summary strong {
+  color: #fff;
+  font-family: "Titillium Web", Arial, sans-serif;
+}
+
+.run-match-shell > summary b {
+  color: #23f47b;
+}
+
+.run-match-shell[open] > summary {
+  border-bottom: 1px solid #244a31;
+}
+
+.run-match-shell .run-match-card {
+  border: 0;
+  border-left: 4px solid #557762;
+}
+
+.run-pending-body {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  color: #7ba589;
+  font-size: 0.72rem;
+}
+
+.run-pending-body p {
+  margin: 0;
+}
+
+.run-pending-body .run-next-button {
+  justify-self: start;
+  width: min(320px, 100%);
+  margin: 0;
 }
 
 .run-match-card.is-live {
@@ -3639,6 +3719,83 @@ select:focus {
   color: #ef3c37;
 }
 
+.run-event-list li.is-yellow-card strong {
+  color: #f4d94f;
+}
+
+.run-event-list li.is-red-card strong {
+  color: #ef3c37;
+}
+
+.run-extra-time-section,
+.run-penalty-section {
+  margin: 8px 14px 14px;
+  border: 1px solid #355d40;
+  background: #08140c;
+}
+
+.run-extra-time-section h3,
+.run-penalty-section h3 {
+  margin: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid #355d40;
+  color: #f4d94f;
+  font: 800 0.75rem "Titillium Web", Arial, sans-serif;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.run-penalty-score {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px;
+  padding: 12px;
+  text-align: center;
+}
+
+.run-penalty-score span:last-child {
+  text-align: right;
+}
+
+.run-penalty-score span:first-child {
+  text-align: left;
+}
+
+.run-penalty-score b {
+  color: #23f47b;
+  font-size: 1.3rem;
+}
+
+.run-penalty-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  background: #203b29;
+  list-style: none;
+}
+
+.run-penalty-list li {
+  display: grid;
+  grid-template-columns: 30px 1fr 1fr;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #09130d;
+  font-size: 0.66rem;
+}
+
+.run-penalty-list li > b {
+  color: #6f9880;
+}
+
+.run-penalty-list .is-scored {
+  color: #23f47b;
+}
+
+.run-penalty-list .is-missed {
+  color: #ef6a65;
+}
+
 .run-shootout {
   margin: 0;
   padding: 8px 16px;
@@ -3712,7 +3869,7 @@ select:focus {
 
 .run-bracket {
   display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  grid-template-columns: minmax(180px, 380px);
   gap: 10px;
   margin-top: 14px;
 }
@@ -3812,6 +3969,32 @@ select:focus {
   gap: 10px;
 }
 
+.run-result-honours {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.run-result-honours span {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #284f35;
+  background: #09130d;
+}
+
+.run-result-honours small {
+  color: #6d9479;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+}
+
+.run-result-honours strong {
+  color: #f4f0e4;
+  font-family: "Titillium Web", Arial, sans-serif;
+}
+
 .run-result-actions button,
 .run-result-actions a,
 .run-return-button {
@@ -3863,6 +4046,12 @@ select:focus {
   }
 
   .run-bracket {
+    grid-template-columns: 1fr;
+  }
+
+  .run-match-shell > summary,
+  .run-penalty-list li,
+  .run-result-honours {
     grid-template-columns: 1fr;
   }
 

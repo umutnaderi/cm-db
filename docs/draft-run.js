@@ -1,4 +1,4 @@
-import { searchPlayers } from "./src/lib/retroballApi.js";
+import { getPlayer, searchPlayers } from "./src/lib/retroballApi.js";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
@@ -125,6 +125,7 @@ const team = readJsonStorage(TEAM_STORAGE_KEY, null);
 const runSeed = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
 const opponentCache = readJsonStorage(OPPONENT_CACHE_KEY, {});
 const rosterMemory = new Map();
+const penaltyRatingCache = new Map();
 const state = {
   phase: "group",
   groupRound: 0,
@@ -133,7 +134,15 @@ const state = {
   knockoutPath: [],
   busy: false,
   completed: false,
-  userRecord: { played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0 },
+  userRecord: {
+    played: 0,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    gf: 0,
+    ga: 0,
+    scorers: {},
+  },
   table: new Map(),
   matchNumber: 0,
 };
@@ -202,12 +211,13 @@ function userPlayers() {
     ...entry.player,
     role: entry.role,
     line: entry.line,
-    overall: entry.overall,
+    overall: Math.round((Number(entry.player?.current_ability) || 0) / 2),
     isCaptain: entry.isCaptain,
   }));
 }
 
 function weightedPlayer(players, random, preferredLine = "") {
+  if (!players.length) return null;
   const weighted = players.flatMap((player) => {
     const lineBoost = !preferredLine || player.line === preferredLine ? 3 : 1;
     const weight = Math.max(1, Math.round((Number(player.overall) || 65) / 20)) * lineBoost;
@@ -216,11 +226,150 @@ function weightedPlayer(players, random, preferredLine = "") {
   return weighted[Math.floor(random() * weighted.length)] || players[0];
 }
 
-function randomMinute(random, occupied) {
-  let minute = 4 + Math.floor(random() * 84);
-  while (occupied.has(minute) && minute < 90) minute += 1;
+function playerIdentity(player) {
+  return `${player?.database_slug || DATABASE}:${player?.source_person_id || playerName(player)}`;
+}
+
+function isGoalkeeper(player) {
+  return player?.role === "GK"
+    || /(^|\/|\s)GK($|\/|\s)/i.test(String(player?.position_text || ""));
+}
+
+function isDefender(player) {
+  return player?.line === "defence"
+    || /(^|\/|\s)(?:D|SW|WB)(?:\s|\/|$)/i.test(String(player?.position_text || ""));
+}
+
+function goalkeeper(players) {
+  return players.find(isGoalkeeper) || players[0];
+}
+
+function randomMinute(random, occupied, start = 4, end = 88) {
+  let minute = start + Math.floor(random() * Math.max(1, end - start + 1));
+  while (occupied.has(minute) && minute < end) minute += 1;
   occupied.add(minute);
   return minute;
+}
+
+function buildTimeline({
+  random,
+  ourPlayers,
+  roster,
+  userGoals,
+  rivalGoals,
+  start,
+  end,
+  highlightCount,
+  cardCount,
+  disciplinary = { sentOff: new Set(), yellows: new Map() },
+}) {
+  const occupied = new Set();
+  const specs = [];
+  for (let index = 0; index < userGoals; index += 1) {
+    specs.push({ minute: randomMinute(random, occupied, start, end), side: "user", kind: "goal" });
+  }
+  for (let index = 0; index < rivalGoals; index += 1) {
+    specs.push({ minute: randomMinute(random, occupied, start, end), side: "opponent", kind: "goal" });
+  }
+  for (let index = 0; index < highlightCount; index += 1) {
+    specs.push({
+      minute: randomMinute(random, occupied, start, end),
+      side: random() > 0.48 ? "user" : "opponent",
+      kind: ["chance", "tackle", "cross", "counter"][Math.floor(random() * 4)],
+    });
+  }
+  for (let index = 0; index < cardCount; index += 1) {
+    specs.push({
+      minute: randomMinute(random, occupied, start, end),
+      side: random() > 0.5 ? "user" : "opponent",
+      kind: "card",
+    });
+  }
+  specs.sort((left, right) => left.minute - right.minute);
+
+  const { sentOff, yellows } = disciplinary;
+  const active = (side, preferredLine = "") => {
+    const source = side === "user" ? ourPlayers : roster;
+    const available = source.filter((player) => !sentOff.has(`${side}:${playerIdentity(player)}`));
+    const preferred = preferredLine
+      ? available.filter((player) => player.line === preferredLine)
+      : available;
+    return preferred.length ? preferred : available;
+  };
+  const pick = (players) => players[Math.floor(random() * players.length)] || players[0];
+  const events = [];
+
+  for (const spec of specs) {
+    const players = active(spec.side);
+    if (!players.length) continue;
+    const opponents = active(spec.side === "user" ? "opponent" : "user");
+    if (!opponents.length) continue;
+
+    if (spec.kind === "card") {
+      const cardEligible = players.filter((player) => !isGoalkeeper(player));
+      const cardPool = cardEligible.length ? cardEligible : players;
+      const repeatCandidates = cardPool.filter((player) =>
+        yellows.get(`${spec.side}:${playerIdentity(player)}`) === 1);
+      const player = repeatCandidates.length && random() < 0.38
+        ? pick(repeatCandidates)
+        : pick(cardPool);
+      const identity = `${spec.side}:${playerIdentity(player)}`;
+      const directRed = random() < 0.1;
+      const secondYellow = (yellows.get(identity) || 0) >= 1;
+      if (directRed || secondYellow) sentOff.add(identity);
+      else yellows.set(identity, 1);
+      events.push({
+        minute: spec.minute,
+        side: spec.side,
+        goal: false,
+        card: directRed || secondYellow ? "red" : "yellow",
+        scorer: playerName(player),
+        text: directRed
+          ? `${playerName(player)} is shown a straight red card after a reckless challenge.`
+          : secondYellow
+            ? `${playerName(player)} receives a second yellow and is sent off.`
+            : `${playerName(player)} goes into the book for a late challenge.`,
+      });
+      continue;
+    }
+
+    if (spec.kind === "goal") {
+      const opponentAttackers = active("opponent")
+        .filter((player) => !isGoalkeeper(player));
+      const scorer = spec.side === "user"
+        ? weightedPlayer(active("user", "attack"), random)
+        : pick(opponentAttackers.length ? opponentAttackers : active("opponent"));
+      const keeper = goalkeeper(opponents);
+      events.push({
+        minute: spec.minute,
+        side: spec.side,
+        goal: true,
+        scorer: playerName(scorer),
+        text: `${playerName(scorer)} keeps calm and beats ${playerName(keeper)}.`,
+      });
+      continue;
+    }
+
+    const actor = spec.side === "user"
+      ? weightedPlayer(players, random, spec.kind === "counter" ? "attack" : "midfield")
+      : pick(players.filter((player) => !isGoalkeeper(player)));
+    const other = pick(opponents);
+    const keeper = goalkeeper(opponents);
+    const texts = {
+      chance: `${playerName(actor)} tests ${playerName(keeper)}, who makes the save.`,
+      tackle: `${playerName(actor)} drives forward, but ${playerName(other)} times the tackle perfectly.`,
+      cross: `${playerName(actor)} bends in a dangerous cross and ${playerName(keeper)} claims it under pressure.`,
+      counter: `${playerName(actor)} leads a rapid counter before ${playerName(other)} blocks the final pass.`,
+    };
+    events.push({
+      minute: spec.minute,
+      side: spec.side,
+      goal: false,
+      scorer: playerName(actor),
+      text: texts[spec.kind],
+    });
+  }
+  return { events, disciplinary };
 }
 
 function matchSimulation(opponentKey, roster, stage, hidden = false) {
@@ -232,61 +381,43 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
   const swing = (rngRoll - 50) / 45;
   const userLambda = clamp(0.2, 3.8, 1.25 + edge + swing);
   const rivalLambda = clamp(0.2, 3.8, 1.25 - edge - swing * 0.55);
-  let userGoals = poisson(userLambda, random);
-  let rivalGoals = poisson(rivalLambda, random);
-  let shootout = null;
-
-  if (stage !== "Group stage" && userGoals === rivalGoals) {
-    const userPenaltyChance = clamp(0.32, 0.68, 0.5 + (userOvr - rivalOvr) / 100);
-    const userWon = random() < userPenaltyChance;
-    shootout = userWon
-      ? [4 + Math.floor(random() * 2), 2 + Math.floor(random() * 2)]
-      : [2 + Math.floor(random() * 2), 4 + Math.floor(random() * 2)];
-  }
-
-  const occupied = new Set();
-  const events = [];
+  const regularUserGoals = poisson(userLambda, random);
+  const regularRivalGoals = poisson(rivalLambda, random);
+  let userGoals = regularUserGoals;
+  let rivalGoals = regularRivalGoals;
   const ourPlayers = userPlayers();
-  for (let index = 0; index < userGoals; index += 1) {
-    const scorer = weightedPlayer(ourPlayers, random, "attack");
-    const defender = roster[Math.floor(random() * Math.min(11, roster.length))];
-    events.push({
-      minute: randomMinute(random, occupied),
-      side: "user",
-      goal: true,
-      scorer: playerName(scorer),
-      text: `${playerName(scorer)} finishes after beating ${playerName(defender)}.`,
-    });
+  const regularTimeline = buildTimeline({
+    random,
+    ourPlayers,
+    roster,
+    userGoals: regularUserGoals,
+    rivalGoals: regularRivalGoals,
+    start: 3,
+    end: 89,
+    highlightCount: 8 + Math.floor(random() * 4),
+    cardCount: 2 + Math.floor(random() * 4),
+  });
+  const events = regularTimeline.events;
+  let extraTimeEvents = [];
+  const hasExtraTime = stage !== "Group stage" && userGoals === rivalGoals;
+  if (hasExtraTime) {
+    const extraUserGoals = poisson(userLambda * 0.28, random);
+    const extraRivalGoals = poisson(rivalLambda * 0.28, random);
+    userGoals += extraUserGoals;
+    rivalGoals += extraRivalGoals;
+    extraTimeEvents = buildTimeline({
+      random,
+      ourPlayers,
+      roster,
+      userGoals: extraUserGoals,
+      rivalGoals: extraRivalGoals,
+      start: 91,
+      end: 120,
+      highlightCount: 4,
+      cardCount: random() < 0.5 ? 1 : 0,
+      disciplinary: regularTimeline.disciplinary,
+    }).events;
   }
-  for (let index = 0; index < rivalGoals; index += 1) {
-    const scorer = roster[Math.floor(random() * Math.min(8, roster.length))];
-    const defender = weightedPlayer(ourPlayers, random, "defence");
-    events.push({
-      minute: randomMinute(random, occupied),
-      side: "opponent",
-      goal: true,
-      scorer: playerName(scorer),
-      text: `${playerName(scorer)} finds space beyond ${playerName(defender)}.`,
-    });
-  }
-
-  for (let index = 0; index < 3; index += 1) {
-    const ours = random() > 0.45;
-    const actor = ours
-      ? weightedPlayer(ourPlayers, random, index === 0 ? "midfield" : "")
-      : roster[Math.floor(random() * Math.min(11, roster.length))];
-    const other = ours
-      ? roster[Math.floor(random() * Math.min(11, roster.length))]
-      : weightedPlayer(ourPlayers, random, "defence");
-    events.push({
-      minute: randomMinute(random, occupied),
-      side: ours ? "user" : "opponent",
-      goal: false,
-      scorer: playerName(actor),
-      text: `${playerName(actor)} tests ${playerName(other)}, but the move breaks down.`,
-    });
-  }
-  events.sort((left, right) => left.minute - right.minute);
 
   return {
     opponentKey,
@@ -294,9 +425,14 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
     stage,
     userGoals,
     rivalGoals,
-    shootout,
-    userWon: shootout ? shootout[0] > shootout[1] : userGoals > rivalGoals,
+    shootout: null,
+    penaltyEvents: [],
+    needsPenalties: hasExtraTime && userGoals === rivalGoals,
+    hasExtraTime,
+    userWon: userGoals > rivalGoals,
     events,
+    extraTimeEvents,
+    sentOffPlayerIds: [...regularTimeline.disciplinary.sentOff],
     formula: {
       userOvr,
       rivalOvr,
@@ -305,6 +441,106 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
       rivalLambda: rivalLambda.toFixed(2),
     },
   };
+}
+
+function attributeValue(profile, label) {
+  const match = (profile?.attributes || []).find((item) =>
+    String(item.label || "").toLowerCase() === label.toLowerCase());
+  return Number(match?.value) || 0;
+}
+
+async function penaltyRating(player) {
+  const key = playerIdentity(player);
+  if (penaltyRatingCache.has(key)) return penaltyRatingCache.get(key);
+  let rating = Math.max(1, Math.round((Number(player.current_ability) || 100) / 20));
+  try {
+    const response = await getPlayer(
+      player.database_slug || DATABASE,
+      String(player.source_person_id),
+    );
+    rating = attributeValue(response.profile, "Penalties") || rating;
+  } catch {
+    // The ability-derived fallback keeps the shootout playable offline.
+  }
+  penaltyRatingCache.set(key, rating);
+  return rating;
+}
+
+async function penaltyTakers(players, excluded = new Set(), side = "user") {
+  const eligible = players
+    .filter((player) =>
+      !isGoalkeeper(player) && !excluded.has(`${side}:${playerIdentity(player)}`))
+    .sort((left, right) => {
+      const lineOrder = (player) => isDefender(player) ? 1 : 0;
+      return lineOrder(left) - lineOrder(right)
+        || Number(right.current_ability) - Number(left.current_ability);
+    })
+    .slice(0, 12);
+  const rated = await Promise.all(eligible.map(async (player) => ({
+    player,
+    rating: await penaltyRating(player),
+    defender: isDefender(player),
+  })));
+  return rated.sort((left, right) =>
+    Number(left.defender) - Number(right.defender)
+    || right.rating - left.rating
+    || Number(right.player.current_ability) - Number(left.player.current_ability));
+}
+
+async function preparePenaltyShootout(result, roster) {
+  if (!result.needsPenalties) return result;
+  const random = seededRandom(hashString(`${runSeed}:penalties:${result.opponentKey}:${state.matchNumber}`));
+  const excluded = new Set(result.sentOffPlayerIds);
+  const [ours, theirs] = await Promise.all([
+    penaltyTakers(userPlayers(), excluded, "user"),
+    penaltyTakers(roster.slice(0, 18), excluded, "opponent"),
+  ]);
+  if (!ours.length || !theirs.length) {
+    throw new Error("A penalty shootout needs at least one eligible outfield player per team.");
+  }
+  const ourKeeper = goalkeeper(userPlayers());
+  const theirKeeper = goalkeeper(roster);
+  let userScore = 0;
+  let rivalScore = 0;
+  const attempts = [];
+  let round = 0;
+
+  while (round < 10) {
+    const ourTaker = ours[round % ours.length];
+    const theirTaker = theirs[round % theirs.length];
+    const ourChance = clamp(0.55, 0.94, 0.56 + ourTaker.rating / 50);
+    const theirChance = clamp(0.55, 0.94, 0.56 + theirTaker.rating / 50);
+    const userScored = random() < ourChance;
+    const rivalScored = random() < theirChance;
+    if (userScored) userScore += 1;
+    if (rivalScored) rivalScore += 1;
+    attempts.push({
+      round: round + 1,
+      userTaker: playerName(ourTaker.player),
+      opponentTaker: playerName(theirTaker.player),
+      userScored,
+      opponentScored: rivalScored,
+      userText: userScored
+        ? `${playerName(ourTaker.player)} scores.`
+        : `${playerName(theirKeeper)} saves from ${playerName(ourTaker.player)}.`,
+      opponentText: rivalScored
+        ? `${playerName(theirTaker.player)} scores.`
+        : `${playerName(ourKeeper)} saves from ${playerName(theirTaker.player)}.`,
+    });
+    round += 1;
+
+    if (round < 5) {
+      const remaining = 5 - round;
+      if (Math.abs(userScore - rivalScore) > remaining) break;
+    } else if (userScore !== rivalScore) {
+      break;
+    }
+  }
+
+  result.shootout = [userScore, rivalScore];
+  result.penaltyEvents = attempts;
+  result.userWon = userScore > rivalScore;
+  return result;
 }
 
 function hiddenSimulation(leftKey, rightKey, leftRoster, rightRoster, round) {
@@ -353,6 +589,11 @@ function updateUserRecord(result) {
   if (result.userGoals === result.rivalGoals && !result.shootout) record.draws += 1;
   else if (result.userWon) record.wins += 1;
   else record.losses += 1;
+  [...result.events, ...result.extraTimeEvents]
+    .filter((event) => event.goal && event.side === "user")
+    .forEach((event) => {
+      record.scorers[event.scorer] = (record.scorers[event.scorer] || 0) + 1;
+    });
 }
 
 function sortedTable() {
@@ -394,107 +635,236 @@ function renderSquad() {
   `;
   elements.squadList.replaceChildren();
   team.players.forEach((entry) => {
+    const visibleOverall = Math.round(
+      (Number(entry.player?.current_ability) || Number(entry.overall) * 2 || 0) / 2,
+    );
     const item = document.createElement("li");
     item.innerHTML = `
       <span>${escapeHtml(entry.role)}</span>
       <strong>${escapeHtml(playerName(entry.player))}${entry.isCaptain ? " (C)" : ""}</strong>
-      <b>${entry.overall}</b>
+      <b>${visibleOverall}</b>
     `;
     elements.squadList.append(item);
   });
 }
 
 function eventMarkup(event) {
+  const marker = event.card === "yellow"
+    ? "■ "
+    : event.card === "red"
+      ? "■ "
+      : event.goal
+        ? "● "
+        : "";
   return `
-    <li class="${event.goal ? "is-goal" : ""} ${event.side === "opponent" ? "is-opponent" : ""}">
+    <li class="${event.goal ? "is-goal" : ""} ${event.card ? `is-${event.card}-card` : ""} ${event.side === "opponent" ? "is-opponent" : ""}">
       <time>${event.minute}'</time>
-      <span><strong>${event.goal ? "● " : ""}${escapeHtml(event.scorer)}</strong>${escapeHtml(event.text)}</span>
+      <span><strong>${marker}${escapeHtml(event.scorer)}</strong>${escapeHtml(event.text)}</span>
     </li>
   `;
 }
 
-function animateMatch(result) {
-  return new Promise((resolve) => {
-    if (elements.matches.querySelector(".run-empty")) elements.matches.replaceChildren();
-    const article = document.createElement("article");
-    article.className = "run-match-card is-live";
-    article.innerHTML = `
-      <header>
-        <span>${escapeHtml(result.stage)}</span>
-        <div class="run-match-teams">
-          <strong>${escapeHtml(team.teamName)}</strong>
-          <b data-live-score>0 – 0</b>
-          <strong>${escapeHtml(result.opponentName)}</strong>
-        </div>
-      </header>
-      <div class="run-formula">
-        <span>Team OVR <b>${result.formula.userOvr}</b></span>
-        <span>Opponent OVR <b>${result.formula.rivalOvr}</b></span>
-        <span>Attack model <b>${result.formula.userLambda}–${result.formula.rivalLambda}</b></span>
-        <span>RNG <b>${result.formula.rngRoll}/100</b></span>
-      </div>
-      <ol class="run-event-list" data-live-events></ol>
-    `;
-    elements.matches.append(article);
-    const score = article.querySelector("[data-live-score]");
-    const eventList = article.querySelector("[data-live-events]");
-    let minute = 0;
-    let userScore = 0;
-    let rivalScore = 0;
-    let eventIndex = 0;
-    elements.clockStatus.textContent = `${team.teamName} vs ${result.opponentName}`;
+function delay(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
+function animatePeriod({
+  start,
+  end,
+  events,
+  eventList,
+  score,
+  scoreDisplay,
+}) {
+  return new Promise((resolve) => {
+    let minute = start - 1;
+    let eventIndex = 0;
     const timer = window.setInterval(() => {
       minute += 1;
       elements.clock.textContent = `${minute}'`;
-      while (result.events[eventIndex]?.minute === minute) {
-        const event = result.events[eventIndex];
+      while (events[eventIndex]?.minute <= minute) {
+        const event = events[eventIndex];
         if (event.goal) {
-          if (event.side === "user") userScore += 1;
-          else rivalScore += 1;
-          score.textContent = `${userScore} – ${rivalScore}`;
+          if (event.side === "user") score.user += 1;
+          else score.opponent += 1;
+          scoreDisplay.textContent = `${score.user} – ${score.opponent}`;
         }
         eventList.insertAdjacentHTML("beforeend", eventMarkup(event));
         eventIndex += 1;
       }
-      if (minute < 90) return;
+      if (minute < end) return;
       window.clearInterval(timer);
-      article.classList.remove("is-live");
-      article.classList.add(result.userWon ? "is-win" : result.userGoals === result.rivalGoals && !result.shootout ? "is-draw" : "is-loss");
-      score.textContent = `${result.userGoals} – ${result.rivalGoals}`;
-      if (result.shootout) {
-        const shootout = document.createElement("p");
-        shootout.className = "run-shootout";
-        shootout.textContent = `Penalties: ${team.teamName} ${result.shootout[0]}–${result.shootout[1]} ${result.opponentName}`;
-        article.append(shootout);
-      }
-      elements.clockStatus.textContent = "Full time";
-      window.setTimeout(resolve, 350);
+      resolve();
     }, 45);
   });
 }
 
-function renderBracket() {
-  elements.bracket.replaceChildren();
-  state.knockoutPath.forEach((opponentKey, index) => {
-    const node = document.createElement("div");
-    node.className = "run-bracket-node";
-    if (index < state.knockoutIndex) node.classList.add("is-complete");
-    if (index === state.knockoutIndex && !state.completed) node.classList.add("is-current");
-    node.innerHTML = `
-      <span>${KNOCKOUT_STAGES[index]}</span>
-      <strong>${escapeHtml(team.teamName)}</strong>
-      <small>vs ${escapeHtml(CLUBS[opponentKey].name)}</small>
-    `;
-    elements.bracket.append(node);
-  });
+async function animatePenaltyShootout(result, article, scoreDisplay) {
+  const section = document.createElement("section");
+  section.className = "run-penalty-section";
+  section.innerHTML = `
+    <h3>Penalty shootout</h3>
+    <div class="run-penalty-score"><span>${escapeHtml(team.teamName)}</span><b data-penalty-score>0 – 0</b><span>${escapeHtml(result.opponentName)}</span></div>
+    <ol class="run-penalty-list" data-penalty-events></ol>
+  `;
+  article.append(section);
+  const list = section.querySelector("[data-penalty-events]");
+  const penaltyScore = section.querySelector("[data-penalty-score]");
+  let ours = 0;
+  let theirs = 0;
+  elements.clock.textContent = "PEN";
+  elements.clockStatus.textContent = "Penalty shootout";
+
+  for (const attempt of result.penaltyEvents) {
+    await delay(260);
+    if (attempt.userScored) ours += 1;
+    if (attempt.opponentScored) theirs += 1;
+    penaltyScore.textContent = `${ours} – ${theirs}`;
+    list.insertAdjacentHTML("beforeend", `
+      <li><b>${attempt.round}</b><span class="${attempt.userScored ? "is-scored" : "is-missed"}">${escapeHtml(attempt.userText)}</span><span class="${attempt.opponentScored ? "is-scored" : "is-missed"}">${escapeHtml(attempt.opponentText)}</span></li>
+    `);
+  }
+  scoreDisplay.textContent = `${result.userGoals} – ${result.rivalGoals} (${ours}–${theirs} pens)`;
 }
 
-function showResult({ champion = false, eliminatedBy = "" } = {}) {
+async function animateMatch(result) {
+  elements.matches.querySelector(".run-empty")?.remove();
+  elements.matches.querySelector(".run-pending-shell")?.remove();
+  const shell = document.createElement("details");
+  shell.className = "run-match-shell";
+  shell.open = true;
+  shell.innerHTML = `
+    <summary>
+      <span>${escapeHtml(result.stage)}</span>
+      <strong>${escapeHtml(team.teamName)} vs ${escapeHtml(result.opponentName)}</strong>
+      <b data-summary-score>Live</b>
+    </summary>
+  `;
+  const article = document.createElement("article");
+  article.className = "run-match-card is-live";
+  article.innerHTML = `
+    <header>
+      <span>${escapeHtml(result.stage)}</span>
+      <div class="run-match-teams">
+        <strong>${escapeHtml(team.teamName)}</strong>
+        <b data-live-score>0 – 0</b>
+        <strong>${escapeHtml(result.opponentName)}</strong>
+      </div>
+    </header>
+    <div class="run-formula">
+      <span>Team OVR <b>${result.formula.userOvr}</b></span>
+      <span>Opponent OVR <b>${result.formula.rivalOvr}</b></span>
+      <span>Attack model <b>${result.formula.userLambda}–${result.formula.rivalLambda}</b></span>
+      <span>RNG <b>${result.formula.rngRoll}/100</b></span>
+    </div>
+    <ol class="run-event-list" data-live-events></ol>
+  `;
+  shell.append(article);
+  elements.matches.append(shell);
+  const scoreDisplay = article.querySelector("[data-live-score]");
+  const eventList = article.querySelector("[data-live-events]");
+  const summaryScore = shell.querySelector("[data-summary-score]");
+  const score = { user: 0, opponent: 0 };
+  elements.clockStatus.textContent = `${team.teamName} vs ${result.opponentName}`;
+
+  await animatePeriod({
+    start: 1,
+    end: 90,
+    events: result.events,
+    eventList,
+    score,
+    scoreDisplay,
+  });
+
+  if (result.hasExtraTime) {
+    const extra = document.createElement("section");
+    extra.className = "run-extra-time-section";
+    extra.innerHTML = '<h3>Extra time</h3><ol class="run-event-list" data-extra-events></ol>';
+    article.append(extra);
+    elements.clockStatus.textContent = "Extra time";
+    await animatePeriod({
+      start: 91,
+      end: 120,
+      events: result.extraTimeEvents,
+      eventList: extra.querySelector("[data-extra-events]"),
+      score,
+      scoreDisplay,
+    });
+  }
+
+  if (result.shootout) await animatePenaltyShootout(result, article, scoreDisplay);
+  article.classList.remove("is-live");
+  article.classList.add(result.userWon
+    ? "is-win"
+    : result.userGoals === result.rivalGoals && !result.shootout
+      ? "is-draw"
+      : "is-loss");
+  const finalScore = result.shootout
+    ? `${result.userGoals}–${result.rivalGoals}, pens ${result.shootout[0]}–${result.shootout[1]}`
+    : `${result.userGoals}–${result.rivalGoals}`;
+  summaryScore.textContent = finalScore;
+  elements.clockStatus.textContent = "Full time";
+  await delay(500);
+  shell.open = false;
+}
+
+function currentFixture() {
+  if (state.phase === "group") {
+    const round = GROUP_ROUNDS[state.groupRound];
+    return round
+      ? { stage: `Group stage · Matchday ${state.groupRound + 1}`, opponentKey: round.userOpponent }
+      : null;
+  }
+  const opponentKey = state.knockoutPath[state.knockoutIndex];
+  return opponentKey
+    ? { stage: KNOCKOUT_STAGES[state.knockoutIndex], opponentKey }
+    : null;
+}
+
+function renderPendingFixture() {
+  if (state.completed) return;
+  const fixture = currentFixture();
+  if (!fixture) return;
+  elements.matches.querySelector(".run-empty")?.remove();
+  elements.matches.querySelector(".run-pending-shell")?.remove();
+  const shell = document.createElement("details");
+  shell.className = "run-match-shell run-pending-shell";
+  shell.open = true;
+  shell.innerHTML = `
+    <summary>
+      <span>${escapeHtml(fixture.stage)}</span>
+      <strong>${escapeHtml(team.teamName)} vs ${escapeHtml(CLUBS[fixture.opponentKey].name)}</strong>
+      <b>Ready</b>
+    </summary>
+    <div class="run-pending-body"><p>Squads are ready. Start this match when you are ready to watch it.</p></div>
+  `;
+  shell.querySelector(".run-pending-body").append(elements.nextButton);
+  elements.nextButton.hidden = false;
+  elements.matches.append(shell);
+}
+
+function renderBracket() {
+  elements.bracket.replaceChildren();
+  const opponentKey = state.knockoutPath[state.knockoutIndex];
+  if (!opponentKey || state.completed) return;
+  const node = document.createElement("div");
+  node.className = "run-bracket-node is-current";
+  node.innerHTML = `
+    <span>${KNOCKOUT_STAGES[state.knockoutIndex]}</span>
+    <strong>${escapeHtml(team.teamName)}</strong>
+    <small>vs ${escapeHtml(CLUBS[opponentKey].name)}</small>
+  `;
+  elements.bracket.append(node);
+}
+
+function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" } = {}) {
   state.completed = true;
   elements.nextButton.disabled = true;
   elements.nextButton.hidden = true;
   const record = state.userRecord;
+  const [topScorer = "—", topGoals = 0] = Object.entries(record.scorers)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0] || [];
+  const captain = team.players.find((entry) => entry.isCaptain);
   elements.resultCard.hidden = false;
   elements.resultCard.className = `run-result-card ${champion ? "is-champion" : "is-eliminated"}`;
   elements.resultCard.innerHTML = `
@@ -503,7 +873,7 @@ function showResult({ champion = false, eliminatedBy = "" } = {}) {
     <p>${champion
       ? "The drafted XI complete the 2003–04 route and lift the trophy in Gelsenkirchen."
       : eliminatedBy
-        ? `Eliminated by ${escapeHtml(eliminatedBy)}.`
+        ? `Eliminated in the ${escapeHtml(eliminatedStage)} by ${escapeHtml(eliminatedBy)}.`
         : `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group H.`}</p>
     <div class="run-result-stats">
       <span><strong>${record.gf}</strong><small>Goals for</small></span>
@@ -512,6 +882,11 @@ function showResult({ champion = false, eliminatedBy = "" } = {}) {
       <span><strong>${record.draws}</strong><small>Draws</small></span>
       <span><strong>${record.losses}</strong><small>Losses</small></span>
       <span><strong>${state.groupPlace || "—"}</strong><small>Group place</small></span>
+    </div>
+    <div class="run-result-honours">
+      <span><small>Captain</small><strong>${escapeHtml(playerName(captain?.player))}</strong></span>
+      <span><small>Top scorer</small><strong>${escapeHtml(topScorer)} · ${topGoals} goal${topGoals === 1 ? "" : "s"}</strong></span>
+      <span><small>Exit stage</small><strong>${escapeHtml(champion ? "Winner" : eliminatedStage || "Group stage")}</strong></span>
     </div>
     <div class="run-result-actions">
       <button type="button" data-replay>Replay run</button>
@@ -552,6 +927,7 @@ async function playGroupRound() {
     elements.stageDescription.textContent = "Standings updated. The next opponent is ready.";
     elements.nextButton.textContent = `Play Matchday ${state.groupRound + 1} →`;
     elements.nextButton.disabled = false;
+    renderPendingFixture();
     return;
   }
 
@@ -560,7 +936,7 @@ async function playGroupRound() {
   if (state.groupPlace > 2) {
     elements.stageTitle.textContent = `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group H`;
     elements.stageDescription.textContent = "The knockout places are out of reach.";
-    showResult();
+    showResult({ eliminatedStage: "Group stage" });
     return;
   }
 
@@ -569,10 +945,11 @@ async function playGroupRound() {
   elements.bracketPanel.hidden = false;
   elements.stageKicker.textContent = "Qualified";
   elements.stageTitle.textContent = `${state.groupPlace === 1 ? "Group winners" : "Group runners-up"} · Round of 16`;
-  elements.stageDescription.textContent = `The ${state.groupPlace === 1 ? "first-place" : "second-place"} route is now locked.`;
+  elements.stageDescription.textContent = `Next: ${CLUBS[state.knockoutPath[0]].name}. Future opponents remain hidden.`;
   elements.nextButton.textContent = `Play ${CLUBS[state.knockoutPath[0]].name} →`;
   elements.nextButton.disabled = false;
   renderBracket();
+  renderPendingFixture();
 }
 
 async function playKnockoutRound() {
@@ -584,12 +961,16 @@ async function playKnockoutRound() {
   const roster = await opponentRoster(opponentKey);
   state.matchNumber += 1;
   const result = matchSimulation(opponentKey, roster, stage);
+  if (result.needsPenalties) {
+    elements.stageDescription.textContent = "The tie may require penalties. Selecting the strongest available takers…";
+    await preparePenaltyShootout(result, roster);
+  }
   await animateMatch(result);
   updateUserRecord(result);
 
   if (!result.userWon) {
     elements.stageDescription.textContent = "The European run ends here.";
-    showResult({ eliminatedBy: CLUBS[opponentKey].name });
+    showResult({ eliminatedBy: CLUBS[opponentKey].name, eliminatedStage: stage });
     return;
   }
 
@@ -608,6 +989,7 @@ async function playKnockoutRound() {
   elements.stageDescription.textContent = `${CLUBS[opponentKey].name} eliminated. The next tie is ready.`;
   elements.nextButton.textContent = `Play ${CLUBS[nextOpponent].name} →`;
   elements.nextButton.disabled = false;
+  renderPendingFixture();
 }
 
 async function playNext() {
@@ -619,6 +1001,7 @@ async function playNext() {
   } catch (error) {
     elements.stageDescription.textContent = error.message || "The match could not be simulated.";
     elements.nextButton.disabled = false;
+    renderPendingFixture();
   } finally {
     state.busy = false;
   }
@@ -640,4 +1023,5 @@ if (!team?.players || team.players.length !== 11 || !team.captainSlotId) {
 } else {
   renderSquad();
   renderTable();
+  renderPendingFixture();
 }

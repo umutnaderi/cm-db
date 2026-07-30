@@ -3414,6 +3414,7 @@ select:focus {
   align-self: end;
   max-width: 360px;
   color: var(--fit-color, var(--muted));
+  font-family: "Titillium Web", Arial, Helvetica, sans-serif;
   font-size: 0.63rem;
   font-weight: 700;
   line-height: 1.3;

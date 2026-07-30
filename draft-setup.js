@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-43";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-44";
 
 const PITCH_ROWS = {
   F: 14,
@@ -530,10 +530,7 @@ function playerPositionSummary(candidate) {
   if (!natural.length && !secondary.length) {
     natural.push(...positionsFromText(candidate.position_text));
   }
-  return [
-    natural.length ? `Natural · ${natural.join(" / ")}` : "",
-    secondary.length ? `Secondary · ${secondary.join(" / ")}` : "",
-  ].filter(Boolean).join("  |  ") || "Positions · —";
+  return [...natural, ...secondary].join(" / ") || "—";
 }
 
 function draftedCanonicalIds() {

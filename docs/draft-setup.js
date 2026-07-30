@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-45";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-46";
 
 const PITCH_ROWS = {
   F: 14,
@@ -565,12 +565,12 @@ function seededShuffle(items, seed) {
 }
 
 const ABILITY_DROP_TABLE = [
-  { minimum: 185, maximum: Infinity, share: 0.015 },
-  { minimum: 170, maximum: 184, share: 0.075 },
-  { minimum: 156, maximum: 169, share: 0.08 },
-  { minimum: 140, maximum: 155, share: 0.34 },
-  { minimum: 120, maximum: 139, share: 0.32 },
-  { minimum: -Infinity, maximum: 119, share: 0.17 },
+  { minimum: 185, maximum: Infinity, share: 0.02 },
+  { minimum: 170, maximum: 184, share: 0.09 },
+  { minimum: 156, maximum: 169, share: 0.12 },
+  { minimum: 140, maximum: 155, share: 0.4 },
+  { minimum: 120, maximum: 139, share: 0.3 },
+  { minimum: -Infinity, maximum: 119, share: 0.005 },
 ];
 
 function abilityDropTier(candidate) {

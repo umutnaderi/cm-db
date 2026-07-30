@@ -154,9 +154,11 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     }
     const pullTotal = tierPulls.reduce((sum, count) => sum + count, 0);
     globalThis.assert.ok(tierPulls[0] > 0 && tierPulls[0] / pullTotal < 0.04);
-    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.04 && tierPulls[1] / pullTotal < 0.12);
-    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.04 && tierPulls[2] / pullTotal < 0.13);
-    globalThis.assert.ok(tierPulls[3] / pullTotal > 0.27 && tierPulls[3] / pullTotal < 0.42);
+    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.06 && tierPulls[1] / pullTotal < 0.14);
+    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.08 && tierPulls[2] / pullTotal < 0.17);
+    globalThis.assert.ok(tierPulls[3] / pullTotal > 0.37 && tierPulls[3] / pullTotal < 0.49);
+    globalThis.assert.ok(tierPulls[4] / pullTotal > 0.27 && tierPulls[4] / pullTotal < 0.38);
+    globalThis.assert.ok(tierPulls[5] / pullTotal < 0.02);
     globalThis.assert.ok(tierPulls[3] > tierPulls[1] + tierPulls[2]);
     state.premiumDrought = 4;
     const protectedPremiumRoll = chooseSuggestions(suggestionPool, 901);

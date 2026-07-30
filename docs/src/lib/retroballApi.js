@@ -311,6 +311,22 @@ export async function saveDraftRecord(record, options = {}) {
   });
 }
 
+export async function getDraftSquad(seed, options = {}) {
+  if (!seed) throw new Error("A squad seed is required.");
+  return requestJson(`/api/draft-squads/${encodeURIComponent(seed)}`, {
+    signal: options.signal,
+  });
+}
+
+export async function saveDraftSquad(squad, options = {}) {
+  return requestJson("/api/draft-squads", {
+    method: "POST",
+    signal: options.signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(squad),
+  });
+}
+
 export async function getPlayerMetrics(players, options = {}) {
   const identities = (Array.isArray(players) ? players : [])
     .map((player) => ({

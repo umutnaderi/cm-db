@@ -668,11 +668,89 @@ export default {
         return json({ items }, env, 200, 0);
       }
 
+      if (url.pathname.startsWith("/api/draft-squads/") && request.method === "GET") {
+        const seed = decodeURIComponent(url.pathname.slice("/api/draft-squads/".length))
+          .trim()
+          .toUpperCase();
+        if (!/^XI-[A-Z0-9]{10,18}$/.test(seed)) {
+          return json({ error: "Invalid squad seed." }, env, 400, 0);
+        }
+        const row = await env.DB.prepare(`
+          SELECT seed, team_name, formation, style, squad_json
+          FROM draft_squads
+          WHERE seed = ?
+          LIMIT 1
+        `).bind(seed).first<QueryRow>();
+        if (!row) return json({ error: "Squad not found." }, env, 404, 0);
+        let players: unknown[] = [];
+        try {
+          const parsed = JSON.parse(textField(row, "squad_json"));
+          if (Array.isArray(parsed)) players = parsed;
+        } catch {
+          return json({ error: "Saved squad data is invalid." }, env, 500, 0);
+        }
+        return json({
+          squad: {
+            seed: textField(row, "seed"),
+            teamName: textField(row, "team_name"),
+            formation: textField(row, "formation"),
+            style: textField(row, "style"),
+            players,
+          },
+        }, env, 200, 0);
+      }
+
+      if (url.pathname === "/api/draft-squads") {
+        if (request.method !== "POST") {
+          return json({ error: "Method not allowed." }, env, 405, 0);
+        }
+        const contentLength = Number(request.headers.get("content-length") || 0);
+        if (contentLength > 16_000) {
+          return json({ error: "Squad payload is too large." }, env, 413, 0);
+        }
+        const body = await request.json<Record<string, unknown>>().catch(() => null);
+        const seed = typeof body?.seed === "string" ? body.seed.trim().toUpperCase() : "";
+        const teamName = typeof body?.teamName === "string"
+          ? body.teamName.trim().slice(0, 60)
+          : "Ultimate XI";
+        const formation = typeof body?.formation === "string"
+          ? body.formation.trim().slice(0, 20)
+          : "";
+        const style = typeof body?.style === "string" ? body.style.trim().slice(0, 20) : "";
+        const sourcePlayers = Array.isArray(body?.players) ? body.players : [];
+        const players = sourcePlayers.slice(0, 11).map((entry) => {
+          const player = entry && typeof entry === "object"
+            ? entry as Record<string, unknown>
+            : {};
+          const cleanText = (key: string, maximum: number) =>
+            typeof player[key] === "string" ? String(player[key]).trim().slice(0, maximum) : "";
+          return {
+            role: cleanText("role", 8),
+            name: cleanText("name", 100) || "Unknown player",
+            overall: Math.min(99, Math.max(0, Math.trunc(Number(player.overall) || 0))),
+            season: cleanText("season", 20),
+            club: cleanText("club", 100),
+            database: cleanText("database", 80),
+            sourcePersonId: cleanText("sourcePersonId", 80),
+            captain: player.captain === true,
+          };
+        });
+        if (!/^XI-[A-Z0-9]{10,18}$/.test(seed) || players.length !== 11) {
+          return json({ error: "A valid squad seed and eleven players are required." }, env, 400, 0);
+        }
+        await env.DB.prepare(`
+          INSERT INTO draft_squads (seed, team_name, formation, style, squad_json)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(seed) DO NOTHING
+        `).bind(seed, teamName || "Ultimate XI", formation, style, JSON.stringify(players)).run();
+        return json({ ok: true, seed }, env, 200, 0);
+      }
+
       if (url.pathname === "/api/draft-records") {
         if (request.method === "GET") {
           const result = await env.DB.prepare(`
             SELECT
-              id, username, team_name, stage, stage_rank, champion,
+              id, username, team_name, stage, stage_rank, champion, squad_seed,
               captain_name, captain_database, captain_source_person_id,
               top_scorer_name, top_scorer_database, top_scorer_source_person_id,
               top_scorer_goals,
@@ -701,6 +779,7 @@ export default {
         const usernameKey = username.toLocaleLowerCase("en-US");
         const runId = text("runId", 80);
         const stage = text("stage", 40);
+        const squadSeed = text("squadSeed", 24).toUpperCase();
         const captainName = text("captainName", 100);
         const topScorerName = text("topScorerName", 100);
         const dominatorName = text("dominatorName", 100) || topScorerName;
@@ -711,19 +790,20 @@ export default {
 
         await env.DB.prepare(`
           INSERT INTO draft_records (
-            run_id, username, username_key, team_name, stage, stage_rank, champion,
+            run_id, username, username_key, team_name, stage, stage_rank, champion, squad_seed,
             captain_name, captain_database, captain_source_person_id,
             top_scorer_name, top_scorer_database, top_scorer_source_person_id,
             top_scorer_goals,
             dominator_name, dominator_database, dominator_source_person_id, dominator_awards,
             played, wins, draws, losses, goals_for, goals_against
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(run_id, username_key) DO UPDATE SET
             username = excluded.username,
             team_name = excluded.team_name,
             stage = excluded.stage,
             stage_rank = excluded.stage_rank,
             champion = excluded.champion,
+            squad_seed = excluded.squad_seed,
             captain_name = excluded.captain_name,
             captain_database = excluded.captain_database,
             captain_source_person_id = excluded.captain_source_person_id,
@@ -745,6 +825,7 @@ export default {
         `).bind(
           runId, username, usernameKey, text("teamName", 60) || "Ultimate XI",
           stage, integer("stageRank", 10), integer("champion", 1),
+          /^XI-[A-Z0-9]{10,18}$/.test(squadSeed) ? squadSeed : null,
           captainName, text("captainDatabase", 80) || null,
           text("captainSourcePersonId", 80) || null,
           topScorerName, text("topScorerDatabase", 80) || null,

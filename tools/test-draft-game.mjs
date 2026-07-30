@@ -1,6 +1,35 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
+import {
+  createDraftSquad,
+  formatDraftSquadText,
+} from "../src/lib/draftSquad.js";
+
+const shareTeam = {
+  teamName: "Seeded XI",
+  formation: "4-3-3",
+  style: "Balanced",
+  players: Array.from({ length: 11 }, (_, index) => ({
+    role: index === 0 ? "GK" : index < 5 ? "DC" : index < 8 ? "MC" : "FC",
+    overall: 70 + index,
+    isCaptain: index === 7,
+    player: {
+      database_slug: `db-${index % 4}`,
+      source_person_id: `player-${index}`,
+      display_name: `Player ${index}`,
+      current_ability: 140 + index,
+      database_title: "2003/2004",
+      club_name: "Example FC",
+    },
+  })),
+};
+const sharedSquad = createDraftSquad(shareTeam);
+assert.match(sharedSquad.seed, /^XI-[A-Z0-9]{10,18}$/);
+assert.equal(sharedSquad.players.length, 11);
+assert.equal(sharedSquad.players.filter((player) => player.captain).length, 1);
+assert.equal(createDraftSquad(shareTeam).seed, sharedSquad.seed);
+assert.match(formatDraftSquadText(sharedSquad), /MC · Player 7 \(C\)/);
 
 const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8")
   .replace(/^import[\s\S]*?;\r?\n/, "")
@@ -184,6 +213,16 @@ assert.ok(
   runSourceText.includes("clockDisplay.textContent = `${minute}'`;"),
   "The active match clock must advance inside its scoreboard",
 );
+assert.ok(runSourceText.includes("data-share-squad"), "Finished runs must offer squad sharing");
+assert.ok(runSourceText.includes("squadSeed: sharedSquad.seed"), "Records must carry the squad seed");
+
+const sharedSquadHtml = fs.readFileSync(new URL("../draft-squad.html", import.meta.url), "utf8");
+const sharedSquadSource = fs.readFileSync(new URL("../draft-squad.js", import.meta.url), "utf8");
+const workerSource = fs.readFileSync(new URL("../worker/src/index.ts", import.meta.url), "utf8");
+assert.ok(sharedSquadHtml.includes('id="sharedSquadList"'));
+assert.ok(sharedSquadSource.includes("getDraftSquad(seed)"));
+assert.ok(workerSource.includes('url.pathname === "/api/draft-squads"'));
+assert.ok(workerSource.includes("squad_seed = excluded.squad_seed"));
 
 const player = (name, role, line, currentAbility, id) => ({
   canonical_player_name: name,
@@ -231,7 +270,7 @@ const savedTeam = {
 };
 
 const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8")
-  .replace(/^import[\s\S]*?;\r?\n/, "")
+  .replace(/^(?:import[\s\S]*?;\r?\n)+/, "")
   .split("elements.nextButton.addEventListener")[0]
   .concat(`
     (async () => {
@@ -357,7 +396,9 @@ await vm.runInNewContext(runSource, {
   Promise,
   Set,
   clearInterval,
+  createDraftSquad,
   document: { createElement: fakeElement, querySelector: fakeElement },
+  formatDraftSquadText,
   localStorage: {
     getItem(key) {
       return key === "retroball-draft-team-v1" ? JSON.stringify(savedTeam) : "";
@@ -367,6 +408,7 @@ await vm.runInNewContext(runSource, {
   testOpponentRoster: opponentRoster,
   setInterval,
   setTimeout,
+  saveDraftSquad: async () => ({ ok: true }),
   window: { clearInterval, setInterval, setTimeout },
 });
 

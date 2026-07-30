@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Shared Draft Squad · Old-School-Football</title>
+    <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
+    <link rel="stylesheet" href="styles.css?v=20260730-41">
+  </head>
+  <body class="draft-squad-page">
+    <main class="draft-squad-shell">
+      <header class="draft-squad-header">
+        <a class="eyebrow home-link" href="draft.html">The Ultimate Draft</a>
+        <span class="draft-panel-kicker">Shared XI</span>
+        <h1 id="sharedSquadName">Loading squad…</h1>
+        <p id="sharedSquadMeta"></p>
+        <code id="sharedSquadSeed"></code>
+      </header>
+
+      <section class="draft-squad-list-card" aria-live="polite">
+        <ol class="draft-squad-share-list" id="sharedSquadList">
+          <li class="is-loading">Loading the eleven…</li>
+        </ol>
+        <p class="draft-squad-error" id="sharedSquadError" hidden></p>
+      </section>
+
+      <nav class="draft-squad-actions" aria-label="Squad actions">
+        <button id="sharedSquadButton" type="button" disabled>Share squad</button>
+        <a href="draft-setup.html">Build your XI</a>
+      </nav>
+      <small id="sharedSquadStatus"></small>
+    </main>
+
+    <script src="draft-squad.js?v=20260730-41" type="module"></script>
+  </body>
+</html>

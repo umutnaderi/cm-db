@@ -3,8 +3,13 @@ import {
   getPlayer,
   getPlayerMetrics,
   saveDraftRecord,
+  saveDraftSquad,
   searchPlayers,
-} from "./src/lib/retroballApi.js?v=20260730-40";
+} from "./src/lib/retroballApi.js?v=20260730-41";
+import {
+  createDraftSquad,
+  formatDraftSquadText,
+} from "./src/lib/draftSquad.js?v=20260730-41";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
@@ -139,6 +144,7 @@ function playerName(player) {
 }
 
 const team = readJsonStorage(TEAM_STORAGE_KEY, null);
+const sharedSquad = createDraftSquad(team);
 const runSeed = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
 const opponentCache = readJsonStorage(OPPONENT_CACHE_KEY, {});
 const rosterMemory = new Map();
@@ -170,6 +176,7 @@ const state = {
   table: new Map(),
   matchNumber: 0,
 };
+let squadSavePromise = null;
 
 function emptyStanding(key) {
   return {
@@ -955,6 +962,7 @@ function recordPayload(username) {
   const stage = currentRecordStage();
   return {
     runId: `${runSeed}:${team.teamName}`,
+    squadSeed: sharedSquad.seed,
     username,
     teamName: team.teamName,
     stage: stage.label,
@@ -991,7 +999,7 @@ function linkedRecordPlayer(name, database, sourcePersonId, suffix = "") {
 function renderRecordRows(items = []) {
   elements.recordRows.replaceChildren();
   if (!items.length) {
-    elements.recordRows.innerHTML = '<tr><td colspan="5">No saved runs yet.</td></tr>';
+    elements.recordRows.innerHTML = '<tr><td colspan="6">No saved runs yet.</td></tr>';
     return;
   }
   items.forEach((item) => {
@@ -1002,9 +1010,63 @@ function renderRecordRows(items = []) {
       <td>${linkedRecordPlayer(item.captain_name, item.captain_database, item.captain_source_person_id)}</td>
       <td>${linkedRecordPlayer(item.top_scorer_name, item.top_scorer_database, item.top_scorer_source_person_id, ` · ${item.top_scorer_goals}`)}</td>
       <td>${linkedRecordPlayer(item.dominator_name, item.dominator_database, item.dominator_source_person_id, ` · ${item.dominator_awards}`)}</td>
+      <td>${item.squad_seed
+        ? `<a href="draft-squad.html?seed=${encodeURIComponent(item.squad_seed)}">View XI</a>`
+        : "—"}</td>
     `;
     elements.recordRows.append(row);
   });
+}
+
+function squadShareUrl() {
+  const url = new URL("draft-squad.html", window.location.href);
+  url.searchParams.set("seed", sharedSquad.seed);
+  return url.href;
+}
+
+function persistSharedSquad() {
+  if (!squadSavePromise) {
+    squadSavePromise = saveDraftSquad(sharedSquad).catch((error) => {
+      squadSavePromise = null;
+      throw error;
+    });
+  }
+  return squadSavePromise;
+}
+
+async function shareFinishedSquad(button, status) {
+  button.disabled = true;
+  status.textContent = "Preparing squad link…";
+  let url = "";
+  try {
+    await persistSharedSquad();
+    url = squadShareUrl();
+  } catch {
+    status.textContent = "The public link is unavailable; sharing the squad list instead.";
+  }
+  try {
+    const text = formatDraftSquadText(sharedSquad);
+    if (navigator.share) {
+      const shareData = {
+        title: `${sharedSquad.teamName} · Ultimate Draft`,
+        text,
+      };
+      if (url) shareData.url = url;
+      await navigator.share(shareData);
+      status.textContent = "Squad shared.";
+    } else if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText([text, url].filter(Boolean).join("\n\n"));
+      status.textContent = url ? "Squad list and link copied." : "Squad list copied.";
+    } else {
+      status.textContent = url || "Sharing is not supported by this browser.";
+    }
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      status.textContent = error.message || "Could not prepare the squad link.";
+    }
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadRecordTable() {
@@ -1019,6 +1081,7 @@ async function loadRecordTable() {
 
 function renderRecordOpportunity() {
   if (!state.userRecord.played) return;
+  void persistSharedSquad().catch(() => {});
   elements.recordsPanel.hidden = false;
   const stage = currentRecordStage();
   elements.recordStatus.textContent = `Save your current ${stage.label.toLowerCase()} record.`;
@@ -1453,6 +1516,14 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
         </ol>
       </div>`
     : "";
+  const squadList = sharedSquad.players.map((player) => `
+    <li>
+      <span>${escapeHtml(player.role)}</span>
+      <strong>${escapeHtml(player.name)}${player.captain ? " <b>C</b>" : ""}</strong>
+      <small>${escapeHtml(player.season || "—")}</small>
+      <em>${player.overall}</em>
+    </li>
+  `).join("");
   elements.resultCard.hidden = false;
   elements.resultCard.className = `run-result-card ${champion ? "is-champion" : "is-eliminated"}`;
   elements.resultCard.innerHTML = `
@@ -1478,16 +1549,32 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
       <span><small>Exit stage</small><strong>${escapeHtml(champion ? "Winner" : eliminatedStage || "Group stage")}</strong></span>
     </div>
     ${matchSummary}
+    <div class="run-result-squad">
+      <div>
+        <span class="draft-panel-kicker">Share your XI</span>
+        <h3>${escapeHtml(sharedSquad.teamName)}</h3>
+        <code>${escapeHtml(sharedSquad.seed)}</code>
+      </div>
+      <ol>${squadList}</ol>
+      <div class="run-result-share">
+        <button type="button" data-share-squad>Share squad</button>
+        <small data-share-status>Your exact XI will open as a public list.</small>
+      </div>
+    </div>
     <div class="run-result-actions">
       <button type="button" data-replay>Replay run</button>
       <a href="draft-setup.html">Edit team</a>
     </div>
   `;
+  void persistSharedSquad().catch(() => {});
   renderRecordOpportunity();
   if (state.savedUsername) {
     void saveDraftRecord(recordPayload(state.savedUsername)).then(loadRecordTable).catch(() => {});
   }
   elements.resultCard.querySelector("[data-replay]").addEventListener("click", () => window.location.reload());
+  const shareButton = elements.resultCard.querySelector("[data-share-squad]");
+  const shareStatus = elements.resultCard.querySelector("[data-share-status]");
+  shareButton.addEventListener("click", () => shareFinishedSquad(shareButton, shareStatus));
   elements.resultCard.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 

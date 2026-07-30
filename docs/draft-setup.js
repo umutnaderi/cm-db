@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-38";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-39";
 
 const PITCH_ROWS = {
   F: 14,
@@ -117,6 +117,7 @@ const state = {
   rollNumber: 0,
   rerollsRemaining: 3,
   qualityDrought: 0,
+  offeredPlayerIds: new Set(),
 };
 
 const formationChoices = document.querySelector("#formationChoices");
@@ -186,6 +187,10 @@ function currentSlots() {
 
 function candidateKey(candidate) {
   return `${candidate.database_slug}:${candidate.source_person_id}`;
+}
+
+function candidateIdentity(candidate) {
+  return candidate.canonical_player_public_id || candidateKey(candidate);
 }
 
 function playerName(candidate) {
@@ -273,6 +278,18 @@ function draftedOverall(candidate) {
   return Math.min(99, Math.max(0, Math.round((Number(candidate.current_ability) || 0) / 2)));
 }
 
+function positionAbilityMultiplier(candidate, role) {
+  const fit = positionFit(candidate, role);
+  return {
+    natural: 1,
+    playable: 0.92,
+    limited: 0.82,
+    weak: 0.7,
+    awkward: 0.55,
+    "very-awkward": 0.35,
+  }[fit.level] || 0.25;
+}
+
 function averageOverall(values) {
   return values.length
     ? Math.round(values.reduce((total, value) => total + value, 0) / values.length)
@@ -287,15 +304,22 @@ function squadSnapshot() {
       const candidate = state.drafted.get(item.id);
       const isCaptain = item.id === state.captainSlotId;
       const overall = draftedOverall(candidate);
+      const positionMultiplier = positionAbilityMultiplier(candidate, item.effectiveRole);
+      const gameplayOverall = Math.round(overall * positionMultiplier);
+      const gameplayCurrentAbility =
+        (Number(candidate.current_ability) || 0) * positionMultiplier;
       return {
         slotId: item.id,
         role: item.effectiveRole,
         line: squadLine(item.effectiveRole),
         isCaptain,
         overall,
-        effectiveOverall: overall * (isCaptain ? 2 : 1),
+        gameplayOverall,
+        gameplay_current_ability: gameplayCurrentAbility,
+        positionFit: positionFit(candidate, item.effectiveRole).level,
+        effectiveOverall: gameplayOverall * (isCaptain ? 2 : 1),
         effective_current_ability:
-          (Number(candidate.current_ability) || 0) * (isCaptain ? 2 : 1),
+          gameplayCurrentAbility * (isCaptain ? 2 : 1),
         player: candidate,
       };
     });
@@ -418,6 +442,17 @@ function sideRatingLabels(role) {
 
 function positionFit(candidate, role) {
   const ratings = ratingMap(candidate);
+  const goalkeeperRating = firstRating(ratings, ["goalkeeper"]);
+  const usesTwentyPointRatings = [...ratings.values()].some((value) => value > 2);
+  const isGoalkeeper = /(?:^|[/\s])G\s*K(?:$|[/\s])/i.test(
+    String(candidate.position_text || ""),
+  ) || goalkeeperRating >= (usesTwentyPointRatings ? 15 : 2);
+  if (isGoalkeeper && role === "GK") {
+    return { score: 20, level: "natural", label: "Natural" };
+  }
+  if (isGoalkeeper) {
+    return { score: 2, level: "very-awkward", label: "Very awkward" };
+  }
   if (!ratings.size) return { score: 0, level: "none", label: "Not rated" };
   const modern = [...ratings.values()].some((value) => value > 2);
   let base = firstRating(ratings, roleRatingLabels(role));
@@ -462,7 +497,7 @@ function bestFit(candidate, slots = remainingSlots()) {
 function draftedCanonicalIds() {
   return new Set(
     [...state.drafted.values()]
-      .map((candidate) => candidate.canonical_player_public_id || candidateKey(candidate)),
+      .map(candidateIdentity),
   );
 }
 
@@ -506,8 +541,8 @@ function chooseSuggestions(pool, seed) {
   const openSlots = remainingSlots();
   const draftedIds = draftedCanonicalIds();
   const eligible = pool.filter((candidate) => {
-    const identity = candidate.canonical_player_public_id || candidateKey(candidate);
-    return !draftedIds.has(identity);
+    const identity = candidateIdentity(candidate);
+    return !draftedIds.has(identity) && !state.offeredPlayerIds.has(identity);
   });
   const random = seededRandom(seed);
   const selected = [];
@@ -516,7 +551,7 @@ function chooseSuggestions(pool, seed) {
 
   while (selected.length < 6) {
     const candidates = eligible.filter((candidate) => {
-      const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+      const identity = candidateIdentity(candidate);
       return !usedDatabases.has(candidate.database_slug) && !usedPlayers.has(identity);
     });
     if (!candidates.length) break;
@@ -539,7 +574,7 @@ function chooseSuggestions(pool, seed) {
     const candidate = picked.candidate;
     selected.push(candidate);
     usedDatabases.add(candidate.database_slug);
-    usedPlayers.add(candidate.canonical_player_public_id || candidateKey(candidate));
+    usedPlayers.add(candidateIdentity(candidate));
   }
 
   const replaceWith = (candidate) => {
@@ -557,7 +592,7 @@ function chooseSuggestions(pool, seed) {
     const pityCandidates = seededShuffle(
       eligible.filter((candidate) => {
         const ability = Number(candidate.current_ability || 0);
-        const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+        const identity = candidateIdentity(candidate);
         return ability >= 140 && ability < 160 && !usedPlayers.has(identity);
       }),
       seed + 701,
@@ -571,7 +606,7 @@ function chooseSuggestions(pool, seed) {
   ) {
     const emergencyCandidates = eligible
       .filter((candidate) => {
-        const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+        const identity = candidateIdentity(candidate);
         return Number(candidate.current_ability || 0) < 140
           && !usedPlayers.has(identity)
           && bestFit(candidate, openSlots).score > 0;
@@ -777,6 +812,7 @@ function resetDraft(message) {
   state.rollNumber = 0;
   state.rerollsRemaining = 3;
   state.qualityDrought = 0;
+  state.offeredPlayerIds.clear();
   rollIntro.textContent = message;
   suggestionHelp.textContent = "Roll the dice for six database-backed choices.";
   renderSuggestions();
@@ -797,9 +833,14 @@ async function rollPlayers() {
   renderPitch();
 
   try {
-    const seed = Math.floor(Date.now() / 300000) * 100 + state.rollNumber;
+    const seed = Math.floor(Math.random() * 2_147_000_000)
+      ^ Date.now()
+      ^ (state.rollNumber + 1) * 104729;
     const payload = await getDraftCandidates({ seed, perDatabase: 28 });
     state.suggestions = chooseSuggestions(payload.items, seed);
+    state.suggestions.forEach((candidate) => {
+      state.offeredPlayerIds.add(candidateIdentity(candidate));
+    });
     state.qualityDrought = state.suggestions.some(
       (candidate) => Number(candidate.current_ability || 0) >= 140,
     )

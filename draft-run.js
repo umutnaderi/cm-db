@@ -4,7 +4,7 @@ import {
   getPlayerMetrics,
   saveDraftRecord,
   searchPlayers,
-} from "./src/lib/retroballApi.js?v=20260730-38";
+} from "./src/lib/retroballApi.js?v=20260730-39";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
@@ -254,9 +254,18 @@ function opponentOverall(roster) {
 function userPlayers() {
   return team.players.map((entry) => ({
     ...entry.player,
+    current_ability:
+      Number(entry.gameplay_current_ability)
+      || Number(entry.player?.current_ability)
+      || 0,
     role: entry.role,
     line: entry.line,
-    overall: clamp(0, 99, Math.round((Number(entry.player?.current_ability) || 0) / 2)),
+    overall: clamp(0, 99, Math.round(
+      Number(entry.gameplayOverall)
+      || Number(entry.gameplay_current_ability) / 2
+      || Number(entry.player?.current_ability) / 2
+      || 0,
+    )),
     isCaptain: entry.isCaptain,
   }));
 }
@@ -442,8 +451,8 @@ function playerReference(player) {
 }
 
 function isGoalkeeper(player) {
-  return player?.role === "GK"
-    || /(^|\/|\s)GK($|\/|\s)/i.test(String(player?.position_text || ""));
+  if (player?.role) return player.role === "GK";
+  return /(^|\/|\s)GK($|\/|\s)/i.test(String(player?.position_text || ""));
 }
 
 function isDefender(player) {

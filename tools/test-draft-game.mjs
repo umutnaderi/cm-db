@@ -62,6 +62,16 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     );
     globalThis.assert.equal(draftedOverall({ current_ability: 200 }), 99);
     globalThis.assert.equal(draftedOverall({ current_ability: 178 }), 89);
+    const unratedGoalkeeper = {
+      database_slug: "keeper-db",
+      source_person_id: "keeper-1",
+      current_ability: 150,
+      position_text: "GK",
+      position_ratings: [],
+    };
+    globalThis.assert.equal(positionFit(unratedGoalkeeper, "GK").level, "natural");
+    globalThis.assert.equal(positionFit(unratedGoalkeeper, "MC").level, "very-awkward");
+    globalThis.assert.equal(positionAbilityMultiplier(unratedGoalkeeper, "MC"), 0.35);
     const universalRatings = [
       "goalkeeper", "sweeper", "defender", "defensive midfielder",
       "midfielder", "attacking midfielder", "attacker",
@@ -88,6 +98,17 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     globalThis.assert.ok(tierPulls[1] / pullTotal > 0.03 && tierPulls[1] / pullTotal < 0.12);
     globalThis.assert.ok(tierPulls[2] / pullTotal > 0.16 && tierPulls[2] / pullTotal < 0.32);
     globalThis.assert.ok(tierPulls[3] > tierPulls[2]);
+    suggestionPool.slice(0, -1).forEach((candidate) => {
+      state.offeredPlayerIds.add(candidateIdentity(candidate));
+    });
+    const onlyFreshCandidate = suggestionPool.at(-1);
+    const freshSuggestions = chooseSuggestions(suggestionPool, 17);
+    globalThis.assert.ok(
+      freshSuggestions.length === 1
+        && candidateIdentity(freshSuggestions[0]) === candidateIdentity(onlyFreshCandidate),
+      "Previously offered players must not be repeated",
+    );
+    state.offeredPlayerIds.clear();
 
     state.drafted.clear();
     state.formation = "4-3-3";

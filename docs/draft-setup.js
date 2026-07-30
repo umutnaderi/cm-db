@@ -468,7 +468,16 @@ function positionFit(candidate, role) {
     base = firstRating(ratings, ["defender", "defence"]);
   }
 
-  const score = sideLabels.length ? Math.min(base, side) : base;
+  let score = sideLabels.length ? Math.min(base, side) : base;
+  if (role === "AML" || role === "AMR") {
+    const forwardRole = role === "AML" ? "FL" : "FR";
+    const forwardBase = firstRating(ratings, roleRatingLabels(forwardRole));
+    const forwardSideLabels = sideRatingLabels(forwardRole);
+    const forwardSide = firstRating(ratings, forwardSideLabels);
+    const forwardScore = Math.min(forwardBase, forwardSide);
+    const secondaryCeiling = modern ? 15 : 1;
+    score = Math.max(score, Math.min(forwardScore, secondaryCeiling));
+  }
   const thresholds = modern
     ? [
         [18, "natural", "Natural"],
@@ -592,13 +601,31 @@ function chooseSuggestions(pool, seed) {
   const selected = [];
   const usedDatabases = new Set();
   const usedPlayers = new Set();
+  const shouldTargetFits = openSlots.length > 0 && openSlots.length <= 5;
+  const fitSlotCache = new Map();
+  const fittingSlotIds = (candidate) => {
+    const identity = candidateIdentity(candidate);
+    if (!fitSlotCache.has(identity)) {
+      fitSlotCache.set(
+        identity,
+        openSlots
+          .filter((item) => positionFit(candidate, item.effectiveRole).score > 0)
+          .map((item) => item.id),
+      );
+    }
+    return fitSlotCache.get(identity);
+  };
+  const fitsOpenSlot = (candidate) => (
+    shouldTargetFits && fittingSlotIds(candidate).length > 0
+  );
 
-  while (selected.length < 6) {
-    const candidates = eligible.filter((candidate) => {
-      const identity = candidateIdentity(candidate);
-      return !usedDatabases.has(candidate.database_slug) && !usedPlayers.has(identity);
-    });
-    if (!candidates.length) break;
+  const availableCandidates = () => eligible.filter((candidate) => {
+    const identity = candidateIdentity(candidate);
+    return !usedDatabases.has(candidate.database_slug) && !usedPlayers.has(identity);
+  });
+
+  const weightedPick = (candidates) => {
+    if (!candidates.length) return null;
     const tierCounts = ABILITY_DROP_TABLE.map(
       (_, tierIndex) => candidates.filter((candidate) => abilityDropTier(candidate) === tierIndex).length,
     );
@@ -611,22 +638,74 @@ function chooseSuggestions(pool, seed) {
     });
     const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
     let ticket = random() * totalWeight;
-    const picked = weighted.find((item) => {
-      ticket -= item.weight;
-      return ticket <= 0;
-    }) || weighted.at(-1);
-    const candidate = picked.candidate;
+    return (
+      weighted.find((item) => {
+        ticket -= item.weight;
+        return ticket <= 0;
+      }) || weighted.at(-1)
+    ).candidate;
+  };
+
+  const addCandidate = (candidate) => {
+    if (!candidate) return false;
     selected.push(candidate);
     usedDatabases.add(candidate.database_slug);
     usedPlayers.add(candidateIdentity(candidate));
+    return true;
+  };
+
+  const guaranteedFitCount = shouldTargetFits
+    ? 1 + (random() < 0.4 ? 1 : 0)
+    : 0;
+  const coveredSlotIds = new Set();
+  for (let index = 0; index < guaranteedFitCount; index += 1) {
+    const fittingCandidates = availableCandidates().filter(fitsOpenSlot);
+    if (!fittingCandidates.length) break;
+    const addsCoverage = fittingCandidates.filter((candidate) => (
+      fittingSlotIds(candidate).some((slotId) => !coveredSlotIds.has(slotId))
+    ));
+    const candidate = weightedPick(addsCoverage.length ? addsCoverage : fittingCandidates);
+    addCandidate(candidate);
+    const newlyCoveredSlot = fittingSlotIds(candidate)
+      .find((slotId) => !coveredSlotIds.has(slotId));
+    if (newlyCoveredSlot) coveredSlotIds.add(newlyCoveredSlot);
+  }
+
+  /*
+   * The quota targets one or two deliberate matches. If the pool contains no
+   * non-fitting alternatives, the remaining cards can still fall back to fits.
+   */
+  while (selected.length < 6) {
+    const available = availableCandidates();
+    const nonFittingCandidates = available.filter((candidate) => !fitsOpenSlot(candidate));
+    const candidates = nonFittingCandidates.length ? nonFittingCandidates : available;
+    if (!candidates.length) break;
+    addCandidate(weightedPick(candidates));
   }
 
   const replaceWith = (candidate) => {
-    const sameDatabaseIndex = selected.findIndex(
+    const candidateFits = fitsOpenSlot(candidate);
+    const sameFitIndexes = selected
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => fitsOpenSlot(item) === candidateFits);
+    const sameDatabase = sameFitIndexes.find(
+      ({ item }) => item.database_slug === candidate.database_slug,
+    );
+    const candidateDatabaseInUse = selected.some(
       (item) => item.database_slug === candidate.database_slug,
     );
-    const replaceIndex = sameDatabaseIndex >= 0 ? sameDatabaseIndex : selected.length - 1;
-    selected.splice(replaceIndex, 1, candidate);
+    const replacement = sameDatabase
+      || (!candidateDatabaseInUse ? sameFitIndexes.at(-1) : null);
+    if (!replacement) return false;
+    const replaced = replacement.item;
+    selected.splice(replacement.index, 1, candidate);
+    usedPlayers.delete(candidateIdentity(replaced));
+    usedPlayers.add(candidateIdentity(candidate));
+    if (replaced.database_slug !== candidate.database_slug) {
+      usedDatabases.delete(replaced.database_slug);
+      usedDatabases.add(candidate.database_slug);
+    }
+    return true;
   };
 
   if (
@@ -641,7 +720,7 @@ function chooseSuggestions(pool, seed) {
       }),
       seed + 701,
     );
-    if (pityCandidates[0]) replaceWith(pityCandidates[0]);
+    pityCandidates.some(replaceWith);
   }
 
   if (
@@ -656,7 +735,7 @@ function chooseSuggestions(pool, seed) {
       }),
       seed + 1701,
     );
-    if (premiumCandidates[0]) replaceWith(premiumCandidates[0]);
+    premiumCandidates.some(replaceWith);
   }
 
   if (
@@ -674,7 +753,7 @@ function chooseSuggestions(pool, seed) {
         bestFit(right, openSlots).score - bestFit(left, openSlots).score
         || Number(right.current_ability || 0) - Number(left.current_ability || 0)
       ));
-    if (emergencyCandidates[0]) replaceWith(emergencyCandidates[0]);
+    emergencyCandidates.some(replaceWith);
   }
 
   return selected;

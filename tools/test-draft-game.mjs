@@ -131,6 +131,28 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       ],
     });
     globalThis.assert.equal(morientesSummary, "FC");
+    const leftForward = {
+      position_text: "F L",
+      position_ratings: [
+        { label: "attacker", value: 20 },
+        { label: "attacking midfielder", value: 0 },
+        { label: "left side", value: 20 },
+      ],
+    };
+    globalThis.assert.equal(positionFit(leftForward, "FL").level, "natural");
+    globalThis.assert.equal(positionFit(leftForward, "AML").level, "playable");
+    globalThis.assert.equal(playerPositionSummary(leftForward), "FL / AML");
+    const rightForward = {
+      position_text: "F R",
+      position_ratings: [
+        { label: "attacker", value: 20 },
+        { label: "attacking midfielder", value: 0 },
+        { label: "right side", value: 20 },
+      ],
+    };
+    globalThis.assert.equal(positionFit(rightForward, "FR").level, "natural");
+    globalThis.assert.equal(positionFit(rightForward, "AMR").level, "playable");
+    globalThis.assert.equal(playerPositionSummary(rightForward), "FR / AMR");
     const universalRatings = [
       "goalkeeper", "sweeper", "defender", "defensive midfielder",
       "midfielder", "attacking midfielder", "attacker",
@@ -209,24 +231,38 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       current_ability: 110 + index % 30,
       position_ratings: attackerRatings,
     }));
-    latePool.push({
-      database_slug: "emergency-db",
-      source_person_id: "emergency",
-      canonical_player_public_id: "emergency-left-back",
-      current_ability: 118,
-      position_ratings: leftBackRatings,
-    });
+    for (let index = 0; index < 8; index += 1) {
+      latePool.push({
+        database_slug: "fit-db-" + index,
+        source_person_id: "fit-" + index,
+        canonical_player_public_id: "fit-left-back-" + index,
+        current_ability: 118 + index,
+        position_ratings: leftBackRatings,
+      });
+    }
     state.rerollsRemaining = 3;
     const unprotectedLateRoll = chooseSuggestions(latePool, 91);
+    const unprotectedFitCount = unprotectedLateRoll
+      .filter((candidate) => bestFit(candidate).score > 0).length;
     globalThis.assert.ok(
       unprotectedLateRoll.some((candidate) => bestFit(candidate).score === 0),
       "Late rolls must not automatically fill the final position",
     );
+    globalThis.assert.ok(
+      unprotectedFitCount >= 1 && unprotectedFitCount <= 2,
+      "A late roll must deliberately offer one or two compatible choices",
+    );
+    const lateFitCounts = Array.from({ length: 40 }, (_, index) => (
+      chooseSuggestions(latePool, index + 1)
+        .filter((candidate) => bestFit(candidate).score > 0).length
+    ));
+    globalThis.assert.ok(lateFitCounts.every((count) => count >= 1 && count <= 2));
+    globalThis.assert.ok(lateFitCounts.includes(1) && lateFitCounts.includes(2));
     state.rerollsRemaining = 0;
     const emergencyLateRoll = chooseSuggestions(latePool, 91);
     globalThis.assert.ok(
       emergencyLateRoll.some((candidate) => bestFit(candidate).score > 0),
-      "The exhausted final reroll should retain one modest escape route",
+      "The final reroll should retain a compatible escape route",
     );
   `);
 

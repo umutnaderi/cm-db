@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-47";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-50";
 
 const PITCH_ROWS = {
   F: 14,
@@ -595,7 +595,9 @@ function chooseSuggestions(pool, seed) {
   const draftedIds = draftedCanonicalIds();
   const eligible = pool.filter((candidate) => {
     const identity = candidateIdentity(candidate);
-    return !draftedIds.has(identity) && !state.offeredPlayerIds.has(identity);
+    return Number(candidate.current_ability || 0) >= 100
+      && !draftedIds.has(identity)
+      && !state.offeredPlayerIds.has(identity);
   });
   const random = seededRandom(seed);
   const selected = [];
@@ -990,7 +992,13 @@ async function rollPlayers() {
     const seed = Math.floor(Math.random() * 2_147_000_000)
       ^ Date.now()
       ^ (state.rollNumber + 1) * 104729;
-    const payload = await getDraftCandidates({ seed, perDatabase: 28 });
+    const openRoles = remainingSlots().map((item) => item.effectiveRole);
+    const targetPositions = openRoles.length <= 5 ? [...new Set(openRoles)] : [];
+    const payload = await getDraftCandidates({
+      seed,
+      perDatabase: 28,
+      positions: targetPositions,
+    });
     state.suggestions = chooseSuggestions(payload.items, seed);
     state.suggestions.forEach((candidate) => {
       state.offeredPlayerIds.add(candidateIdentity(candidate));

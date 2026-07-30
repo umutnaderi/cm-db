@@ -168,6 +168,18 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
         position_ratings: universalRatings,
       }))
     ));
+    const belowFloorPool = Array.from({ length: 8 }, (_, index) => ({
+      database_slug: "low-db-" + index,
+      source_person_id: "low-" + index,
+      canonical_player_public_id: "low-player-" + index,
+      current_ability: 98,
+      position_ratings: universalRatings,
+    }));
+    globalThis.assert.equal(
+      chooseSuggestions(belowFloorPool, 77).length,
+      0,
+      "Players below CA 100 / OVR 50 must not enter draft rolls",
+    );
     const tierPulls = [0, 0, 0, 0, 0, 0];
     for (let seed = 1; seed <= 400; seed += 1) {
       for (const candidate of chooseSuggestions(suggestionPool, seed)) {
@@ -276,6 +288,8 @@ vm.runInNewContext(setupSource, {
 const setupSourceText = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8");
 const setupHtml = fs.readFileSync(new URL("../draft-setup.html", import.meta.url), "utf8");
 const setupStyles = fs.readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+const retroballApiSource = fs.readFileSync(new URL("../src/lib/retroballApi.js", import.meta.url), "utf8");
+const localApiSource = fs.readFileSync(new URL("../tools/identity/localApi.js", import.meta.url), "utf8");
 assert.ok(
   !setupSourceText.includes("if (!fit.slot || fit.score <= 0)"),
   "Zero-rated suggestions must remain selectable as emergency cover",
@@ -289,6 +303,10 @@ assert.ok(setupSourceText.includes("state.rollNumber > 0"));
 assert.ok(setupSourceText.includes("selectedDraftSlotId"));
 assert.ok(setupSourceText.includes("state.captainSlotId = slotId"));
 assert.ok(setupSourceText.includes("state.captainSlotId = sourceSlotId"));
+assert.ok(setupSourceText.includes("positions: targetPositions"));
+assert.ok(retroballApiSource.includes('searchParams.set("positions"'));
+assert.ok(localApiSource.includes("ps.current_ability BETWEEN 100 AND 200"));
+assert.ok(localApiSource.includes("LIMIT 4"));
 assert.ok(setupStyles.includes(".formation-player.is-swap-source"));
 assert.ok(!setupStyles.includes('.formation-pitch[data-style="defensive"] .formation-player'));
 assert.ok(!setupStyles.includes('.formation-pitch[data-style="attacking"] .formation-player'));
@@ -315,6 +333,9 @@ const sharedSquadSource = fs.readFileSync(new URL("../draft-squad.js", import.me
 const workerSource = fs.readFileSync(new URL("../worker/src/index.ts", import.meta.url), "utf8");
 assert.ok(sharedSquadHtml.includes('id="sharedSquadList"'));
 assert.ok(sharedSquadSource.includes("getDraftSquad(seed)"));
+assert.ok(workerSource.includes("ps.current_ability BETWEEN 100 AND 200"));
+assert.ok(workerSource.includes("draftPositionPatterns"));
+assert.ok(workerSource.includes("LIMIT 4"));
 assert.ok(workerSource.includes('url.pathname === "/api/draft-squads"'));
 assert.ok(workerSource.includes("squad_seed = excluded.squad_seed"));
 

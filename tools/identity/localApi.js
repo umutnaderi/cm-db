@@ -517,6 +517,40 @@ function draftCandidates(params) {
   const parsedSeed = Number.parseInt(params.get("seed") || "0", 10);
   const seed = Number.isFinite(parsedSeed) ? Math.abs(parsedSeed) : 0;
   const perDatabase = integer(params.get("perDatabase"), 18, 8, 30);
+  const supportedPositions = new Set([
+    "GK", "SW",
+    "DL", "DC", "DR", "WBL", "WBR",
+    "DML", "DMC", "DMR",
+    "ML", "MC", "MR",
+    "AML", "AMC", "AMR",
+    "FL", "FC", "FR",
+  ]);
+  const requestedPositions = [...new Set(
+    String(params.get("positions") || "")
+      .split(",")
+      .map((position) => position.trim().toUpperCase())
+      .filter((position) => supportedPositions.has(position)),
+  )].slice(0, 5);
+  const positionPatterns = new Set();
+  for (const position of requestedPositions) {
+    if (position === "GK") positionPatterns.add("%GK%");
+    else if (position === "SW") positionPatterns.add("%SW%");
+    else if (position.startsWith("AM")) {
+      positionPatterns.add("%AM%");
+      positionPatterns.add("%F%");
+    } else if (position.startsWith("F")) positionPatterns.add("%F%");
+    else if (position.startsWith("M")) positionPatterns.add("%M%");
+    else {
+      positionPatterns.add("%D%");
+      if (position.startsWith("WB")) positionPatterns.add("%WB%");
+    }
+  }
+  const priorityPatterns = [...positionPatterns];
+  const positionMatchSql = priorityPatterns.length
+    ? priorityPatterns.map(
+        () => "upper(replace(coalesce(ps.position_text, ''), ' ', '')) LIKE ?"
+      ).join(" OR ")
+    : "";
   const databases = source.prepare(`
     SELECT slug, title, season_order
     FROM cm_databases
@@ -532,16 +566,50 @@ function draftCandidates(params) {
      AND profile.source_person_id = ps.source_person_id
     WHERE ps.database_slug = ?
       AND ps.current_ability IS NOT NULL
-      AND ps.current_ability BETWEEN 60 AND 200
+      AND ps.current_ability BETWEEN 100 AND 200
     ORDER BY
-      ps.current_ability DESC,
-      ps.potential_ability DESC,
+      abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
       ps.source_person_id
-    LIMIT ? OFFSET ?
+    LIMIT ?
   `);
+  const targetedStatement = priorityPatterns.length
+    ? source.prepare(`
+        SELECT
+          ${playerColumns.split(",").map((column) => `ps.${column.trim()}`).join(", ")},
+          profile.position_ratings_json
+        FROM player_search ps
+        LEFT JOIN player_profile profile
+          ON profile.database_slug = ps.database_slug
+         AND profile.source_person_id = ps.source_person_id
+        WHERE ps.database_slug = ?
+          AND ps.current_ability IS NOT NULL
+          AND ps.current_ability BETWEEN 100 AND 200
+          AND (${positionMatchSql})
+        ORDER BY
+          abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
+          ps.source_person_id
+        LIMIT 4
+      `)
+    : null;
   const items = databases.flatMap((database, index) => {
-    const offset = (seed * 31 + (index + 1) * 397) % 2500;
-    return statement.all(database.slug, perDatabase, offset).map((row) => {
+    const databaseSeed = (seed * 31 + (index + 1) * 397) % 2_147_483_647;
+    const randomRows = statement.all(
+      database.slug,
+      databaseSeed,
+      perDatabase,
+    );
+    const targetedRows = targetedStatement
+      ? targetedStatement.all(
+          database.slug,
+          ...priorityPatterns,
+          (databaseSeed + 8191) % 2_147_483_647,
+        )
+      : [];
+    const rows = [...new Map(
+      [...targetedRows, ...randomRows]
+        .map((row) => [String(row.source_person_id), row])
+    ).values()];
+    return rows.map((row) => {
       const { position_ratings_json, ...player } = row;
       const clubColors = draftClubColours(
         database.slug,

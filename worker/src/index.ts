@@ -9,6 +9,39 @@ type QueryInput = string | {
   args?: Array<string | number | null>;
 };
 
+const DRAFT_POSITION_ROLES = new Set([
+  "GK", "SW",
+  "DL", "DC", "DR", "WBL", "WBR",
+  "DML", "DMC", "DMR",
+  "ML", "MC", "MR",
+  "AML", "AMC", "AMR",
+  "FL", "FC", "FR",
+]);
+
+function draftPositionPatterns(rawPositions: string | null): string[] {
+  const positions = [...new Set(
+    String(rawPositions || "")
+      .split(",")
+      .map((position) => position.trim().toUpperCase())
+      .filter((position) => DRAFT_POSITION_ROLES.has(position)),
+  )].slice(0, 5);
+  const patterns = new Set<string>();
+  for (const position of positions) {
+    if (position === "GK") patterns.add("%GK%");
+    else if (position === "SW") patterns.add("%SW%");
+    else if (position.startsWith("AM")) {
+      patterns.add("%AM%");
+      patterns.add("%F%");
+    } else if (position.startsWith("F")) patterns.add("%F%");
+    else if (position.startsWith("M")) patterns.add("%M%");
+    else {
+      patterns.add("%D%");
+      if (position.startsWith("WB")) patterns.add("%WB%");
+    }
+  }
+  return [...patterns];
+}
+
 function d1Client(database: D1Database) {
   const prepare = (input: QueryInput) => {
     const sql = typeof input === "string" ? input : input.sql;
@@ -95,7 +128,7 @@ async function cachedJson(
 
   const cache = caches.default;
   const cacheUrl = new URL(request.url);
-  cacheUrl.searchParams.set("__retroball_cache", "27");
+  cacheUrl.searchParams.set("__retroball_cache", "28");
   const cacheKey = new Request(cacheUrl, request);
   const cached = await cache.match(cacheKey);
 
@@ -861,6 +894,12 @@ export default {
           10,
         );
         const perDatabase = Math.min(30, Math.max(8, parsedLimit || 18));
+        const positionPatterns = draftPositionPatterns(url.searchParams.get("positions"));
+        const positionMatchSql = positionPatterns.length
+          ? positionPatterns.map(
+              () => "upper(replace(coalesce(ps.position_text, ''), ' ', '')) LIKE ?",
+            ).join(" OR ")
+          : "";
 
         return cachedJson(request, env, ctx, 300, async () => {
           const databaseResult = await db.execute(`
@@ -883,7 +922,7 @@ export default {
                   ${playerSearchBaseSelectColumns()}
                   WHERE ps.database_slug = ?
                     AND ps.current_ability IS NOT NULL
-                    AND ps.current_ability BETWEEN 60 AND 200
+                    AND ps.current_ability BETWEEN 100 AND 200
                   ORDER BY
                     abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
                     ps.source_person_id
@@ -896,10 +935,65 @@ export default {
                   ON profile.database_slug = candidates.database_slug
                  AND profile.source_person_id = candidates.source_person_id
               `,
-              args: [database.slug as string, databaseSeed, perDatabase],
+              args: [
+                database.slug as string,
+                databaseSeed,
+                perDatabase,
+              ],
             };
           });
-          const results = await db.batch(queries);
+          const targetedQueries = positionPatterns.length
+            ? databases.map((database, index) => {
+                const databaseSeed = (seed * 31 + (index + 1) * 397 + 8191) % 2_147_483_647;
+                return {
+                  sql: `
+                    SELECT
+                      candidates.*,
+                      canonical_player.canonical_player_id,
+                      canonical_player.canonical_player_public_id,
+                      canonical_player.canonical_player_name,
+                      profile.position_ratings_json
+                    FROM (
+                      ${playerSearchBaseSelectColumns()}
+                      WHERE ps.database_slug = ?
+                        AND ps.current_ability IS NOT NULL
+                        AND ps.current_ability BETWEEN 100 AND 200
+                        AND (${positionMatchSql})
+                      ORDER BY
+                        abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
+                        ps.source_person_id
+                      LIMIT 4
+                    ) candidates
+                    LEFT JOIN canonical_player_names canonical_player
+                      ON canonical_player.database_slug = candidates.database_slug
+                     AND canonical_player.source_person_id = cast(candidates.source_person_id AS TEXT)
+                    LEFT JOIN player_profile profile
+                      ON profile.database_slug = candidates.database_slug
+                     AND profile.source_person_id = candidates.source_person_id
+                  `,
+                  args: [
+                    database.slug as string,
+                    ...positionPatterns,
+                    databaseSeed,
+                  ],
+                };
+              })
+            : [];
+          const queryResults = await db.batch([...queries, ...targetedQueries]);
+          const randomResults = queryResults.slice(0, databases.length);
+          const targetedResults = queryResults.slice(databases.length);
+          const results = randomResults.map((result, index) => {
+            const rows = [
+              ...(targetedResults[index]?.rows || []),
+              ...result.rows,
+            ];
+            const uniqueRows = new Map<string, QueryRow>();
+            for (const row of rows) {
+              const key = textField(row, "source_person_id");
+              if (key && !uniqueRows.has(key)) uniqueRows.set(key, row);
+            }
+            return { rows: [...uniqueRows.values()] };
+          });
           const colourQueries = results.map((result, index) => {
             const clubNames = [...new Set(
               result.rows.map((row) => textField(row, "club_name")).filter(Boolean),

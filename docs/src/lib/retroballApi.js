@@ -193,12 +193,21 @@ export async function getFilters(database, options = {}) {
 export async function getDraftCandidates({
   seed = Date.now(),
   perDatabase = 18,
+  positions = [],
   signal,
 } = {}) {
   const searchParams = new URLSearchParams({
     seed: String(seed),
     perDatabase: String(perDatabase),
   });
+  const requestedPositions = [...new Set(
+    (Array.isArray(positions) ? positions : [])
+      .map((position) => String(position || "").trim().toUpperCase())
+      .filter(Boolean),
+  )];
+  if (requestedPositions.length) {
+    searchParams.set("positions", requestedPositions.join(","));
+  }
   const payload = await requestJson(`/api/draft-candidates?${searchParams}`, {
     signal,
   });

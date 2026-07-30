@@ -67,17 +67,72 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       "midfielder", "attacking midfielder", "attacker",
       "left side", "right side", "central",
     ].map((label) => ({ label, value: 20 }));
-    const suggestionPool = Array.from({ length: 8 }, (_, index) => ({
-      database_slug: "db" + index,
-      source_person_id: String(index),
-      canonical_player_public_id: "player" + index,
-      current_ability: index < 3 ? 150 + index : 90 + index,
-      position_ratings: universalRatings,
+    const tierAbilities = [185, 170, 150, 130, 105];
+    const suggestionPool = tierAbilities.flatMap((ability, tierIndex) => (
+      Array.from({ length: 60 }, (_, index) => ({
+        database_slug: "db-" + tierIndex + "-" + index,
+        source_person_id: tierIndex + "-" + index,
+        canonical_player_public_id: "player-" + tierIndex + "-" + index,
+        current_ability: ability,
+        position_ratings: universalRatings,
+      }))
+    ));
+    const tierPulls = [0, 0, 0, 0, 0];
+    for (let seed = 1; seed <= 400; seed += 1) {
+      for (const candidate of chooseSuggestions(suggestionPool, seed)) {
+        tierPulls[abilityDropTier(candidate)] += 1;
+      }
+    }
+    const pullTotal = tierPulls.reduce((sum, count) => sum + count, 0);
+    globalThis.assert.ok(tierPulls[0] > 0 && tierPulls[0] / pullTotal < 0.03);
+    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.03 && tierPulls[1] / pullTotal < 0.12);
+    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.16 && tierPulls[2] / pullTotal < 0.32);
+    globalThis.assert.ok(tierPulls[3] > tierPulls[2]);
+
+    state.drafted.clear();
+    state.formation = "4-3-3";
+    state.style = "Balanced";
+    const leftBackSlot = currentSlots().find((item) => item.effectiveRole === "DL");
+    for (const item of currentSlots()) {
+      if (item.id !== leftBackSlot.id) {
+        state.drafted.set(item.id, {
+          canonical_player_public_id: "drafted-" + item.id,
+        });
+      }
+    }
+    const attackerRatings = [
+      { label: "attacker", value: 20 },
+      { label: "central", value: 20 },
+    ];
+    const leftBackRatings = [
+      { label: "defender", value: 20 },
+      { label: "left side", value: 20 },
+    ];
+    const latePool = Array.from({ length: 30 }, (_, index) => ({
+      database_slug: "late-db-" + index,
+      source_person_id: "late-" + index,
+      canonical_player_public_id: "late-player-" + index,
+      current_ability: 110 + index % 30,
+      position_ratings: attackerRatings,
     }));
-    const balancedSuggestions = chooseSuggestions(suggestionPool, 22);
+    latePool.push({
+      database_slug: "emergency-db",
+      source_person_id: "emergency",
+      canonical_player_public_id: "emergency-left-back",
+      current_ability: 118,
+      position_ratings: leftBackRatings,
+    });
+    state.rerollsRemaining = 3;
+    const unprotectedLateRoll = chooseSuggestions(latePool, 91);
     globalThis.assert.ok(
-      balancedSuggestions.filter((player) => player.current_ability >= 140).length >= 2,
-      "Each roll should contain at least two 140+ CA choices when the pool allows it",
+      unprotectedLateRoll.some((candidate) => bestFit(candidate).score === 0),
+      "Late rolls must not automatically fill the final position",
+    );
+    state.rerollsRemaining = 0;
+    const emergencyLateRoll = chooseSuggestions(latePool, 91);
+    globalThis.assert.ok(
+      emergencyLateRoll.some((candidate) => bestFit(candidate).score > 0),
+      "The exhausted final reroll should retain one modest escape route",
     );
   `);
 

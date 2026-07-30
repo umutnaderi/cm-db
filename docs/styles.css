@@ -3026,12 +3026,12 @@ select:focus {
 .formation-player.is-filled {
   position: absolute;
   isolation: isolate;
-  width: 98px;
-  min-height: 54px;
+  width: 82px;
+  min-height: 50px;
   aspect-ratio: auto;
   grid-template-rows: auto 1fr;
-  gap: 3px;
-  padding: 5px 7px 6px;
+  gap: 2px;
+  padding: 5px 5px 6px;
   overflow: visible;
   border: 2px solid color-mix(in srgb, var(--club-fg, #fff) 66%, #fff);
   border-radius: 5px;
@@ -3161,7 +3161,7 @@ select:focus {
 
 .formation-player-role {
   color: inherit;
-  font-size: 0.63rem;
+  font-size: 0.58rem;
   font-weight: 800;
   line-height: 1;
   opacity: 0.92;
@@ -3174,7 +3174,7 @@ select:focus {
   width: 100%;
   overflow: hidden;
   color: inherit;
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   font-weight: 900;
   letter-spacing: 0.025em;
   line-height: 1.05;
@@ -3185,7 +3185,7 @@ select:focus {
 
 .formation-player-ability {
   color: inherit;
-  font: 900 1.05rem "Titillium Web", Arial, sans-serif;
+  font: 900 0.98rem "Titillium Web", Arial, sans-serif;
   line-height: 1;
 }
 

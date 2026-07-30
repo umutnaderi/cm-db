@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-36";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-37";
 
 const PITCH_ROWS = {
   F: 14,
@@ -116,6 +116,7 @@ const state = {
   rolling: false,
   rollNumber: 0,
   rerollsRemaining: 3,
+  qualityDrought: 0,
 };
 
 const formationChoices = document.querySelector("#formationChoices");
@@ -465,15 +466,19 @@ function draftedCanonicalIds() {
   );
 }
 
-function seededShuffle(items, seed) {
+function seededRandom(seed) {
   let value = seed || 1;
-  const random = () => {
+  return () => {
     value |= 0;
     value = value + 0x6d2b79f5 | 0;
     let result = Math.imul(value ^ value >>> 15, 1 | value);
     result = result + Math.imul(result ^ result >>> 7, 61 | result) ^ result;
     return ((result ^ result >>> 14) >>> 0) / 4294967296;
   };
+}
+
+function seededShuffle(items, seed) {
+  const random = seededRandom(seed);
   const shuffled = items.slice();
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const target = Math.floor(random() * (index + 1));
@@ -482,61 +487,102 @@ function seededShuffle(items, seed) {
   return shuffled;
 }
 
+const ABILITY_DROP_TABLE = [
+  { minimum: 180, maximum: Infinity, share: 0.01 },
+  { minimum: 160, maximum: 179, share: 0.07 },
+  { minimum: 140, maximum: 159, share: 0.24 },
+  { minimum: 120, maximum: 139, share: 0.42 },
+  { minimum: -Infinity, maximum: 119, share: 0.26 },
+];
+
+function abilityDropTier(candidate) {
+  const ability = Number(candidate.current_ability || 0);
+  return ABILITY_DROP_TABLE.findIndex(
+    (tier) => ability >= tier.minimum && ability <= tier.maximum,
+  );
+}
+
 function chooseSuggestions(pool, seed) {
   const openSlots = remainingSlots();
   const draftedIds = draftedCanonicalIds();
-  const eligible = seededShuffle(pool, seed).filter((candidate) => {
+  const eligible = pool.filter((candidate) => {
     const identity = candidate.canonical_player_public_id || candidateKey(candidate);
-    return !draftedIds.has(identity) && bestFit(candidate, openSlots).score > 0;
+    return !draftedIds.has(identity);
   });
-  const targetRoles = [...new Set(openSlots.map((item) => item.effectiveRole))];
-  const rotatedRoles = targetRoles.length
-    ? targetRoles.map((_, index) => targetRoles[(index + state.rollNumber) % targetRoles.length])
-    : [];
+  const random = seededRandom(seed);
   const selected = [];
   const usedDatabases = new Set();
   const usedPlayers = new Set();
 
-  const takeBest = (role = "", minimumAbility = 0) => {
-    const candidates = eligible
-      .filter((candidate) => {
-        const identity = candidate.canonical_player_public_id || candidateKey(candidate);
-        return !usedDatabases.has(candidate.database_slug)
-          && !usedPlayers.has(identity)
-          && Number(candidate.current_ability || 0) >= minimumAbility
-          && (!role || positionFit(candidate, role).score > 0);
-      })
-      .sort((left, right) => {
-        const leftFit = role ? positionFit(left, role).score : bestFit(left, openSlots).score;
-        const rightFit = role ? positionFit(right, role).score : bestFit(right, openSlots).score;
-        return rightFit - leftFit
-          || Number(right.current_ability || 0) - Number(left.current_ability || 0);
-      });
-    const candidate = candidates[0];
-    if (!candidate) return;
+  while (selected.length < 6) {
+    const candidates = eligible.filter((candidate) => {
+      const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+      return !usedDatabases.has(candidate.database_slug) && !usedPlayers.has(identity);
+    });
+    if (!candidates.length) break;
+    const tierCounts = ABILITY_DROP_TABLE.map(
+      (_, tierIndex) => candidates.filter((candidate) => abilityDropTier(candidate) === tierIndex).length,
+    );
+    const weighted = candidates.map((candidate) => {
+      const tierIndex = abilityDropTier(candidate);
+      return {
+        candidate,
+        weight: ABILITY_DROP_TABLE[tierIndex].share / Math.max(1, tierCounts[tierIndex]),
+      };
+    });
+    const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+    let ticket = random() * totalWeight;
+    const picked = weighted.find((item) => {
+      ticket -= item.weight;
+      return ticket <= 0;
+    }) || weighted.at(-1);
+    const candidate = picked.candidate;
     selected.push(candidate);
     usedDatabases.add(candidate.database_slug);
     usedPlayers.add(candidate.canonical_player_public_id || candidateKey(candidate));
+  }
+
+  const replaceWith = (candidate) => {
+    const sameDatabaseIndex = selected.findIndex(
+      (item) => item.database_slug === candidate.database_slug,
+    );
+    const replaceIndex = sameDatabaseIndex >= 0 ? sameDatabaseIndex : selected.length - 1;
+    selected.splice(replaceIndex, 1, candidate);
   };
 
-  for (const role of rotatedRoles) {
-    if (selected.length >= 2) break;
-    takeBest(role, 140);
+  if (
+    state.qualityDrought >= 2
+    && !selected.some((candidate) => Number(candidate.current_ability || 0) >= 140)
+  ) {
+    const pityCandidates = seededShuffle(
+      eligible.filter((candidate) => {
+        const ability = Number(candidate.current_ability || 0);
+        const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+        return ability >= 140 && ability < 160 && !usedPlayers.has(identity);
+      }),
+      seed + 701,
+    );
+    if (pityCandidates[0]) replaceWith(pityCandidates[0]);
   }
-  while (selected.length < 2) {
-    const before = selected.length;
-    takeBest("", 140);
-    if (selected.length === before) break;
+
+  if (
+    state.rerollsRemaining <= 0
+    && !selected.some((candidate) => bestFit(candidate, openSlots).score > 0)
+  ) {
+    const emergencyCandidates = eligible
+      .filter((candidate) => {
+        const identity = candidate.canonical_player_public_id || candidateKey(candidate);
+        return Number(candidate.current_ability || 0) < 140
+          && !usedPlayers.has(identity)
+          && bestFit(candidate, openSlots).score > 0;
+      })
+      .sort((left, right) => (
+        bestFit(right, openSlots).score - bestFit(left, openSlots).score
+        || Number(right.current_ability || 0) - Number(left.current_ability || 0)
+      ));
+    if (emergencyCandidates[0]) replaceWith(emergencyCandidates[0]);
   }
-  for (const role of rotatedRoles) {
-    if (selected.length >= 6) break;
-    takeBest(role);
-  }
-  while (selected.length < 6) {
-    const before = selected.length;
-    takeBest();
-    if (selected.length === before) break;
-  }
+
   return selected;
 }
 
@@ -730,6 +776,7 @@ function resetDraft(message) {
   state.selectedCandidateKey = "";
   state.rollNumber = 0;
   state.rerollsRemaining = 3;
+  state.qualityDrought = 0;
   rollIntro.textContent = message;
   suggestionHelp.textContent = "Roll the dice for six database-backed choices.";
   renderSuggestions();
@@ -753,6 +800,11 @@ async function rollPlayers() {
     const seed = Math.floor(Date.now() / 300000) * 100 + state.rollNumber;
     const payload = await getDraftCandidates({ seed, perDatabase: 28 });
     state.suggestions = chooseSuggestions(payload.items, seed);
+    state.qualityDrought = state.suggestions.some(
+      (candidate) => Number(candidate.current_ability || 0) >= 140,
+    )
+      ? 0
+      : state.qualityDrought + 1;
     state.rollNumber += 1;
     if (!state.suggestions.length) {
       throw new Error("No suitable players were found for the remaining positions.");

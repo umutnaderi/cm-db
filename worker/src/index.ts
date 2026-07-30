@@ -789,7 +789,7 @@ export default {
           `);
           const databases = databaseResult.rows;
           const queries = databases.map((database, index) => {
-            const offset = (seed * 31 + (index + 1) * 397) % 120;
+            const databaseSeed = (seed * 31 + (index + 1) * 397) % 2_147_483_647;
             return {
               sql: `
                 SELECT
@@ -804,10 +804,9 @@ export default {
                     AND ps.current_ability IS NOT NULL
                     AND ps.current_ability BETWEEN 60 AND 200
                   ORDER BY
-                    ps.current_ability DESC,
-                    ps.potential_ability DESC,
+                    abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
                     ps.source_person_id
-                  LIMIT ? OFFSET ?
+                  LIMIT ?
                 ) candidates
                 LEFT JOIN canonical_player_names canonical_player
                   ON canonical_player.database_slug = candidates.database_slug
@@ -816,7 +815,7 @@ export default {
                   ON profile.database_slug = candidates.database_slug
                  AND profile.source_person_id = candidates.source_person_id
               `,
-              args: [database.slug as string, perDatabase, offset],
+              args: [database.slug as string, databaseSeed, perDatabase],
             };
           });
           const results = await db.batch(queries);

@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-46";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-47";
 
 const PITCH_ROWS = {
   F: 14,

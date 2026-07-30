@@ -78,6 +78,14 @@
 }
 
 @font-face {
+  font-family: "Bai Jamjuree";
+  src: url("BaiJamjuree-SemiBold.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
   font-family: "Titillium Web";
   src: url("TitilliumWeb-BoldItalic.ttf") format("truetype");
   font-display: swap;
@@ -572,6 +580,8 @@ h1 {
   background:
     radial-gradient(circle at 65% 18%, rgba(55, 112, 72, 0.14), transparent 30%),
     #111312;
+  font-family: "Bai Jamjuree", Arial, Helvetica, sans-serif;
+  font-weight: 600;
 }
 
 .draft-setup-shell {

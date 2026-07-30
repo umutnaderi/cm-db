@@ -28,6 +28,7 @@ const frontendFiles = [
   "TitilliumWeb-Bold.ttf",
   "TitilliumWeb-BoldItalic.ttf",
   "BaiJamjuree-Medium.ttf",
+  "BaiJamjuree-SemiBold.ttf",
 ];
 
 await rm(output, { recursive: true, force: true });

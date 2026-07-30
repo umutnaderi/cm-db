@@ -5,11 +5,11 @@ import {
   saveDraftRecord,
   saveDraftSquad,
   searchPlayers,
-} from "./src/lib/retroballApi.js?v=20260730-46";
+} from "./src/lib/retroballApi.js?v=20260730-47";
 import {
   createDraftSquad,
   formatDraftSquadText,
-} from "./src/lib/draftSquad.js?v=20260730-46";
+} from "./src/lib/draftSquad.js?v=20260730-47";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";

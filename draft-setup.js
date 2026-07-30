@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-42";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-43";
 
 const PITCH_ROWS = {
   F: 14,
@@ -495,6 +495,47 @@ function bestFit(candidate, slots = remainingSlots()) {
     || { slot: null, score: 0, level: "none", label: "Not rated" };
 }
 
+const DISPLAY_POSITION_ROLES = [
+  "GK", "SW",
+  "DL", "DC", "DR", "WBL", "WBR",
+  "DML", "DMC", "DMR",
+  "ML", "MC", "MR",
+  "AML", "AMC", "AMR",
+  "FL", "FC", "FR",
+];
+
+function positionsFromText(positionText) {
+  const text = String(positionText || "").trim().toUpperCase();
+  if (!text) return [];
+  if (/(?:^|[/\s])G\s*K(?:$|[/\s])/.test(text)) return ["GK"];
+  const match = text.match(/^([A-Z/]+)\s*([LRC]+)$/);
+  if (!match) return [text.replace(/\s+/g, "")];
+  const bases = match[1].split("/");
+  const sides = [...match[2]];
+  return bases.flatMap((base) => {
+    if (base === "SW") return ["SW"];
+    const normalizedBase = base === "S" ? "F" : base;
+    return sides.map((side) => `${normalizedBase}${side}`);
+  });
+}
+
+function playerPositionSummary(candidate) {
+  const natural = [];
+  const secondary = [];
+  for (const role of DISPLAY_POSITION_ROLES) {
+    const fit = positionFit(candidate, role);
+    if (fit.level === "natural") natural.push(role);
+    else if (fit.level === "playable" || fit.level === "limited") secondary.push(role);
+  }
+  if (!natural.length && !secondary.length) {
+    natural.push(...positionsFromText(candidate.position_text));
+  }
+  return [
+    natural.length ? `Natural · ${natural.join(" / ")}` : "",
+    secondary.length ? `Secondary · ${secondary.join(" / ")}` : "",
+  ].filter(Boolean).join("  |  ") || "Positions · —";
+}
+
 function draftedCanonicalIds() {
   return new Set(
     [...state.drafted.values()]
@@ -815,7 +856,7 @@ function renderSuggestions(message = "") {
     ratings.innerHTML = `<span>OVR <strong>${draftedOverall(candidate)}</strong></span>`;
     const fitBadge = document.createElement("span");
     fitBadge.className = "draft-fit-badge";
-    fitBadge.textContent = `${fit.label} · ${fit.slot?.effectiveRole || "No fit"}`;
+    fitBadge.textContent = playerPositionSummary(candidate);
     button.append(heading, season, meta, ratings, fitBadge);
     suggestions.append(button);
   }

@@ -3412,9 +3412,11 @@ select:focus {
 
 .draft-fit-badge {
   align-self: end;
+  max-width: 360px;
   color: var(--fit-color, var(--muted));
   font-size: 0.63rem;
   font-weight: 700;
+  line-height: 1.3;
   text-align: right;
   text-transform: uppercase;
 }

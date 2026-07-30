@@ -1,5 +1,5 @@
-import { getDraftSquad } from "./src/lib/retroballApi.js?v=20260730-42";
-import { formatDraftSquadText } from "./src/lib/draftSquad.js?v=20260730-42";
+import { getDraftSquad } from "./src/lib/retroballApi.js?v=20260730-43";
+import { formatDraftSquadText } from "./src/lib/draftSquad.js?v=20260730-43";
 
 const nameElement = document.querySelector("#sharedSquadName");
 const metaElement = document.querySelector("#sharedSquadMeta");

@@ -115,6 +115,22 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     };
     globalThis.assert.equal(positionFit(centralDefenderWithoutRightSide, "DR").level, "none");
     globalThis.assert.equal(positionAbilityMultiplier(centralDefenderWithoutRightSide, "DR"), 0.25);
+    globalThis.assert.equal(
+      playerPositionSummary(centralDefenderWithoutRightSide),
+      "Natural · DC / DMC",
+    );
+    globalThis.assert.ok(
+      !playerPositionSummary(centralDefenderWithoutRightSide).includes("DR"),
+      "The card summary must not advertise an unrated leftover position",
+    );
+    const morientesSummary = playerPositionSummary({
+      position_text: "F C",
+      position_ratings: [
+        { label: "attacker", value: 20 },
+        { label: "central", value: 20 },
+      ],
+    });
+    globalThis.assert.equal(morientesSummary, "Natural · FC");
     const universalRatings = [
       "goalkeeper", "sweeper", "defender", "defensive midfielder",
       "midfielder", "attacking midfielder", "attacker",

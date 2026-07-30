@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-41";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-42";
 
 const PITCH_ROWS = {
   F: 14,
@@ -681,7 +681,9 @@ function renderPitch() {
         ? `${playerName(drafted)} · click to select as captain`
         : `${playerName(drafted)} · locked at ${item.effectiveRole}`
       : selected
-        ? `${fit.label} at ${item.effectiveRole}`
+        ? fit.score > 0
+          ? `${fit.label} at ${item.effectiveRole}`
+          : `Emergency cover at ${item.effectiveRole} · severe ability penalty`
         : `Empty ${item.effectiveRole} position`;
 
     if (drafted) {
@@ -732,8 +734,7 @@ function renderPitch() {
       if (fit && fit.score > 0) {
         marker.classList.add("is-fit-target", `fit-${fit.level}`);
       } else if (selected) {
-        marker.classList.add("is-no-fit", "is-locked");
-        marker.disabled = true;
+        marker.classList.add("is-emergency-target", "fit-none");
       }
     }
     pitch.append(marker);
@@ -789,7 +790,7 @@ function renderSuggestions(message = "") {
     button.className = `draft-suggestion-card fit-${fit.level}`;
     button.dataset.candidateKey = candidateKey(candidate);
     button.classList.toggle("is-selected", button.dataset.candidateKey === state.selectedCandidateKey);
-    if (!fit.slot || fit.score <= 0) {
+    if (!fit.slot) {
       button.disabled = true;
       button.classList.add("is-locked");
     }
@@ -930,7 +931,9 @@ suggestions.addEventListener("click", (event) => {
   );
   const fit = candidate ? bestFit(candidate) : null;
   suggestionHelp.textContent = fit?.slot
-    ? `${playerName(candidate)} is ${fit.label.toLowerCase()} at ${fit.slot.effectiveRole}. Choose a highlighted position.`
+    ? fit.score > 0
+      ? `${playerName(candidate)} is ${fit.label.toLowerCase()} at ${fit.slot.effectiveRole}. Choose a highlighted position.`
+      : `${playerName(candidate)} has no recognised rating at ${fit.slot.effectiveRole}, but can provide emergency cover with a severe ability penalty.`
     : "This player has no recognised fit in the current formation.";
   renderSuggestions();
   renderPitch();
@@ -960,15 +963,13 @@ pitch.addEventListener("click", (event) => {
   const target = currentSlots().find((item) => item.id === slotId);
   if (!candidate || !target || state.drafted.has(slotId)) return;
   const fit = positionFit(candidate, target.effectiveRole);
-  if (fit.score <= 0) {
-    suggestionHelp.textContent = `${playerName(candidate)} is not rated for ${target.effectiveRole}.`;
-    return;
-  }
 
   state.drafted.set(slotId, candidate);
   state.suggestions = [];
   state.selectedCandidateKey = "";
-  rollIntro.textContent = `${playerName(candidate)} drafted at ${target.effectiveRole} (${fit.label.toLowerCase()}).`;
+  rollIntro.textContent = fit.score > 0
+    ? `${playerName(candidate)} drafted at ${target.effectiveRole} (${fit.label.toLowerCase()}).`
+    : `${playerName(candidate)} drafted as emergency cover at ${target.effectiveRole}; the severe out-of-position penalty will apply.`;
   suggestionHelp.textContent = state.drafted.size >= 11
     ? "Starting XI complete. Select one of the eleven players as your captain."
     : "Signing complete for this roll. Roll again for six fresh choices.";

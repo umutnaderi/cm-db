@@ -2969,6 +2969,19 @@ select:focus {
   opacity: 0.34;
 }
 
+.formation-player.is-emergency-target {
+  border-color: #ef3c48;
+  background: #391015;
+  box-shadow: 0 0 0 2px rgba(239, 60, 72, 0.18);
+  cursor: pointer;
+  opacity: 1;
+}
+
+.formation-player.is-filled.fit-none {
+  border-color: #7d2229;
+  box-shadow: 0 0 0 2px rgba(125, 34, 41, 0.35);
+}
+
 .formation-player.is-locked,
 .formation-player.is-locked-position {
   cursor: not-allowed;

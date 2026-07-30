@@ -101,6 +101,20 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     globalThis.assert.equal(positionFit(unratedGoalkeeper, "GK").level, "natural");
     globalThis.assert.equal(positionFit(unratedGoalkeeper, "MC").level, "very-awkward");
     globalThis.assert.equal(positionAbilityMultiplier(unratedGoalkeeper, "MC"), 0.35);
+    const centralDefenderWithoutRightSide = {
+      database_slug: "zorc-db",
+      source_person_id: "zorc",
+      current_ability: 150,
+      position_text: "D/DM C",
+      position_ratings: [
+        { label: "defender", value: 20 },
+        { label: "defensive midfielder", value: 20 },
+        { label: "central", value: 20 },
+        { label: "right side", value: 0 },
+      ],
+    };
+    globalThis.assert.equal(positionFit(centralDefenderWithoutRightSide, "DR").level, "none");
+    globalThis.assert.equal(positionAbilityMultiplier(centralDefenderWithoutRightSide, "DR"), 0.25);
     const universalRatings = [
       "goalkeeper", "sweeper", "defender", "defensive midfielder",
       "midfielder", "attacking midfielder", "attacker",
@@ -204,6 +218,12 @@ vm.runInNewContext(setupSource, {
   Set,
   console,
 });
+const setupSourceText = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8");
+assert.ok(
+  !setupSourceText.includes("if (!fit.slot || fit.score <= 0)"),
+  "Zero-rated suggestions must remain selectable as emergency cover",
+);
+assert.ok(setupSourceText.includes('"is-emergency-target", "fit-none"'));
 
 const runHtml = fs.readFileSync(new URL("../draft-run.html", import.meta.url), "utf8");
 const runSourceText = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8");

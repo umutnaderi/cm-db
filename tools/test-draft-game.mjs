@@ -144,6 +144,15 @@ vm.runInNewContext(setupSource, {
   console,
 });
 
+const runHtml = fs.readFileSync(new URL("../draft-run.html", import.meta.url), "utf8");
+const runSourceText = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8");
+assert.ok(!runHtml.includes('id="runClock"'), "The match clock must not remain in the sidebar");
+assert.ok(runSourceText.includes("data-match-clock"), "Every active match must render its own clock");
+assert.ok(
+  runSourceText.includes("clockDisplay.textContent = `${minute}'`;"),
+  "The active match clock must advance inside its scoreboard",
+);
+
 const player = (name, role, line, currentAbility, id) => ({
   canonical_player_name: name,
   source_person_id: String(id),

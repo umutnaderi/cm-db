@@ -3864,6 +3864,25 @@ select:focus {
   text-shadow: 0 0 10px rgba(35, 244, 123, 0.4);
 }
 
+.run-live-scoreboard {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.run-match-clock {
+  min-width: 42px;
+  padding-left: 10px;
+  border-left: 1px solid #356344;
+  color: #f4d94f;
+  font: 800 1.2rem "Titillium Web", Arial, sans-serif;
+  line-height: 1;
+  text-align: center;
+  text-shadow: 0 0 10px rgba(244, 217, 79, 0.35);
+}
+
 .run-formula {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -4042,28 +4061,6 @@ select:focus {
   padding: 14px;
   border: 1px solid #244a31;
   background: #07140c;
-}
-
-.run-clock-card {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 2px 12px;
-}
-
-.run-clock-card span,
-.run-clock-card small {
-  color: #6f9880;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-}
-
-.run-clock-card strong {
-  grid-row: 1 / 3;
-  grid-column: 2;
-  color: #23f47b;
-  font: 800 2.25rem "Titillium Web", Arial, sans-serif;
-  text-shadow: 0 0 12px rgba(35, 244, 123, 0.5);
 }
 
 .run-table {

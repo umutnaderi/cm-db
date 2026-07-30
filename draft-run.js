@@ -4,7 +4,7 @@ import {
   getPlayerMetrics,
   saveDraftRecord,
   searchPlayers,
-} from "./src/lib/retroballApi.js?v=20260730-37";
+} from "./src/lib/retroballApi.js?v=20260730-38";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
@@ -52,8 +52,6 @@ const elements = {
   stageDescription: document.querySelector("#runStageDescription"),
   nextButton: document.querySelector("#runNextButton"),
   matches: document.querySelector("#runMatches"),
-  clock: document.querySelector("#runClock"),
-  clockStatus: document.querySelector("#runClockStatus"),
   tableBody: document.querySelector("#runTableBody"),
   lineRatings: document.querySelector("#runLineRatings"),
   squadList: document.querySelector("#runSquadList"),
@@ -1163,6 +1161,7 @@ function animatePeriod({
   eventList,
   score,
   scoreDisplay,
+  clockDisplay,
   intervalMs = 100,
 }) {
   return new Promise((resolve) => {
@@ -1170,7 +1169,7 @@ function animatePeriod({
     let eventIndex = 0;
     const timer = window.setInterval(() => {
       minute += 1;
-      elements.clock.textContent = `${minute}'`;
+      clockDisplay.textContent = `${minute}'`;
       while (events[eventIndex]?.minute <= minute) {
         const event = events[eventIndex];
         if (event.goal) {
@@ -1188,7 +1187,7 @@ function animatePeriod({
   });
 }
 
-async function animatePenaltyShootout(result, article, scoreDisplay) {
+async function animatePenaltyShootout(result, article, scoreDisplay, clockDisplay) {
   const section = document.createElement("section");
   section.className = "run-penalty-section";
   section.innerHTML = `
@@ -1201,8 +1200,7 @@ async function animatePenaltyShootout(result, article, scoreDisplay) {
   const penaltyScore = section.querySelector("[data-penalty-score]");
   let ours = 0;
   let theirs = 0;
-  elements.clock.textContent = "PEN";
-  elements.clockStatus.textContent = "Penalty shootout";
+  clockDisplay.textContent = "PEN";
 
   for (const attempt of result.penaltyEvents) {
     await delay(260);
@@ -1239,7 +1237,10 @@ async function animateMatch(result) {
       <span>${escapeHtml(result.stage)}</span>
       <div class="run-match-teams">
         <strong>${escapeHtml(team.teamName)}</strong>
-        <b data-live-score>0 – 0</b>
+        <span class="run-live-scoreboard">
+          <b data-live-score>0 – 0</b>
+          <span class="run-match-clock" data-match-clock aria-label="Match clock">0'</span>
+        </span>
         <strong>${escapeHtml(result.opponentName)}</strong>
       </div>
     </header>
@@ -1256,10 +1257,10 @@ async function animateMatch(result) {
   shell.append(article);
   elements.matches.append(shell);
   const scoreDisplay = article.querySelector("[data-live-score]");
+  const clockDisplay = article.querySelector("[data-match-clock]");
   const eventList = article.querySelector("[data-live-events]");
   const summaryScore = shell.querySelector("[data-summary-score]");
   const score = { user: 0, opponent: 0 };
-  elements.clockStatus.textContent = `${team.teamName} vs ${result.opponentName}`;
 
   await animatePeriod({
     start: 1,
@@ -1268,6 +1269,7 @@ async function animateMatch(result) {
     eventList,
     score,
     scoreDisplay,
+    clockDisplay,
     intervalMs: result.minuteDelay,
   });
 
@@ -1276,7 +1278,6 @@ async function animateMatch(result) {
     extra.className = "run-extra-time-section";
     extra.innerHTML = '<h3>Extra time</h3><ol class="run-event-list" data-extra-events></ol>';
     article.append(extra);
-    elements.clockStatus.textContent = "Extra time";
     await animatePeriod({
       start: 91,
       end: 120,
@@ -1284,11 +1285,14 @@ async function animateMatch(result) {
       eventList: extra.querySelector("[data-extra-events]"),
       score,
       scoreDisplay,
+      clockDisplay,
       intervalMs: Math.max(70, result.minuteDelay - 15),
     });
   }
 
-  if (result.shootout) await animatePenaltyShootout(result, article, scoreDisplay);
+  if (result.shootout) {
+    await animatePenaltyShootout(result, article, scoreDisplay, clockDisplay);
+  }
   if (result.manOfMatch) {
     const href = playerHref(result.manOfMatch);
     article.insertAdjacentHTML("beforeend", `
@@ -1312,7 +1316,7 @@ async function animateMatch(result) {
     : `${result.userGoals}–${result.rivalGoals}`;
   summaryScore.textContent = finalScore;
   shell.classList.add("is-score-docking");
-  elements.clockStatus.textContent = "Full time";
+  clockDisplay.hidden = true;
   await delay(850);
   shell.classList.remove("is-score-docking");
   shell.classList.add("is-finished");

@@ -310,3 +310,21 @@ export async function saveDraftRecord(record, options = {}) {
     body: JSON.stringify(record),
   });
 }
+
+export async function getPlayerMetrics(players, options = {}) {
+  const identities = (Array.isArray(players) ? players : [])
+    .map((player) => ({
+      database: String(player?.database_slug || ""),
+      sourcePersonId: String(player?.source_person_id || ""),
+    }))
+    .filter((player) => player.database && player.sourcePersonId)
+    .slice(0, 40);
+  if (!identities.length) return { items: [] };
+
+  return requestJson("/api/player-metrics", {
+    method: "POST",
+    signal: options.signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ players: identities }),
+  });
+}

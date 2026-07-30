@@ -1,9 +1,10 @@
 import {
   getDraftRecords,
   getPlayer,
+  getPlayerMetrics,
   saveDraftRecord,
   searchPlayers,
-} from "./src/lib/retroballApi.js";
+} from "./src/lib/retroballApi.js?v=20260730-36";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
@@ -144,6 +145,7 @@ const runSeed = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36
 const opponentCache = readJsonStorage(OPPONENT_CACHE_KEY, {});
 const rosterMemory = new Map();
 const penaltyRatingCache = new Map();
+const playerMetricCache = new Map();
 const state = {
   phase: "group",
   groupRound: 0,
@@ -164,6 +166,7 @@ const state = {
     gf: 0,
     ga: 0,
     scorers: {},
+    dominators: {},
     matches: [],
   },
   table: new Map(),
@@ -224,9 +227,30 @@ async function opponentRoster(key) {
   return roster;
 }
 
+async function hydratePlayers(players) {
+  const missing = players.filter((player) => !playerMetricCache.has(playerIdentity(player)));
+  if (missing.length) {
+    try {
+      const payload = await getPlayerMetrics(missing);
+      for (const metric of payload.items || []) {
+        playerMetricCache.set(playerIdentity(metric), metric);
+      }
+    } catch {
+      // CA-derived fallbacks keep the match playable if detailed metrics are unavailable.
+    }
+  }
+  return players.map((player) => ({
+    ...player,
+    ...(playerMetricCache.get(playerIdentity(player)) || {}),
+    role: player.role,
+    line: player.line,
+    overall: player.overall,
+    isCaptain: player.isCaptain,
+  }));
+}
+
 function opponentOverall(roster) {
-  return Math.round(average(roster.slice(0, 11).map((player) =>
-    Number(player.current_ability) / 2)));
+  return Math.round(teamModel(roster).overall);
 }
 
 function userPlayers() {
@@ -267,11 +291,141 @@ function boostedSquadOverall() {
   })));
 }
 
-function weightedPlayer(players, random, preferredLine = "") {
+function playerAttribute(player, ...labels) {
+  const attributes = Array.isArray(player?.attributes)
+    ? player.attributes
+    : Array.isArray(player?.profile?.attributes)
+      ? player.profile.attributes
+      : [];
+  for (const label of labels) {
+    const match = attributes.find((item) =>
+      String(item.label || "").toLowerCase() === label.toLowerCase());
+    const value = Number(match?.value);
+    if (value > 0) return value;
+  }
+  return clamp(5, 18, (Number(player?.current_ability) || 100) / 10);
+}
+
+function playerAbility(player) {
+  return clamp(30, 99, (Number(player?.current_ability) || 100) / 2);
+}
+
+function isAttacker(player) {
+  return player?.line === "attack"
+    || /(^|\/|\s)(?:F|S|A)(?:\s|\/|$)/i.test(String(player?.position_text || ""));
+}
+
+function isMidfielder(player) {
+  return player?.line === "midfield"
+    || /(^|\/|\s)(?:M|DM|AM)(?:\s|\/|$)/i.test(String(player?.position_text || ""));
+}
+
+function attackerScore(player) {
+  const technique = average([
+    playerAttribute(player, "Finishing", "Shooting"),
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Heading"),
+    playerAttribute(player, "Technique"),
+  ]) * 5;
+  const support = average([
+    playerAttribute(player, "Pace"),
+    playerAttribute(player, "Creativity"),
+    playerAttribute(player, "Passing"),
+  ]) * 5;
+  return clamp(30, 99,
+    playerAbility(player) * 0.42 + technique * 0.43 + support * 0.15);
+}
+
+function midfielderScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Passing"),
+    playerAttribute(player, "Creativity"),
+    playerAttribute(player, "Vision"),
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Teamwork"),
+    playerAttribute(player, "Work Rate"),
+  ]) * 5;
+  return clamp(30, 99, playerAbility(player) * 0.42 + attributes * 0.58);
+}
+
+function defenderScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Marking"),
+    playerAttribute(player, "Tackling"),
+    playerAttribute(player, "Positioning"),
+    playerAttribute(player, "Anticipation"),
+    playerAttribute(player, "Heading"),
+    playerAttribute(player, "Strength"),
+  ]) * 5;
+  return clamp(30, 99, playerAbility(player) * 0.44 + attributes * 0.56);
+}
+
+function goalkeeperScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Handling"),
+    playerAttribute(player, "Reflexes"),
+    playerAttribute(player, "One On Ones"),
+    playerAttribute(player, "Positioning"),
+    playerAttribute(player, "Agility"),
+    playerAttribute(player, "Jumping"),
+  ]) * 5;
+  return clamp(25, 99, playerAbility(player) * 0.38 + attributes * 0.62);
+}
+
+function strongest(players, score, count) {
+  return players.slice().sort((left, right) => score(right) - score(left)).slice(0, count);
+}
+
+function startingEleven(players) {
+  if (players.length <= 11) return players;
+  const selected = [];
+  const add = (items) => items.forEach((player) => {
+    if (!selected.includes(player) && selected.length < 11) selected.push(player);
+  });
+  add(strongest(players.filter(isGoalkeeper), goalkeeperScore, 1));
+  add(strongest(players.filter((player) => isDefender(player) && !isGoalkeeper(player)), defenderScore, 4));
+  add(strongest(players.filter((player) => isMidfielder(player) && !isDefender(player)), midfielderScore, 3));
+  add(strongest(players.filter((player) => isAttacker(player) && !isGoalkeeper(player)), attackerScore, 3));
+  add(strongest(
+    players.filter((player) => !selected.includes(player) && !isGoalkeeper(player)),
+    playerAbility,
+    11 - selected.length,
+  ));
+  add(strongest(
+    players.filter((player) => !selected.includes(player)),
+    playerAbility,
+    11 - selected.length,
+  ));
+  return selected.slice(0, 11);
+}
+
+function teamModel(players) {
+  const lineup = startingEleven(players);
+  const outfield = lineup.filter((player) => !isGoalkeeper(player));
+  const attackers = outfield.filter(isAttacker);
+  const midfielders = outfield.filter(isMidfielder);
+  const defenders = outfield.filter(isDefender);
+  const keeper = lineup.find(isGoalkeeper);
+  const captainAdjustment = (player) => player?.isCaptain ? 2.5 : 0;
+  const scoredAverage = (items, scorer, fallback) => {
+    const source = items.length ? items : fallback;
+    return average(source.map((player) => scorer(player) + captainAdjustment(player)));
+  };
+  const attack = scoredAverage(strongest(attackers, attackerScore, 4), attackerScore, outfield);
+  const midfield = scoredAverage(strongest(midfielders, midfielderScore, 5), midfielderScore, outfield);
+  const defence = scoredAverage(strongest(defenders, defenderScore, 5), defenderScore, outfield);
+  const goalkeeping = keeper
+    ? goalkeeperScore(keeper) + captainAdjustment(keeper)
+    : Math.max(30, average(lineup.map(playerAbility)) - 24);
+  const overall = attack * 0.3 + midfield * 0.22 + defence * 0.3 + goalkeeping * 0.18;
+  return { lineup, attack, midfield, defence, goalkeeping, overall };
+}
+
+function weightedPlayer(players, random, preferredLine = "", score = attackerScore) {
   if (!players.length) return null;
   const weighted = players.flatMap((player) => {
     const lineBoost = !preferredLine || player.line === preferredLine ? 3 : 1;
-    const weight = Math.max(1, Math.round((Number(player.overall) || 65) / 20)) * lineBoost;
+    const weight = clamp(1, 18, Math.round((score(player) - 38) / 4)) * lineBoost;
     return Array.from({ length: weight }, () => player);
   });
   return weighted[Math.floor(random() * weighted.length)] || players[0];
@@ -279,6 +433,14 @@ function weightedPlayer(players, random, preferredLine = "") {
 
 function playerIdentity(player) {
   return `${player?.database_slug || DATABASE}:${player?.source_person_id || playerName(player)}`;
+}
+
+function playerReference(player) {
+  return {
+    name: playerName(player),
+    database: player?.database_slug || DATABASE,
+    sourcePersonId: String(player?.source_person_id || ""),
+  };
 }
 
 function isGoalkeeper(player) {
@@ -292,7 +454,7 @@ function isDefender(player) {
 }
 
 function goalkeeper(players) {
-  return players.find(isGoalkeeper) || players[0];
+  return strongest(players.filter(isGoalkeeper), goalkeeperScore, 1)[0] || players[0];
 }
 
 function randomMinute(random, occupied, start = 4, end = 88) {
@@ -375,9 +537,11 @@ function buildTimeline({
       events.push({
         minute: spec.minute,
         side: spec.side,
+        kind: spec.kind,
         goal: false,
         card: directRed || secondYellow ? "red" : "yellow",
         scorer: playerName(player),
+        scorerPlayer: playerReference(player),
         text: directRed
           ? `${playerName(player)} is shown a straight red card after a reckless challenge.`
           : secondYellow
@@ -391,28 +555,45 @@ function buildTimeline({
       const opponentAttackers = active("opponent")
         .filter((player) => !isGoalkeeper(player));
       const scorer = spec.side === "user"
-        ? weightedPlayer(active("user", "attack"), random)
-        : pick(opponentAttackers.length ? opponentAttackers : active("opponent"));
+        ? weightedPlayer(active("user", "attack"), random, "attack", attackerScore)
+        : weightedPlayer(
+            opponentAttackers.length ? opponentAttackers : active("opponent"),
+            random,
+            "",
+            attackerScore,
+          );
       const keeper = goalkeeper(opponents);
       events.push({
         minute: spec.minute,
         side: spec.side,
+        kind: spec.kind,
         goal: true,
         scorer: playerName(scorer),
-        scorerPlayer: {
-          name: playerName(scorer),
-          database: scorer?.database_slug || DATABASE,
-          sourcePersonId: String(scorer?.source_person_id || ""),
-        },
+        scorerPlayer: playerReference(scorer),
         text: `${playerName(scorer)} keeps calm and beats ${playerName(keeper)}.`,
       });
       continue;
     }
 
-    const actor = spec.side === "user"
-      ? weightedPlayer(players, random, spec.kind === "counter" ? "attack" : "midfield")
-      : pick(players.filter((player) => !isGoalkeeper(player)));
-    const other = pick(opponents);
+    const actorPool = players.filter((player) => !isGoalkeeper(player));
+    const actorScore = spec.kind === "tackle"
+      ? defenderScore
+      : spec.kind === "chance"
+        ? attackerScore
+        : midfielderScore;
+    const actor = weightedPlayer(
+      actorPool.length ? actorPool : players,
+      random,
+      spec.kind === "counter" ? "attack" : "midfield",
+      actorScore,
+    );
+    const defensiveOpponents = opponents.filter((player) => !isGoalkeeper(player));
+    const other = weightedPlayer(
+      defensiveOpponents.length ? defensiveOpponents : opponents,
+      random,
+      "defence",
+      defenderScore,
+    );
     const keeper = goalkeeper(opponents);
     const texts = {
       chance: `${playerName(actor)} tests ${playerName(keeper)}, who makes the save.`,
@@ -423,29 +604,87 @@ function buildTimeline({
     events.push({
       minute: spec.minute,
       side: spec.side,
+      kind: spec.kind,
       goal: false,
       scorer: playerName(actor),
+      scorerPlayer: playerReference(actor),
       text: texts[spec.kind],
     });
   }
   return { events, disciplinary };
 }
 
+function manOfTheMatch(events, userModel, rivalModel, random, winnerSide) {
+  const candidates = [
+    ...userModel.lineup.map((player) => ({ side: "user", player })),
+    ...rivalModel.lineup.map((player) => ({ side: "opponent", player })),
+  ];
+  const scores = new Map();
+  for (const candidate of candidates) {
+    const key = `${candidate.side}:${playerIdentity(candidate.player)}`;
+    const roleScore = isGoalkeeper(candidate.player)
+      ? goalkeeperScore(candidate.player)
+      : isDefender(candidate.player)
+        ? defenderScore(candidate.player)
+        : isMidfielder(candidate.player)
+          ? midfielderScore(candidate.player)
+          : attackerScore(candidate.player);
+    scores.set(key, {
+      ...candidate,
+      score: roleScore / 28 + random() * 0.7 + (candidate.player.isCaptain ? 0.2 : 0),
+    });
+  }
+  for (const event of events) {
+    const key = `${event.side}:${event.scorerPlayer?.database || DATABASE}:${event.scorerPlayer?.sourcePersonId || event.scorer}`;
+    const entry = scores.get(key);
+    if (!entry) continue;
+    if (event.goal) entry.score += 4.4;
+    else if (event.kind === "tackle") entry.score += 1.15;
+    else if (["chance", "counter", "cross"].includes(event.kind)) entry.score += 0.72;
+    if (event.card === "yellow") entry.score -= 0.45;
+    if (event.card === "red") entry.score -= 2.2;
+  }
+  for (const entry of scores.values()) {
+    if (winnerSide && entry.side === winnerSide) entry.score += 0.45;
+  }
+  const winner = [...scores.values()].sort((left, right) =>
+    right.score - left.score || playerName(left.player).localeCompare(playerName(right.player)))[0];
+  if (!winner) return null;
+  return {
+    ...playerReference(winner.player),
+    side: winner.side,
+    rating: clamp(6.5, 10, 6.1 + winner.score * 0.58).toFixed(1),
+  };
+}
+
 function matchSimulation(opponentKey, roster, stage, hidden = false) {
   const random = seededRandom(hashString(`${runSeed}:${stage}:${opponentKey}:${state.matchNumber}:${hidden}`));
   const userOvr = visibleSquadRatings().team || 70;
-  const boostedUserOvr = boostedSquadOverall() || userOvr;
-  const rivalOvr = opponentOverall(roster);
+  const ourPlayers = userPlayers();
+  const userModel = teamModel(ourPlayers);
+  const rivalModel = teamModel(roster);
+  const rivalOvr = Math.round(rivalModel.overall);
   const rngRoll = Math.round(random() * 100);
-  const edge = (boostedUserOvr - rivalOvr) / 18;
-  const swing = (rngRoll - 50) / 45;
-  const userLambda = clamp(0.2, 3.8, 1.25 + edge + swing);
-  const rivalLambda = clamp(0.2, 3.8, 1.25 - edge - swing * 0.55);
+  const rngSwing = (random() + random() - 1) * 0.72;
+  const userAttackEdge = (userModel.attack - rivalModel.defence) / 28;
+  const rivalAttackEdge = (rivalModel.attack - userModel.defence) / 28;
+  const midfieldEdge = (userModel.midfield - rivalModel.midfield) / 72;
+  const userKeeperEffect = (72 - userModel.goalkeeping) / 62;
+  const rivalKeeperEffect = (72 - rivalModel.goalkeeping) / 62;
+  const userLambda = clamp(
+    0.18,
+    3.65,
+    1.18 + userAttackEdge + midfieldEdge + rivalKeeperEffect + rngSwing,
+  );
+  const rivalLambda = clamp(
+    0.18,
+    3.65,
+    1.18 + rivalAttackEdge - midfieldEdge + userKeeperEffect - rngSwing * 0.72,
+  );
   const regularUserGoals = poisson(userLambda, random);
   const regularRivalGoals = poisson(rivalLambda, random);
   let userGoals = regularUserGoals;
   let rivalGoals = regularRivalGoals;
-  const ourPlayers = userPlayers();
   const regularTimeline = buildTimeline({
     random,
     ourPlayers,
@@ -479,6 +718,13 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
     }).events;
   }
 
+  const userWon = userGoals > rivalGoals;
+  const winnerSide = userGoals === rivalGoals ? "" : userWon ? "user" : "opponent";
+  const allEvents = [...events, ...extraTimeEvents];
+  const manOfMatch = manOfTheMatch(allEvents, userModel, rivalModel, random, winnerSide);
+  const closeness = Math.abs(userLambda - rivalLambda) < 0.38 ? 35 : 0;
+  const minuteDelay = 110 + Math.floor(random() * 91) + closeness;
+
   return {
     opponentKey,
     opponentName: CLUBS[opponentKey].name,
@@ -489,7 +735,9 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
     penaltyEvents: [],
     needsPenalties: hasExtraTime && userGoals === rivalGoals,
     hasExtraTime,
-    userWon: userGoals > rivalGoals,
+    userWon,
+    manOfMatch,
+    minuteDelay,
     events,
     extraTimeEvents,
     sentOffPlayerIds: [...regularTimeline.disciplinary.sentOff],
@@ -499,6 +747,12 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
       rngRoll,
       userLambda: userLambda.toFixed(2),
       rivalLambda: rivalLambda.toFixed(2),
+      userAttack: Math.round(userModel.attack),
+      rivalAttack: Math.round(rivalModel.attack),
+      userDefence: Math.round(userModel.defence),
+      rivalDefence: Math.round(rivalModel.defence),
+      userGoalkeeping: Math.round(userModel.goalkeeping),
+      rivalGoalkeeping: Math.round(rivalModel.goalkeeping),
     },
   };
 }
@@ -660,6 +914,19 @@ function topScorerSummary() {
   return { name, goals: Number(entry.goals || 0), player: entry.player || null };
 }
 
+function dominatorSummary() {
+  const winner = Object.values(state.userRecord.dominators)
+    .sort((left, right) =>
+      right.awards - left.awards
+      || right.ratingTotal - left.ratingTotal
+      || left.player.name.localeCompare(right.player.name))[0];
+  return winner || {
+    awards: 0,
+    ratingTotal: 0,
+    player: { name: "—", database: "", sourcePersonId: "" },
+  };
+}
+
 function currentRecordStage() {
   if (state.champion) return { label: "Champion", rank: 8 };
   if (state.outcomeStage) {
@@ -677,6 +944,7 @@ function currentRecordStage() {
 function recordPayload(username) {
   const captain = team.players.find((entry) => entry.isCaptain)?.player;
   const top = topScorerSummary();
+  const dominator = dominatorSummary();
   const stage = currentRecordStage();
   return {
     runId: `${runSeed}:${team.teamName}`,
@@ -692,6 +960,10 @@ function recordPayload(username) {
     topScorerDatabase: top.player?.database || "",
     topScorerSourcePersonId: top.player?.sourcePersonId || "",
     topScorerGoals: top.goals,
+    dominatorName: dominator.player.name,
+    dominatorDatabase: dominator.player.database || "",
+    dominatorSourcePersonId: dominator.player.sourcePersonId || "",
+    dominatorAwards: dominator.awards,
     played: state.userRecord.played,
     wins: state.userRecord.wins,
     draws: state.userRecord.draws,
@@ -712,7 +984,7 @@ function linkedRecordPlayer(name, database, sourcePersonId, suffix = "") {
 function renderRecordRows(items = []) {
   elements.recordRows.replaceChildren();
   if (!items.length) {
-    elements.recordRows.innerHTML = '<tr><td colspan="4">No saved runs yet.</td></tr>';
+    elements.recordRows.innerHTML = '<tr><td colspan="5">No saved runs yet.</td></tr>';
     return;
   }
   items.forEach((item) => {
@@ -722,6 +994,7 @@ function renderRecordRows(items = []) {
       <td>${escapeHtml(item.champion ? "Champion" : item.stage)}</td>
       <td>${linkedRecordPlayer(item.captain_name, item.captain_database, item.captain_source_person_id)}</td>
       <td>${linkedRecordPlayer(item.top_scorer_name, item.top_scorer_database, item.top_scorer_source_person_id, ` · ${item.top_scorer_goals}`)}</td>
+      <td>${linkedRecordPlayer(item.dominator_name, item.dominator_database, item.dominator_source_person_id, ` · ${item.dominator_awards}`)}</td>
     `;
     elements.recordRows.append(row);
   });
@@ -786,12 +1059,24 @@ function updateUserRecord(result) {
       if (!existing.player && event.scorerPlayer) existing.player = event.scorerPlayer;
       record.scorers[event.scorer] = existing;
     });
+  if (result.manOfMatch) {
+    const key = `${result.manOfMatch.database}:${result.manOfMatch.sourcePersonId || result.manOfMatch.name}`;
+    const existing = record.dominators[key] || {
+      awards: 0,
+      ratingTotal: 0,
+      player: result.manOfMatch,
+    };
+    existing.awards += 1;
+    existing.ratingTotal += Number(result.manOfMatch.rating) || 0;
+    record.dominators[key] = existing;
+  }
   record.matches.push({
     stage: result.stage,
     opponent: result.opponentName,
     userGoals: result.userGoals,
     rivalGoals: result.rivalGoals,
     shootout: result.shootout || null,
+    manOfMatch: result.manOfMatch || null,
   });
   renderRecordOpportunity();
 }
@@ -878,6 +1163,7 @@ function animatePeriod({
   eventList,
   score,
   scoreDisplay,
+  intervalMs = 100,
 }) {
   return new Promise((resolve) => {
     let minute = start - 1;
@@ -898,7 +1184,7 @@ function animatePeriod({
       if (minute < end) return;
       window.clearInterval(timer);
       resolve();
-    }, 45);
+    }, intervalMs);
   });
 }
 
@@ -960,8 +1246,10 @@ async function animateMatch(result) {
     <div class="run-formula">
       <span>Team OVR <b>${result.formula.userOvr}</b></span>
       <span>Opponent OVR <b>${result.formula.rivalOvr}</b></span>
-      <span>Attack model <b>${result.formula.userLambda}–${result.formula.rivalLambda}</b></span>
-      <span>RNG <b>${result.formula.rngRoll}/100</b></span>
+      <span>Attack <b>${result.formula.userAttack}–${result.formula.rivalAttack}</b></span>
+      <span>Defence <b>${result.formula.userDefence}–${result.formula.rivalDefence}</b></span>
+      <span>Goalkeeping <b>${result.formula.userGoalkeeping}–${result.formula.rivalGoalkeeping}</b></span>
+      <span>Match variance <b>${result.formula.rngRoll}/100</b></span>
     </div>
     <ol class="run-event-list" data-live-events></ol>
   `;
@@ -980,6 +1268,7 @@ async function animateMatch(result) {
     eventList,
     score,
     scoreDisplay,
+    intervalMs: result.minuteDelay,
   });
 
   if (result.hasExtraTime) {
@@ -995,10 +1284,23 @@ async function animateMatch(result) {
       eventList: extra.querySelector("[data-extra-events]"),
       score,
       scoreDisplay,
+      intervalMs: Math.max(70, result.minuteDelay - 15),
     });
   }
 
   if (result.shootout) await animatePenaltyShootout(result, article, scoreDisplay);
+  if (result.manOfMatch) {
+    const href = playerHref(result.manOfMatch);
+    article.insertAdjacentHTML("beforeend", `
+      <section class="run-man-of-match">
+        <span>Man of the Match</span>
+        <strong>${href
+          ? `<a href="${escapeHtml(href)}">${escapeHtml(result.manOfMatch.name)}</a>`
+          : escapeHtml(result.manOfMatch.name)}</strong>
+        <b>${escapeHtml(result.manOfMatch.rating)}</b>
+      </section>
+    `);
+  }
   article.classList.remove("is-live");
   article.classList.add(result.userWon
     ? "is-win"
@@ -1122,15 +1424,17 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
   elements.nextButton.hidden = true;
   const record = state.userRecord;
   const top = topScorerSummary();
+  const dominator = dominatorSummary();
   const captain = team.players.find((entry) => entry.isCaptain);
   const captainLink = playerHref(captain?.player);
   const topScorerLink = playerHref(top.player);
+  const dominatorLink = playerHref(dominator.player);
   const matchSummary = champion
     ? `<div class="run-result-matches">
         <h3>Road to the trophy</h3>
         <ol>${record.matches.map((match) => `
           <li>
-            <span>${escapeHtml(match.stage)} · ${escapeHtml(match.opponent)}</span>
+            <span>${escapeHtml(match.stage)} · ${escapeHtml(match.opponent)}${match.manOfMatch ? ` · MOTM ${escapeHtml(match.manOfMatch.name)}` : ""}</span>
             <strong>${match.userGoals}–${match.rivalGoals}${match.shootout ? ` (${match.shootout[0]}–${match.shootout[1]} pens)` : ""}</strong>
           </li>`).join("")}
         </ol>
@@ -1157,6 +1461,7 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
     <div class="run-result-honours">
       <span><small>Captain</small><strong>${captainLink ? `<a href="${escapeHtml(captainLink)}">${escapeHtml(playerName(captain?.player))}</a>` : escapeHtml(playerName(captain?.player))}</strong></span>
       <span><small>Top scorer</small><strong>${topScorerLink ? `<a href="${escapeHtml(topScorerLink)}">${escapeHtml(top.name)}</a>` : escapeHtml(top.name)} · ${top.goals} goal${top.goals === 1 ? "" : "s"}</strong></span>
+      <span><small>Dominator</small><strong>${dominatorLink ? `<a href="${escapeHtml(dominatorLink)}">${escapeHtml(dominator.player.name)}</a>` : escapeHtml(dominator.player.name)} · ${dominator.awards} award${dominator.awards === 1 ? "" : "s"}</strong></span>
       <span><small>Exit stage</small><strong>${escapeHtml(champion ? "Winner" : eliminatedStage || "Group stage")}</strong></span>
     </div>
     ${matchSummary}
@@ -1177,10 +1482,14 @@ async function playGroupRound() {
   const round = GROUP_ROUNDS[state.groupRound];
   elements.nextButton.disabled = true;
   elements.stageDescription.textContent = "Loading both 03/04 squads and calculating the match model…";
-  const [opponent, hiddenLeft, hiddenRight] = await Promise.all([
+  const [opponentBase, hiddenLeft, hiddenRight] = await Promise.all([
     opponentRoster(round.userOpponent),
     opponentRoster(round.hidden[0]),
     opponentRoster(round.hidden[1]),
+  ]);
+  const [opponent] = await Promise.all([
+    hydratePlayers(opponentBase),
+    hydratePlayers(userPlayers()),
   ]);
   state.matchNumber += 1;
   const result = matchSimulation(round.userOpponent, opponent, "Group stage");
@@ -1237,7 +1546,11 @@ async function playKnockoutRound() {
   elements.nextButton.disabled = true;
   elements.stageTitle.textContent = `${stage} · ${team.teamName} vs ${CLUBS[opponentKey].name}`;
   elements.stageDescription.textContent = "Loading the opponent squad and calculating the tie…";
-  const roster = await opponentRoster(opponentKey);
+  const rosterBase = await opponentRoster(opponentKey);
+  const [roster] = await Promise.all([
+    hydratePlayers(rosterBase),
+    hydratePlayers(userPlayers()),
+  ]);
   state.matchNumber += 1;
   const result = matchSimulation(opponentKey, roster, stage);
   if (result.needsPenalties) {

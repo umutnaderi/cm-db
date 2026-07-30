@@ -1,4 +1,4 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260730-36";
 
 const PITCH_ROWS = {
   F: 14,
@@ -239,8 +239,21 @@ function clubTheme(candidate) {
   return {
     background,
     secondary,
-    foreground: readableClubText(background, secondary),
+    foreground: secondary !== background
+      ? secondary
+      : readableClubText(background, secondary),
   };
+}
+
+function playerCardTier(candidate) {
+  const ability = Number(candidate.current_ability) || 0;
+  if (ability >= 185) return "card-tier-god";
+  if (ability >= 170) return "card-tier-gold card-tier-animated";
+  if (ability >= 150) return "card-tier-gold";
+  if (ability >= 140) return "card-tier-silver card-tier-animated";
+  if (ability >= 130) return "card-tier-silver";
+  if (ability >= 115) return "card-tier-bronze";
+  return "card-tier-base";
 }
 
 function seasonLabel(candidate) {
@@ -484,18 +497,20 @@ function chooseSuggestions(pool, seed) {
   const usedDatabases = new Set();
   const usedPlayers = new Set();
 
-  const takeBest = (role = "") => {
+  const takeBest = (role = "", minimumAbility = 0) => {
     const candidates = eligible
       .filter((candidate) => {
         const identity = candidate.canonical_player_public_id || candidateKey(candidate);
         return !usedDatabases.has(candidate.database_slug)
           && !usedPlayers.has(identity)
+          && Number(candidate.current_ability || 0) >= minimumAbility
           && (!role || positionFit(candidate, role).score > 0);
       })
       .sort((left, right) => {
         const leftFit = role ? positionFit(left, role).score : bestFit(left, openSlots).score;
         const rightFit = role ? positionFit(right, role).score : bestFit(right, openSlots).score;
-        return rightFit - leftFit;
+        return rightFit - leftFit
+          || Number(right.current_ability || 0) - Number(left.current_ability || 0);
       });
     const candidate = candidates[0];
     if (!candidate) return;
@@ -504,6 +519,15 @@ function chooseSuggestions(pool, seed) {
     usedPlayers.add(candidate.canonical_player_public_id || candidateKey(candidate));
   };
 
+  for (const role of rotatedRoles) {
+    if (selected.length >= 2) break;
+    takeBest(role, 140);
+  }
+  while (selected.length < 2) {
+    const before = selected.length;
+    takeBest("", 140);
+    if (selected.length === before) break;
+  }
   for (const role of rotatedRoles) {
     if (selected.length >= 6) break;
     takeBest(role);
@@ -566,7 +590,11 @@ function renderPitch() {
       const draftedFit = positionFit(drafted, item.effectiveRole);
       const theme = clubTheme(drafted);
       const isCaptain = state.captainSlotId === item.id;
-      marker.classList.add("is-filled", `fit-${draftedFit.level}`);
+      marker.classList.add(
+        "is-filled",
+        `fit-${draftedFit.level}`,
+        ...playerCardTier(drafted).split(" "),
+      );
       if (draftedFit.level !== "natural") marker.classList.add("is-out-of-position");
       if (isCaptain) marker.classList.add("is-captain");
       if (state.drafted.size < 11) {
@@ -586,16 +614,21 @@ function renderPitch() {
         captain.textContent = "C";
         marker.append(captain);
       }
+      const heading = document.createElement("span");
+      heading.className = "formation-player-heading";
+      const ability = document.createElement("strong");
+      ability.className = "formation-player-ability";
+      ability.textContent = draftedOverall(drafted);
+      const divider = document.createElement("i");
+      divider.setAttribute("aria-hidden", "true");
       const role = document.createElement("span");
       role.className = "formation-player-role";
       role.textContent = item.effectiveRole;
+      heading.append(ability, divider, role);
       const name = document.createElement("span");
       name.className = "formation-player-name";
-      name.textContent = shortPlayerName(drafted);
-      const ability = document.createElement("span");
-      ability.className = "formation-player-ability";
-      ability.textContent = draftedOverall(drafted);
-      marker.append(role, name, ability);
+      name.textContent = shortPlayerName(drafted).toLocaleUpperCase();
+      marker.append(heading, name);
     } else {
       marker.textContent = item.effectiveRole;
       if (fit && fit.score > 0) {

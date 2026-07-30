@@ -95,7 +95,7 @@ async function cachedJson(
 
   const cache = caches.default;
   const cacheUrl = new URL(request.url);
-  cacheUrl.searchParams.set("__retroball_cache", "26");
+  cacheUrl.searchParams.set("__retroball_cache", "27");
   const cacheKey = new Request(cacheUrl, request);
   const cached = await cache.match(cacheKey);
 
@@ -614,6 +614,60 @@ export default {
     const db = d1Client(env.DB);
 
     try {
+      if (url.pathname === "/api/player-metrics") {
+        if (request.method !== "POST") {
+          return json({ error: "Method not allowed." }, env, 405, 0);
+        }
+        const body = await request.json<{ players?: unknown[] }>().catch(() => null);
+        const players = Array.isArray(body?.players)
+          ? body.players.slice(0, 40).map((entry) => {
+              const item = entry as Record<string, unknown>;
+              return {
+                database: String(item.database || "").trim().slice(0, 80),
+                sourcePersonId: String(item.sourcePersonId || "").trim().slice(0, 80),
+              };
+            }).filter((entry) => entry.database && entry.sourcePersonId)
+          : [];
+        if (!players.length) {
+          return json({ error: "At least one player identity is required." }, env, 400, 0);
+        }
+
+        const statements = players.map((player) =>
+          env.DB.prepare(`
+            SELECT
+              ps.database_slug,
+              cast(ps.source_person_id AS TEXT) AS source_person_id,
+              ps.display_name,
+              ps.full_name,
+              ps.position_text,
+              ps.current_ability,
+              canonical.canonical_player_name,
+              profile.attributes_json
+            FROM player_search ps
+            LEFT JOIN canonical_player_names canonical
+              ON canonical.database_slug = ps.database_slug
+             AND canonical.source_person_id = cast(ps.source_person_id AS TEXT)
+            LEFT JOIN player_profile profile
+              ON profile.database_slug = ps.database_slug
+             AND profile.source_person_id = ps.source_person_id
+            WHERE ps.database_slug = ?
+              AND ps.source_person_id = ?
+            LIMIT 1
+          `).bind(player.database, player.sourcePersonId),
+        );
+        const results = await env.DB.batch<QueryRow>(statements);
+        const items = results.flatMap((result) =>
+          result.results.map((row) => {
+            const { attributes_json, ...player } = row;
+            return {
+              ...player,
+              attributes: ratingListFromJson(attributes_json),
+            };
+          }),
+        );
+        return json({ items }, env, 200, 0);
+      }
+
       if (url.pathname === "/api/draft-records") {
         if (request.method === "GET") {
           const result = await env.DB.prepare(`
@@ -621,7 +675,9 @@ export default {
               id, username, team_name, stage, stage_rank, champion,
               captain_name, captain_database, captain_source_person_id,
               top_scorer_name, top_scorer_database, top_scorer_source_person_id,
-              top_scorer_goals, played, wins, draws, losses,
+              top_scorer_goals,
+              dominator_name, dominator_database, dominator_source_person_id, dominator_awards,
+              played, wins, draws, losses,
               goals_for, goals_against, updated_at
             FROM draft_records
             ORDER BY
@@ -647,6 +703,7 @@ export default {
         const stage = text("stage", 40);
         const captainName = text("captainName", 100);
         const topScorerName = text("topScorerName", 100);
+        const dominatorName = text("dominatorName", 100) || topScorerName;
 
         if (username.length < 2 || !runId || !stage || !captainName || !topScorerName) {
           return json({ error: "Username and run details are required." }, env, 400, 0);
@@ -657,8 +714,10 @@ export default {
             run_id, username, username_key, team_name, stage, stage_rank, champion,
             captain_name, captain_database, captain_source_person_id,
             top_scorer_name, top_scorer_database, top_scorer_source_person_id,
-            top_scorer_goals, played, wins, draws, losses, goals_for, goals_against
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            top_scorer_goals,
+            dominator_name, dominator_database, dominator_source_person_id, dominator_awards,
+            played, wins, draws, losses, goals_for, goals_against
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(run_id, username_key) DO UPDATE SET
             username = excluded.username,
             team_name = excluded.team_name,
@@ -672,6 +731,10 @@ export default {
             top_scorer_database = excluded.top_scorer_database,
             top_scorer_source_person_id = excluded.top_scorer_source_person_id,
             top_scorer_goals = excluded.top_scorer_goals,
+            dominator_name = excluded.dominator_name,
+            dominator_database = excluded.dominator_database,
+            dominator_source_person_id = excluded.dominator_source_person_id,
+            dominator_awards = excluded.dominator_awards,
             played = excluded.played,
             wins = excluded.wins,
             draws = excluded.draws,
@@ -686,7 +749,10 @@ export default {
           text("captainSourcePersonId", 80) || null,
           topScorerName, text("topScorerDatabase", 80) || null,
           text("topScorerSourcePersonId", 80) || null,
-          integer("topScorerGoals", 99), integer("played", 20),
+          integer("topScorerGoals", 99),
+          dominatorName, text("dominatorDatabase", 80) || null,
+          text("dominatorSourcePersonId", 80) || null,
+          integer("dominatorAwards", 20), integer("played", 20),
           integer("wins", 20), integer("draws", 20), integer("losses", 20),
           integer("goalsFor", 99), integer("goalsAgainst", 99),
         ).run();
@@ -723,7 +789,7 @@ export default {
           `);
           const databases = databaseResult.rows;
           const queries = databases.map((database, index) => {
-            const offset = (seed * 31 + (index + 1) * 397) % 2500;
+            const offset = (seed * 31 + (index + 1) * 397) % 120;
             return {
               sql: `
                 SELECT

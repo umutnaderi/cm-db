@@ -538,7 +538,10 @@ function draftCandidates(params) {
     else if (position.startsWith("AM")) {
       positionPatterns.add("%AM%");
       positionPatterns.add("%F%");
-    } else if (position.startsWith("F")) positionPatterns.add("%F%");
+    } else if (position.startsWith("F")) {
+      positionPatterns.add("%F%");
+      positionPatterns.add("%AM%");
+    }
     else if (position.startsWith("M")) positionPatterns.add("%M%");
     else {
       positionPatterns.add("%D%");
@@ -591,6 +594,21 @@ function draftCandidates(params) {
         LIMIT 4
       `)
     : null;
+  const qualityStatement = source.prepare(`
+    SELECT
+      ${playerColumns.split(",").map((column) => `ps.${column.trim()}`).join(", ")},
+      profile.position_ratings_json
+    FROM player_search ps
+    LEFT JOIN player_profile profile
+      ON profile.database_slug = ps.database_slug
+     AND profile.source_person_id = ps.source_person_id
+    WHERE ps.database_slug = ?
+      AND ps.current_ability BETWEEN 140 AND 200
+    ORDER BY
+      ps.current_ability DESC,
+      ps.source_person_id
+    LIMIT 24 OFFSET ?
+  `);
   const items = databases.flatMap((database, index) => {
     const databaseSeed = (seed * 31 + (index + 1) * 397) % 2_147_483_647;
     const randomRows = statement.all(
@@ -605,8 +623,12 @@ function draftCandidates(params) {
           (databaseSeed + 8191) % 2_147_483_647,
         )
       : [];
+    const qualityRows = qualityStatement.all(
+      database.slug,
+      (databaseSeed + 16_381) % 120,
+    );
     const rows = [...new Map(
-      [...targetedRows, ...randomRows]
+      [...targetedRows, ...qualityRows, ...randomRows]
         .map((row) => [String(row.source_person_id), row])
     ).values()];
     return rows.map((row) => {

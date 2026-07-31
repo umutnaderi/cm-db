@@ -32,7 +32,10 @@ function draftPositionPatterns(rawPositions: string | null): string[] {
     else if (position.startsWith("AM")) {
       patterns.add("%AM%");
       patterns.add("%F%");
-    } else if (position.startsWith("F")) patterns.add("%F%");
+    } else if (position.startsWith("F")) {
+      patterns.add("%F%");
+      patterns.add("%AM%");
+    }
     else if (position.startsWith("M")) patterns.add("%M%");
     else {
       patterns.add("%D%");
@@ -128,7 +131,7 @@ async function cachedJson(
 
   const cache = caches.default;
   const cacheUrl = new URL(request.url);
-  cacheUrl.searchParams.set("__retroball_cache", "28");
+  cacheUrl.searchParams.set("__retroball_cache", "29");
   const cacheKey = new Request(cacheUrl, request);
   const cached = await cache.match(cacheKey);
 
@@ -164,7 +167,7 @@ function storeEdgeCache(
 
 function edgeCacheKey(request: Request | string): Request {
   const url = new URL(typeof request === "string" ? request : request.url);
-  url.searchParams.set("__cacheVersion", "34");
+  url.searchParams.set("__cacheVersion", "35");
   return new Request(url, typeof request === "string" ? undefined : request);
 }
 
@@ -675,7 +678,8 @@ export default {
               ps.position_text,
               ps.current_ability,
               canonical.canonical_player_name,
-              profile.attributes_json
+              profile.attributes_json,
+              profile.hidden_attributes_json
             FROM player_search ps
             LEFT JOIN canonical_player_names canonical
               ON canonical.database_slug = ps.database_slug
@@ -691,10 +695,11 @@ export default {
         const results = await env.DB.batch<QueryRow>(statements);
         const items = results.flatMap((result) =>
           result.results.map((row) => {
-            const { attributes_json, ...player } = row;
+            const { attributes_json, hidden_attributes_json, ...player } = row;
             return {
               ...player,
               attributes: ratingListFromJson(attributes_json),
+              hiddenAttributes: ratingListFromJson(hidden_attributes_json),
             };
           }),
         );
@@ -979,12 +984,55 @@ export default {
                 };
               })
             : [];
-          const queryResults = await db.batch([...queries, ...targetedQueries]);
+          const qualityQueries = databases.map((database, index) => {
+            const databaseSeed = (seed * 31 + (index + 1) * 397 + 16_381) % 2_147_483_647;
+            return {
+              sql: `
+                SELECT
+                  candidates.*,
+                  canonical_player.canonical_player_id,
+                  canonical_player.canonical_player_public_id,
+                  canonical_player.canonical_player_name,
+                  profile.position_ratings_json
+                FROM (
+                  ${playerSearchBaseSelectColumns()}
+                  WHERE ps.database_slug = ?
+                    AND ps.current_ability BETWEEN 140 AND 200
+                  ORDER BY
+                    ps.current_ability DESC,
+                    ps.source_person_id
+                  LIMIT 24 OFFSET ?
+                ) candidates
+                LEFT JOIN canonical_player_names canonical_player
+                  ON canonical_player.database_slug = candidates.database_slug
+                 AND canonical_player.source_person_id = cast(candidates.source_person_id AS TEXT)
+                LEFT JOIN player_profile profile
+                  ON profile.database_slug = candidates.database_slug
+                 AND profile.source_person_id = candidates.source_person_id
+              `,
+              args: [
+                database.slug as string,
+                databaseSeed % 120,
+              ],
+            };
+          });
+          const queryResults = await db.batch([
+            ...queries,
+            ...targetedQueries,
+            ...qualityQueries,
+          ]);
           const randomResults = queryResults.slice(0, databases.length);
-          const targetedResults = queryResults.slice(databases.length);
+          const targetedResults = queryResults.slice(
+            databases.length,
+            databases.length + targetedQueries.length,
+          );
+          const qualityResults = queryResults.slice(
+            databases.length + targetedQueries.length,
+          );
           const results = randomResults.map((result, index) => {
             const rows = [
               ...(targetedResults[index]?.rows || []),
+              ...(qualityResults[index]?.rows || []),
               ...result.rows,
             ];
             const uniqueRows = new Map<string, QueryRow>();

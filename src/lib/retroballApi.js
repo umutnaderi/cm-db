@@ -199,6 +199,7 @@ export async function getDraftCandidates({
   const searchParams = new URLSearchParams({
     seed: String(seed),
     perDatabase: String(perDatabase),
+    poolVersion: "2",
   });
   const requestedPositions = [...new Set(
     (Array.isArray(positions) ? positions : [])

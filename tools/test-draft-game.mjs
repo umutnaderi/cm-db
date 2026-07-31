@@ -100,6 +100,10 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     };
     globalThis.assert.equal(positionFit(unratedGoalkeeper, "GK").level, "natural");
     globalThis.assert.equal(positionFit(unratedGoalkeeper, "MC").level, "very-awkward");
+    globalThis.assert.equal(
+      isSupportedPitchFit(positionFit(unratedGoalkeeper, "MC")),
+      false,
+    );
     globalThis.assert.equal(positionAbilityMultiplier(unratedGoalkeeper, "MC"), 0.35);
     const centralDefenderWithoutRightSide = {
       database_slug: "zorc-db",
@@ -122,6 +126,42 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     globalThis.assert.ok(
       !playerPositionSummary(centralDefenderWithoutRightSide).includes("DR"),
       "The card summary must not advertise an unrated leftover position",
+    );
+    const glonekStyleLegacyDefender = {
+      database_slug: "cm9697",
+      source_person_id: "glonek",
+      current_ability: 130,
+      position_text: "SW/D C",
+      position_ratings: [
+        { label: "sweeper", value: 2 },
+        { label: "defender", value: 2 },
+        { label: "central", value: 2 },
+        { label: "right side", value: 1 },
+      ],
+    };
+    globalThis.assert.equal(
+      positionFit(glonekStyleLegacyDefender, "DR").level,
+      "limited",
+    );
+    globalThis.assert.equal(
+      isExactLateSlotMatch(glonekStyleLegacyDefender, "DR"),
+      false,
+      "A hidden legacy side rating must not satisfy an exact late-slot guarantee",
+    );
+    globalThis.assert.equal(
+      isExactLateSlotMatch(glonekStyleLegacyDefender, "DC"),
+      true,
+    );
+    globalThis.assert.equal(
+      isExactLateSlotMatch(
+        {
+          ...glonekStyleLegacyDefender,
+          source_person_id: "natural-right-back",
+          position_text: "D R",
+        },
+        "DR",
+      ),
+      true,
     );
     const morientesSummary = playerPositionSummary({
       position_text: "F C",
@@ -153,6 +193,28 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     globalThis.assert.equal(positionFit(rightForward, "FR").level, "natural");
     globalThis.assert.equal(positionFit(rightForward, "AMR").level, "playable");
     globalThis.assert.equal(playerPositionSummary(rightForward), "FR / AMR");
+    const leftAttackingMidfielder = {
+      position_text: "AM L",
+      position_ratings: [
+        { label: "attacker", value: 0 },
+        { label: "attacking midfielder", value: 20 },
+        { label: "left side", value: 20 },
+      ],
+    };
+    globalThis.assert.equal(positionFit(leftAttackingMidfielder, "AML").level, "natural");
+    globalThis.assert.equal(positionFit(leftAttackingMidfielder, "FL").level, "playable");
+    globalThis.assert.equal(playerPositionSummary(leftAttackingMidfielder), "AML / FL");
+    const rightAttackingMidfielder = {
+      position_text: "AM R",
+      position_ratings: [
+        { label: "attacker", value: 0 },
+        { label: "attacking midfielder", value: 20 },
+        { label: "right side", value: 20 },
+      ],
+    };
+    globalThis.assert.equal(positionFit(rightAttackingMidfielder, "AMR").level, "natural");
+    globalThis.assert.equal(positionFit(rightAttackingMidfielder, "FR").level, "playable");
+    globalThis.assert.equal(playerPositionSummary(rightAttackingMidfielder), "AMR / FR");
     const universalRatings = [
       "goalkeeper", "sweeper", "defender", "defensive midfielder",
       "midfielder", "attacking midfielder", "attacker",
@@ -168,6 +230,95 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
         position_ratings: universalRatings,
       }))
     ));
+    const databasePairPool = Array.from({ length: 8 }, (_, databaseIndex) => (
+      Array.from({ length: 6 }, (_, playerIndex) => ({
+        database_slug: "pair-db-" + databaseIndex,
+        source_person_id: "pair-" + databaseIndex + "-" + playerIndex,
+        canonical_player_public_id: "pair-player-" + databaseIndex + "-" + playerIndex,
+        current_ability: 145,
+        position_ratings: universalRatings,
+      }))
+    )).flat();
+    const firstDatabasePair = selectRollDatabases(databasePairPool, 41);
+    globalThis.assert.equal(firstDatabasePair.length, 5);
+    const pairedRoll = chooseSuggestions(
+      databasePairPool.filter((candidate) => firstDatabasePair.includes(candidate.database_slug)),
+      41,
+    );
+    globalThis.assert.equal(pairedRoll.length, 5);
+    globalThis.assert.equal(new Set(pairedRoll.map((candidate) => candidate.database_slug)).size, 5);
+    for (const database of firstDatabasePair) {
+      globalThis.assert.equal(
+        pairedRoll.filter((candidate) => candidate.database_slug === database).length,
+        1,
+      );
+    }
+    firstDatabasePair.forEach((database) => state.databasesUsedForCurrentPick.add(database));
+    const secondDatabasePair = selectRollDatabases(databasePairPool, 42);
+    globalThis.assert.equal(secondDatabasePair.length, 5);
+    globalThis.assert.equal(
+      secondDatabasePair.filter((database) => firstDatabasePair.includes(database)).length,
+      2,
+      "With eight seasons, a reroll must include all three unseen seasons and two repeats",
+    );
+    state.databasesUsedForCurrentPick.clear();
+    const qualityAwarePairPool = [
+      "low-a", "low-b", "low-c", "low-d", "low-e",
+      "quality-a", "quality-b", "quality-c",
+    ]
+      .flatMap((database, databaseIndex) => (
+        Array.from({ length: 8 }, (_, playerIndex) => ({
+          database_slug: database,
+          source_person_id: database + "-" + playerIndex,
+          canonical_player_public_id: "quality-pair-" + database + "-" + playerIndex,
+          current_ability:
+            databaseIndex >= 5 && playerIndex < 3 ? 150 : 130,
+          position_ratings: universalRatings,
+        }))
+      ));
+    const qualityAwarePair = selectRollDatabases(qualityAwarePairPool, 51);
+    globalThis.assert.equal(qualityAwarePair.length, 5);
+    for (const database of ["quality-a", "quality-b", "quality-c"]) {
+      globalThis.assert.ok(
+        qualityAwarePair.includes(database),
+        "Database selection should include every quality-capable season when coverage is equal",
+      );
+    }
+    const qualityFloorDatabases = ["floor-a", "floor-b", "floor-c", "floor-d", "floor-e"];
+    const qualityFloorPool = qualityFloorDatabases.flatMap((database) => [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        database_slug: database,
+        source_person_id: database + "-low-" + index,
+        canonical_player_public_id: database + "-low-player-" + index,
+        current_ability: 125 + index,
+        position_ratings: universalRatings,
+      })),
+      ...Array.from({ length: 3 }, (_, index) => ({
+        database_slug: database,
+        source_person_id: database + "-quality-" + index,
+        canonical_player_public_id: database + "-quality-player-" + index,
+        current_ability: 145 + index * 8,
+        position_ratings: universalRatings,
+      })),
+    ]);
+    for (let seed = 1; seed <= 80; seed += 1) {
+      const protectedRoll = chooseSuggestions(qualityFloorPool, seed);
+      globalThis.assert.equal(protectedRoll.length, 5);
+      globalThis.assert.ok(
+        protectedRoll.filter(
+          (candidate) => Number(candidate.current_ability || 0) >= 140,
+        ).length >= 3,
+        "Every full roll should contain at least three CA 140+ choices when available",
+      );
+      for (const database of qualityFloorDatabases) {
+        globalThis.assert.ok(
+          protectedRoll.filter(
+            (candidate) => candidate.database_slug === database,
+          ).length <= 1,
+          "Each roll must contain at most one player from each season",
+        );
+      }
+    }
     const belowFloorPool = Array.from({ length: 8 }, (_, index) => ({
       database_slug: "low-db-" + index,
       source_person_id: "low-" + index,
@@ -180,6 +331,41 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       0,
       "Players below CA 100 / OVR 50 must not enter draft rolls",
     );
+    state.drafted.clear();
+    state.formation = "4-3-3";
+    state.style = "Balanced";
+    const formationAwarePool = Array.from({ length: 5 }, (_, index) => [
+      {
+        database_slug: "formation-db-" + index,
+        source_person_id: "dmc-only-" + index,
+        canonical_player_public_id: "dmc-only-" + index,
+        current_ability: 170,
+        position_text: "DM C",
+        position_ratings: [
+          { label: "defensive midfielder", value: 20 },
+          { label: "central", value: 20 },
+        ],
+      },
+      {
+        database_slug: "formation-db-" + index,
+        source_person_id: "fc-fit-" + index,
+        canonical_player_public_id: "fc-fit-" + index,
+        current_ability: 145,
+        position_text: "F C",
+        position_ratings: [
+          { label: "attacker", value: 20 },
+          { label: "central", value: 20 },
+        ],
+      },
+    ]).flat();
+    const formationAwareRoll = chooseSuggestions(formationAwarePool, 781);
+    globalThis.assert.equal(formationAwareRoll.length, 5);
+    globalThis.assert.ok(
+      formationAwareRoll.every((candidate) =>
+        candidate.canonical_player_public_id.startsWith("fc-fit-"),
+      ),
+      "A DMC-only player must not be offered when the formation has no DMC slot",
+    );
     const tierPulls = [0, 0, 0, 0, 0, 0];
     for (let seed = 1; seed <= 400; seed += 1) {
       for (const candidate of chooseSuggestions(suggestionPool, seed)) {
@@ -187,12 +373,13 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       }
     }
     const pullTotal = tierPulls.reduce((sum, count) => sum + count, 0);
-    globalThis.assert.ok(tierPulls[0] > 0 && tierPulls[0] / pullTotal < 0.04);
-    globalThis.assert.ok(tierPulls[1] / pullTotal > 0.1 && tierPulls[1] / pullTotal < 0.18);
-    globalThis.assert.ok(tierPulls[2] / pullTotal > 0.28 && tierPulls[2] / pullTotal < 0.4);
-    globalThis.assert.ok(tierPulls[3] / pullTotal > 0.3 && tierPulls[3] / pullTotal < 0.43);
-    globalThis.assert.ok(tierPulls[4] / pullTotal > 0.08 && tierPulls[4] / pullTotal < 0.18);
-    globalThis.assert.ok(tierPulls[5] / pullTotal < 0.02);
+    const tierRatios = tierPulls.map((count) => count / pullTotal);
+    globalThis.assert.ok(tierRatios[0] > 0.02 && tierRatios[0] < 0.07, JSON.stringify(tierRatios));
+    globalThis.assert.ok(tierRatios[1] > 0.15 && tierRatios[1] < 0.27, JSON.stringify(tierRatios));
+    globalThis.assert.ok(tierRatios[2] > 0.32 && tierRatios[2] < 0.48, JSON.stringify(tierRatios));
+    globalThis.assert.ok(tierRatios[3] > 0.24 && tierRatios[3] < 0.4, JSON.stringify(tierRatios));
+    globalThis.assert.equal(tierPulls[4], 0);
+    globalThis.assert.equal(tierPulls[5], 0);
     globalThis.assert.ok(tierPulls[2] > tierPulls[1]);
     globalThis.assert.ok(tierPulls[3] > tierPulls[1]);
     state.premiumDrought = 4;
@@ -255,26 +442,190 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
     state.rerollsRemaining = 3;
     const unprotectedLateRoll = chooseSuggestions(latePool, 91);
     const unprotectedFitCount = unprotectedLateRoll
-      .filter((candidate) => bestFit(candidate).score > 0).length;
+      .filter((candidate) => isExactLateSlotMatch(candidate, "DL")).length;
     globalThis.assert.ok(
-      unprotectedLateRoll.some((candidate) => bestFit(candidate).score === 0),
-      "Late rolls must not automatically fill the final position",
-    );
-    globalThis.assert.ok(
-      unprotectedFitCount >= 1 && unprotectedFitCount <= 2,
-      "A late roll must deliberately offer one or two compatible choices",
+      unprotectedFitCount === unprotectedLateRoll.length,
+      "Every late-roll suggestion must fit the final position; got "
+        + unprotectedFitCount
+        + " from "
+        + unprotectedLateRoll.map((candidate) =>
+          playerMainPositionSummary(candidate)
+        ).join(", "),
     );
     const lateFitCounts = Array.from({ length: 40 }, (_, index) => (
       chooseSuggestions(latePool, index + 1)
-        .filter((candidate) => bestFit(candidate).score > 0).length
+        .filter((candidate) => isExactLateSlotMatch(candidate, "DL")).length
     ));
-    globalThis.assert.ok(lateFitCounts.every((count) => count >= 1 && count <= 2));
-    globalThis.assert.ok(lateFitCounts.includes(1) && lateFitCounts.includes(2));
+    globalThis.assert.ok(lateFitCounts.every((count) => count === 5));
     state.rerollsRemaining = 0;
     const emergencyLateRoll = chooseSuggestions(latePool, 91);
     globalThis.assert.ok(
-      emergencyLateRoll.some((candidate) => bestFit(candidate).score > 0),
+      emergencyLateRoll.some(
+        (candidate) => isExactLateSlotMatch(candidate, "DL"),
+      ),
       "The final reroll should retain a compatible escape route",
+    );
+
+    state.drafted.clear();
+    const finalSlots = currentSlots();
+    const finalLeftBack = finalSlots.find((item) => item.effectiveRole === "DL");
+    const finalGoalkeeper = finalSlots.find((item) => item.effectiveRole === "GK");
+    for (const item of finalSlots) {
+      if (item.id !== finalLeftBack.id && item.id !== finalGoalkeeper.id) {
+        state.drafted.set(item.id, {
+          canonical_player_public_id: "two-left-drafted-" + item.id,
+        });
+      }
+    }
+    const twoRolePool = [
+      {
+        database_slug: "late-pair-a",
+        source_person_id: "late-dl",
+        canonical_player_public_id: "late-dl",
+        current_ability: 145,
+        position_text: "D L",
+        position_ratings: leftBackRatings,
+      },
+      {
+        database_slug: "late-pair-b",
+        source_person_id: "late-gk",
+        canonical_player_public_id: "late-gk",
+        current_ability: 145,
+        position_text: "GK",
+        position_ratings: [],
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        database_slug: index % 2 ? "late-pair-a" : "late-pair-b",
+        source_person_id: "late-attacker-" + index,
+        canonical_player_public_id: "late-attacker-" + index,
+        current_ability: 135 + index,
+        position_text: "F C",
+        position_ratings: attackerRatings,
+      })),
+    ];
+    const twoRoleRoll = chooseSuggestions(twoRolePool, 73);
+    globalThis.assert.ok(
+      twoRoleRoll.some((candidate) => isExactLateSlotMatch(candidate, "DL")),
+      "The final two-role roll must contain a left-back option",
+    );
+    globalThis.assert.ok(
+      twoRoleRoll.some((candidate) => isExactLateSlotMatch(candidate, "GK")),
+      "The final two-role roll must contain a goalkeeper option",
+    );
+
+    state.drafted.clear();
+    const threeRoleSlots = currentSlots();
+    const requiredThreeRoles = new Set(["GK", "DL", "FC"]);
+    for (const item of threeRoleSlots) {
+      if (!requiredThreeRoles.has(item.effectiveRole)) {
+        state.drafted.set(item.id, {
+          canonical_player_public_id: "three-left-drafted-" + item.id,
+        });
+      } else {
+        requiredThreeRoles.delete(item.effectiveRole);
+      }
+    }
+    const threeRolePool = [
+      {
+        database_slug: "three-a",
+        source_person_id: "three-gk",
+        canonical_player_public_id: "three-gk",
+        current_ability: 135,
+        position_text: "GK",
+        position_ratings: [],
+      },
+      {
+        database_slug: "three-b",
+        source_person_id: "three-dl",
+        canonical_player_public_id: "three-dl",
+        current_ability: 135,
+        position_text: "D L",
+        position_ratings: leftBackRatings,
+      },
+      {
+        database_slug: "three-c",
+        source_person_id: "three-fc",
+        canonical_player_public_id: "three-fc",
+        current_ability: 135,
+        position_text: "F C",
+        position_ratings: attackerRatings,
+      },
+      {
+        database_slug: "three-d",
+        source_person_id: "three-dl-two",
+        canonical_player_public_id: "three-dl-two",
+        current_ability: 150,
+        position_text: "D L",
+        position_ratings: leftBackRatings,
+      },
+      {
+        database_slug: "three-e",
+        source_person_id: "three-fc-two",
+        canonical_player_public_id: "three-fc-two",
+        current_ability: 150,
+        position_text: "F C",
+        position_ratings: attackerRatings,
+      },
+    ];
+    const threeRoleRoll = chooseSuggestions(threeRolePool, 117);
+    for (const slotItem of remainingSlots()) {
+      globalThis.assert.ok(
+        threeRoleRoll.some((candidate) =>
+          isExactLateSlotMatch(candidate, slotItem.effectiveRole),
+        ),
+        "The final three-role roll must cover " + slotItem.effectiveRole,
+      );
+    }
+
+    state.drafted.clear();
+    const goalkeeperOnlySlots = currentSlots();
+    const goalkeeperOnly = goalkeeperOnlySlots.find(
+      (item) => item.effectiveRole === "GK",
+    );
+    for (const item of goalkeeperOnlySlots) {
+      if (item.id !== goalkeeperOnly.id) {
+        state.drafted.set(item.id, {
+          canonical_player_public_id: "keeper-fallback-drafted-" + item.id,
+        });
+      }
+    }
+    const rotationFallbackPool = [
+      ...["used-gk-a", "used-gk-b", "fresh-gk-c", "fresh-gk-d", "fresh-gk-e"].flatMap((database) => [
+        {
+          database_slug: database,
+          source_person_id: database + "-keeper",
+          canonical_player_public_id: database + "-keeper",
+          current_ability: 145,
+          position_text: "GK",
+          position_ratings: [],
+        },
+        ...Array.from({ length: 5 }, (_, index) => ({
+          database_slug: database,
+          source_person_id: database + "-player-" + index,
+          canonical_player_public_id: database + "-player-" + index,
+          current_ability: 145,
+          position_text: "F C",
+          position_ratings: attackerRatings,
+        })),
+      ]),
+      ...["fresh-no-gk-a", "fresh-no-gk-b"].flatMap((database) =>
+        Array.from({ length: 6 }, (_, index) => ({
+          database_slug: database,
+          source_person_id: database + "-player-" + index,
+          canonical_player_public_id: database + "-player-" + index,
+          current_ability: 145,
+          position_text: "F C",
+          position_ratings: attackerRatings,
+        })),
+      ),
+    ];
+    state.databasesUsedForCurrentPick.clear();
+    state.databasesUsedForCurrentPick.add("used-gk-a");
+    state.databasesUsedForCurrentPick.add("used-gk-b");
+    const fallbackPair = selectRollDatabases(rotationFallbackPool, 991);
+    globalThis.assert.ok(
+      fallbackPair.some((database) => database.startsWith("used-gk-")),
+      "Final-position coverage must take priority over database rotation",
     );
   `);
 
@@ -297,6 +648,7 @@ assert.ok(
 assert.ok(setupSourceText.includes('"is-emergency-target", "fit-none"'));
 assert.ok(setupHtml.includes('data-scenario="ucl0203"'));
 assert.ok(setupHtml.includes('data-scenario="ucl0304"'));
+assert.ok(setupHtml.includes('id="draftMobileRollButton"'));
 assert.equal((setupHtml.match(/<small>Group Stages<\/small>/g) || []).length, 2);
 assert.ok(setupSourceText.includes("scenario: state.scenario"));
 assert.ok(setupSourceText.includes("state.rollNumber > 0"));
@@ -304,10 +656,27 @@ assert.ok(setupSourceText.includes("selectedDraftSlotId"));
 assert.ok(setupSourceText.includes("state.captainSlotId = slotId"));
 assert.ok(setupSourceText.includes("state.captainSlotId = sourceSlotId"));
 assert.ok(setupSourceText.includes("positions: targetPositions"));
+assert.ok(setupSourceText.includes("selectRollDatabases"));
+assert.ok(setupSourceText.includes("databasesUsedForCurrentPick"));
+assert.ok(setupSourceText.includes("playerMainPositionSummary(candidate)"));
+assert.ok(setupSourceText.includes('class="draft-dice-loader"'));
+assert.ok(setupSourceText.includes('renderSuggestions("", true)'));
 assert.ok(retroballApiSource.includes('searchParams.set("positions"'));
 assert.ok(localApiSource.includes("ps.current_ability BETWEEN 100 AND 200"));
 assert.ok(localApiSource.includes("LIMIT 4"));
+assert.ok(localApiSource.includes("ps.current_ability BETWEEN 140 AND 200"));
+assert.ok(localApiSource.includes("qualityRows"));
 assert.ok(setupStyles.includes(".formation-player.is-swap-source"));
+assert.ok(setupStyles.includes(".draft-suggestion-card > span"));
+assert.ok(setupStyles.includes("position: absolute"));
+assert.ok(setupStyles.includes(".draft-roll-button-mobile"));
+assert.ok(setupStyles.includes(".draft-options > .draft-roll-button"));
+assert.ok(setupStyles.includes("@keyframes draft-die-spin"));
+assert.ok(setupStyles.includes("@keyframes draft-suggestion-reveal"));
+assert.ok(setupStyles.includes(".formation-player:not(.is-filled)"));
+assert.ok(!setupStyles.includes("opacity: 0.34"));
+assert.ok(setupStyles.includes("border-color: rgba(247, 243, 237, 0.92)"));
+assert.ok(setupStyles.includes("background: #49131b"));
 assert.ok(!setupStyles.includes('.formation-pitch[data-style="defensive"] .formation-player'));
 assert.ok(!setupStyles.includes('.formation-pitch[data-style="attacking"] .formation-player'));
 const emptyPositionRules = [...setupStyles.matchAll(/\.formation-player\s*\{[^}]+\}/g)];
@@ -320,9 +689,16 @@ const runSourceText = fs.readFileSync(new URL("../draft-run.js", import.meta.url
 assert.ok(!runHtml.includes('id="runClock"'), "The match clock must not remain in the sidebar");
 assert.ok(runSourceText.includes("data-match-clock"), "Every active match must render its own clock");
 assert.ok(
-  runSourceText.includes("clockDisplay.textContent = `${minute}'`;"),
-  "The active match clock must advance inside its scoreboard",
+  runSourceText.includes("async function animateClockRange("),
+  "The active match clock must advance through its event-driven timeline",
 );
+assert.ok(runSourceText.includes("data-match-pace"), "A live match must expose commentary pace");
+assert.ok(runSourceText.includes("data-mini-pitch"), "A live match must render its spatial mini-pitch");
+assert.ok(runSourceText.includes("MIRRORED_ZONE"), "Opponent zones must be mirrored into the user perspective");
+assert.ok(runSourceText.includes("calculateStoppageSeconds"));
+assert.ok(runSourceText.includes("regulationEndSecond"));
+assert.ok(runSourceText.includes("zoneFrom"));
+assert.ok(runSourceText.includes("zoneTo"));
 assert.ok(runSourceText.includes("data-share-squad"), "Finished runs must offer squad sharing");
 assert.ok(runSourceText.includes("squadSeed: sharedSquad.seed"), "Records must carry the squad seed");
 assert.ok(runSourceText.includes("group-draw"), "The run must seed a random group draw");
@@ -334,6 +710,8 @@ const workerSource = fs.readFileSync(new URL("../worker/src/index.ts", import.me
 assert.ok(sharedSquadHtml.includes('id="sharedSquadList"'));
 assert.ok(sharedSquadSource.includes("getDraftSquad(seed)"));
 assert.ok(workerSource.includes("ps.current_ability BETWEEN 100 AND 200"));
+assert.ok(workerSource.includes("ps.current_ability BETWEEN 140 AND 200"));
+assert.ok(workerSource.includes("qualityQueries"));
 assert.ok(workerSource.includes("draftPositionPatterns"));
 assert.ok(workerSource.includes("LIMIT 4"));
 assert.ok(workerSource.includes('url.pathname === "/api/draft-squads"'));
@@ -398,11 +776,25 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         const allEvents = [...result.events, ...result.extraTimeEvents];
         globalThis.assert.ok(result.manOfMatch?.name);
         globalThis.assert.ok(result.minuteDelay >= 110 && result.minuteDelay <= 235);
+        globalThis.assert.ok(result.regulationStoppageSeconds >= 0);
+        globalThis.assert.ok(result.regulationStoppageSeconds <= 360);
+        globalThis.assert.equal(
+          result.regulationEndSecond,
+          90 * 60 + result.regulationStoppageSeconds,
+        );
         redCards += allEvents.filter((event) => event.card === "red").length;
         const userGoals = allEvents.filter((event) => event.goal && event.side === "user").length;
         const rivalGoals = allEvents.filter((event) => event.goal && event.side === "opponent").length;
         globalThis.assert.equal(userGoals, result.userGoals);
         globalThis.assert.equal(rivalGoals, result.rivalGoals);
+        for (const event of allEvents) {
+          globalThis.assert.ok(event.matchSecond >= 0);
+          globalThis.assert.ok(event.zoneFrom >= 0 && event.zoneFrom <= 11);
+          globalThis.assert.ok(event.zoneTo >= 0 && event.zoneTo <= 11);
+          globalThis.assert.ok(event.actionSeconds >= 4);
+          globalThis.assert.ok(event.presentationWeight > 0);
+          globalThis.assert.ok(["user", "opponent"].includes(event.possessionAfter));
+        }
         for (const event of allEvents.filter((item) => item.text.includes(" tests "))) {
           globalThis.assert.ok(
             event.text.includes(event.side === "user" ? "Opponent Keeper" : "User Keeper"),
@@ -418,6 +810,12 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         }
       }
       globalThis.assert.ok(redCards <= 12, "Red cards are too frequent: " + redCards);
+      globalThis.assert.equal(displayZone(0, "user"), 0);
+      globalThis.assert.equal(displayZone(0, "opponent"), 11);
+      globalThis.assert.equal(displayZone(5, "opponent"), 6);
+      globalThis.assert.equal(formatMatchClock(90 * 60 + 1, 90 * 60), "90+1'");
+      globalThis.assert.equal(formatMatchClock(90 * 60 + 61, 90 * 60), "90+2'");
+      globalThis.assert.equal(formatMatchClock(91 * 60, 120 * 60), "91'");
       const visibleRatings = visibleSquadRatings();
       globalThis.assert.equal(visibleRatings.attack, 91);
       globalThis.assert.ok(boostedSquadOverall() > visibleRatings.team);
@@ -445,6 +843,58 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         attributes: eliteAttributes({ Finishing: 19, "Off the Ball": 19, Heading: 18, Technique: 18, Pace: 17, Creativity: 16, Passing: 16 }),
       };
       globalThis.assert.ok(attackerScore(eliteForward) > attackerScore(ordinaryForward) + 20);
+      const legacyZidane = {
+        current_ability: 168,
+        database_slug: "cm9697_vanilla_original",
+        role: "AMC",
+        line: "midfield",
+        position_text: "D/M/AM LC",
+        attributes: eliteAttributes({
+          Dribbling: 14,
+          Finishing: 12,
+          Heading: 14,
+          Passing: 16,
+          Shooting: 12,
+          Technique: 16,
+          Consistency: 12,
+          Creativity: 18,
+          Flair: 16,
+          Positioning: 12,
+          Pace: 13,
+          Stamina: 14,
+        }),
+      };
+      const inferredOffBall = engineAttributeDetail(legacyZidane, "Off the Ball");
+      globalThis.assert.equal(inferredOffBall.source, "inferred");
+      globalThis.assert.ok(inferredOffBall.value >= 13 && inferredOffBall.value <= 18);
+      globalThis.assert.ok(inferredOffBall.confidence < 0.7);
+      const directHiddenOffBall = engineAttributeDetail({
+        ...legacyZidane,
+        hiddenAttributes: eliteAttributes({ "Off the Ball": 17 }),
+      }, "Off the Ball");
+      globalThis.assert.deepEqual(directHiddenOffBall, {
+        value: 17,
+        source: "direct",
+        confidence: 1,
+      });
+      const unsetAttribute = engineAttributeDetail({
+        ...legacyZidane,
+        attributes: eliteAttributes({ Handling: 0 }),
+      }, "Handling");
+      globalThis.assert.notEqual(unsetAttribute.value, 0);
+      globalThis.assert.equal(unsetAttribute.source, "baseline");
+      const normalizedLegacy = normalizedEngineRatings(legacyZidane);
+      globalThis.assert.equal(normalizedLegacy.legacy, true);
+      globalThis.assert.ok(normalizedLegacy.confidence > 0.35 && normalizedLegacy.confidence < 1);
+      playerMetricCache.set(playerIdentity(team.players[9].player), {
+        hiddenAttributes: eliteAttributes({ "Off the Ball": 19 }),
+      });
+      globalThis.assert.equal(
+        engineAttributeDetail(userPlayers()[9], "Off the Ball").value,
+        19,
+        "Hydrated metrics must be applied to the user's drafted players",
+      );
+      playerMetricCache.delete(playerIdentity(team.players[9].player));
       const weakKeeperRoster = opponentRoster.map((player) =>
         isGoalkeeper(player) ? { ...player, ...weakKeeper, source_person_id: player.source_person_id } : player);
       const eliteKeeperRoster = opponentRoster.map((player) =>

@@ -13,6 +13,19 @@ import {
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
+const MATCH_PACE_KEY = "retroball-match-commentary-pace-v1";
+const MATCH_PACES = {
+  fast: { label: "Fast", multiplier: 0.58 },
+  normal: { label: "Normal", multiplier: 1 },
+  slow: { label: "Slow", multiplier: 1.65 },
+};
+const MIRRORED_ZONE = [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+const ZONE_CENTERS = [
+  [16.667, 12.5], [50, 12.5], [83.333, 12.5],
+  [16.667, 37.5], [50, 37.5], [83.333, 37.5],
+  [16.667, 62.5], [50, 62.5], [83.333, 62.5],
+  [16.667, 87.5], [50, 87.5], [83.333, 87.5],
+];
 const CLUBS = {
   aek: { name: "AEK Athens", club: "AEK Athens" },
   ajax: { name: "Ajax", club: "AFC Ajax" },
@@ -206,6 +219,170 @@ function playerName(player) {
     || "Unknown player";
 }
 
+const LEGACY_ATTRIBUTE_DATABASES = new Set([
+  "cm9697",
+  "cm9697_vanilla_original",
+  "cm9798",
+  "cm9798_vanilla_original",
+]);
+
+const ENGINE_ATTRIBUTE_RULES = {
+  "acceleration": [["Pace", 1]],
+  "agility": [["Pace", 0.45], ["Technique", 0.35], ["Dribbling", 0.2]],
+  "anticipation": [["Positioning", 0.45], ["Consistency", 0.3], ["Creativity", 0.25]],
+  "balance": [["Strength", 0.45], ["Technique", 0.3], ["Pace", 0.25]],
+  "crossing": [["Passing", 0.5], ["Technique", 0.35], ["Set Pieces", 0.15]],
+  "decisions": [["Consistency", 0.4], ["Positioning", 0.3], ["Creativity", 0.3]],
+  "first touch": [["Technique", 0.55], ["Dribbling", 0.25], ["Passing", 0.2]],
+  "handling": [["Goalkeeper", 0.5], ["Consistency", 0.25], ["Positioning", 0.25]],
+  "jumping": [["Heading", 0.55], ["Strength", 0.45]],
+  "long shots": [["Shooting", 0.65], ["Finishing", 0.2], ["Technique", 0.15]],
+  "one on ones": [["Goalkeeper", 0.45], ["Positioning", 0.3], ["Anticipation", 0.25]],
+  "off the ball": [["Positioning", 0.4], ["Creativity", 0.25], ["Flair", 0.2], ["Consistency", 0.15]],
+  "reflexes": [["Goalkeeper", 0.5], ["Pace", 0.25], ["Consistency", 0.25]],
+  "strength": [["Heading", 0.4], ["Stamina", 0.35], ["Tackling", 0.25]],
+  "teamwork": [["Work Rate", 0.35], ["Consistency", 0.3], ["Character", 0.2], ["Determination", 0.15]],
+  "vision": [["Creativity", 0.45], ["Passing", 0.3], ["Technique", 0.15], ["Flair", 0.1]],
+  "work rate": [["Stamina", 0.35], ["Determination", 0.3], ["Consistency", 0.2], ["Character", 0.15]],
+};
+
+const ENGINE_ATTRIBUTE_ALIASES = {
+  "finishing": ["Shooting"],
+  "goalkeeper": ["Goalkeeping"],
+  "long shots": ["Shooting"],
+  "one on ones": ["One-on-Ones", "One On One"],
+  "set pieces": ["Set Pieces"],
+};
+
+function normalizedAttributeLabel(label) {
+  return String(label || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", " ")
+    .replace(/\s+/g, " ");
+}
+
+function playerAttributeEntries(player) {
+  const lists = [
+    player?.attributes,
+    player?.hiddenAttributes,
+    player?.hidden_attributes,
+    player?.profile?.attributes,
+    player?.profile?.hiddenAttributes,
+    player?.profile?.hidden_attributes,
+  ];
+  return lists.flatMap((list) => Array.isArray(list) ? list : []);
+}
+
+function rawPlayerAttributeMap(player) {
+  const values = new Map();
+  for (const item of playerAttributeEntries(player)) {
+    const label = normalizedAttributeLabel(item?.label);
+    const value = Number(item?.value);
+    // CM attributes use 1-20. A stored zero represents an unset value.
+    if (label && value > 0 && value <= 20 && !values.has(label)) {
+      values.set(label, value);
+    }
+  }
+  return values;
+}
+
+function playerCaBaseline(player) {
+  return clamp(1, 20, (Number(player?.current_ability) || 100) / 10);
+}
+
+function positionalAttributeBaseline(player, label) {
+  const base = playerCaBaseline(player);
+  const key = normalizedAttributeLabel(label);
+  const goalkeeper = isGoalkeeper(player);
+  const defender = isDefender(player);
+  const midfielder = isMidfielder(player);
+  const attacker = isAttacker(player);
+  let adjustment = 0;
+
+  if (["handling", "reflexes", "one on ones"].includes(key)) {
+    adjustment = goalkeeper ? 1 : -8;
+  } else if (["marking", "tackling", "positioning", "anticipation"].includes(key)) {
+    adjustment = defender ? 1 : attacker ? -2 : 0;
+  } else if (["passing", "creativity", "vision", "technique", "teamwork"].includes(key)) {
+    adjustment = midfielder ? 1 : 0;
+  } else if (["finishing", "off the ball", "heading", "long shots"].includes(key)) {
+    adjustment = attacker ? 1 : defender ? -1 : 0;
+  } else if (key === "crossing") {
+    adjustment = /(?:L|R)/i.test(String(player?.position_text || player?.role || ""))
+      ? 1
+      : 0;
+  }
+  return clamp(1, 20, base + adjustment);
+}
+
+function directEngineAttribute(raw, label) {
+  const key = normalizedAttributeLabel(label);
+  if (raw.has(key)) return { value: raw.get(key), source: "direct", confidence: 1 };
+  for (const alias of ENGINE_ATTRIBUTE_ALIASES[key] || []) {
+    const aliasKey = normalizedAttributeLabel(alias);
+    if (raw.has(aliasKey)) {
+      return { value: raw.get(aliasKey), source: "alias", confidence: 0.82 };
+    }
+  }
+  return null;
+}
+
+function engineAttributeDetail(player, label) {
+  const raw = rawPlayerAttributeMap(player);
+  const direct = directEngineAttribute(raw, label);
+  if (direct) return direct;
+
+  const key = normalizedAttributeLabel(label);
+  const proxies = ENGINE_ATTRIBUTE_RULES[key] || [];
+  let weightedTotal = 0;
+  let availableWeight = 0;
+  for (const [proxyLabel, weight] of proxies) {
+    const proxy = directEngineAttribute(raw, proxyLabel);
+    if (!proxy) continue;
+    weightedTotal += proxy.value * weight;
+    availableWeight += weight;
+  }
+
+  const baseline = positionalAttributeBaseline(player, key);
+  if (!availableWeight) {
+    return { value: baseline, source: "baseline", confidence: 0.35 };
+  }
+
+  const proxyAverage = weightedTotal / availableWeight;
+  const database = String(player?.database_slug || "");
+  const proxyShare = LEGACY_ATTRIBUTE_DATABASES.has(database) ? 0.62 : 0.72;
+  return {
+    value: clamp(1, 20, proxyAverage * proxyShare + baseline * (1 - proxyShare)),
+    source: "inferred",
+    confidence: LEGACY_ATTRIBUTE_DATABASES.has(database) ? 0.58 : 0.68,
+  };
+}
+
+function engineAttribute(player, label) {
+  return engineAttributeDetail(player, label).value;
+}
+
+function normalizedEngineRatings(player) {
+  const labels = [
+    "Passing", "Creativity", "Vision", "Technique", "First Touch",
+    "Dribbling", "Crossing", "Off the Ball", "Finishing", "Long Shots",
+    "Heading", "Marking", "Tackling", "Positioning", "Anticipation",
+    "Pace", "Acceleration", "Agility", "Balance", "Strength", "Stamina",
+    "Work Rate", "Teamwork", "Decisions", "Handling", "Reflexes",
+    "One On Ones", "Jumping",
+  ];
+  const ratings = Object.fromEntries(labels.map((label) => [
+    label,
+    engineAttributeDetail(player, label),
+  ]));
+  return {
+    ratings,
+    confidence: average(Object.values(ratings).map((rating) => rating.confidence)),
+    legacy: LEGACY_ATTRIBUTE_DATABASES.has(String(player?.database_slug || "")),
+  };
+}
+
 const team = readJsonStorage(TEAM_STORAGE_KEY, null);
 const sharedSquad = createDraftSquad(team);
 const runSeed = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
@@ -340,22 +517,28 @@ function opponentOverall(roster) {
 }
 
 function userPlayers() {
-  return team.players.map((entry) => ({
-    ...entry.player,
-    current_ability:
-      Number(entry.gameplay_current_ability)
-      || Number(entry.player?.current_ability)
-      || 0,
-    role: entry.role,
-    line: entry.line,
-    overall: clamp(0, 99, Math.round(
-      Number(entry.gameplayOverall)
-      || Number(entry.gameplay_current_ability) / 2
-      || Number(entry.player?.current_ability) / 2
-      || 0,
-    )),
-    isCaptain: entry.isCaptain,
-  }));
+  return team.players.map((entry) => {
+    const metric = playerMetricCache.get(playerIdentity(entry.player)) || {};
+    return {
+      ...entry.player,
+      ...metric,
+      current_ability:
+        Number(entry.gameplay_current_ability)
+        || Number(metric.current_ability)
+        || Number(entry.player?.current_ability)
+        || 0,
+      role: entry.role,
+      line: entry.line,
+      overall: clamp(0, 99, Math.round(
+        Number(entry.gameplayOverall)
+        || Number(entry.gameplay_current_ability) / 2
+        || Number(metric.current_ability) / 2
+        || Number(entry.player?.current_ability) / 2
+        || 0,
+      )),
+      isCaptain: entry.isCaptain,
+    };
+  });
 }
 
 function visibleSquadRatings() {
@@ -387,18 +570,11 @@ function boostedSquadOverall() {
 }
 
 function playerAttribute(player, ...labels) {
-  const attributes = Array.isArray(player?.attributes)
-    ? player.attributes
-    : Array.isArray(player?.profile?.attributes)
-      ? player.profile.attributes
-      : [];
   for (const label of labels) {
-    const match = attributes.find((item) =>
-      String(item.label || "").toLowerCase() === label.toLowerCase());
-    const value = Number(match?.value);
-    if (value > 0) return value;
+    const detail = engineAttributeDetail(player, label);
+    if (detail.source !== "baseline") return detail.value;
   }
-  return clamp(5, 18, (Number(player?.current_ability) || 100) / 10);
+  return engineAttribute(player, labels[0]);
 }
 
 function playerAbility(player) {
@@ -501,16 +677,16 @@ function teamModel(players) {
   const midfielders = outfield.filter(isMidfielder);
   const defenders = outfield.filter(isDefender);
   const keeper = lineup.find(isGoalkeeper);
-  const captainAdjustment = (player) => player?.isCaptain ? 2.5 : 0;
+  const captainContribution = (player, score) => score * (player?.isCaptain ? 1.1 : 1);
   const scoredAverage = (items, scorer, fallback) => {
     const source = items.length ? items : fallback;
-    return average(source.map((player) => scorer(player) + captainAdjustment(player)));
+    return average(source.map((player) => captainContribution(player, scorer(player))));
   };
   const attack = scoredAverage(strongest(attackers, attackerScore, 4), attackerScore, outfield);
   const midfield = scoredAverage(strongest(midfielders, midfielderScore, 5), midfielderScore, outfield);
   const defence = scoredAverage(strongest(defenders, defenderScore, 5), defenderScore, outfield);
   const goalkeeping = keeper
-    ? goalkeeperScore(keeper) + captainAdjustment(keeper)
+    ? captainContribution(keeper, goalkeeperScore(keeper))
     : Math.max(30, average(lineup.map(playerAbility)) - 24);
   const overall = attack * 0.3 + midfield * 0.22 + defence * 0.3 + goalkeeping * 0.18;
   return { lineup, attack, midfield, defence, goalkeeping, overall };
@@ -552,11 +728,79 @@ function goalkeeper(players) {
   return strongest(players.filter(isGoalkeeper), goalkeeperScore, 1)[0] || players[0];
 }
 
-function randomMinute(random, occupied, start = 4, end = 88) {
-  let minute = start + Math.floor(random() * Math.max(1, end - start + 1));
-  while (occupied.has(minute) && minute < end) minute += 1;
-  occupied.add(minute);
-  return minute;
+function randomEventMoment(random, occupied, start = 4, end = 88) {
+  const firstSecond = start * 60;
+  const lastSecond = end * 60 + 59;
+  let matchSecond = firstSecond
+    + Math.floor(random() * Math.max(1, lastSecond - firstSecond + 1));
+  while (occupied.has(matchSecond) && matchSecond < lastSecond) matchSecond += 1;
+  occupied.add(matchSecond);
+  return {
+    matchSecond,
+    minute: Math.floor(matchSecond / 60),
+  };
+}
+
+function playerPreferredColumn(player, random) {
+  const position = String(player?.role || player?.position_text || "").toUpperCase();
+  if (/(?:^|\/|\s)(?:D|DM|M|AM|F|WB)L(?:$|\/|\s)/.test(position)) return 0;
+  if (/(?:^|\/|\s)(?:D|DM|M|AM|F|WB)R(?:$|\/|\s)/.test(position)) return 2;
+  return random() < 0.72 ? 1 : random() < 0.5 ? 0 : 2;
+}
+
+function spatialAction(kind, actor, random) {
+  const column = playerPreferredColumn(actor, random);
+  const adjacentCenter = column === 1 ? (random() < 0.5 ? 0 : 2) : 1;
+  const zones = {
+    goal: { from: 3 + column, to: 1, action: "shot", turnover: false },
+    chance: { from: 3 + column, to: 1, action: "shot", turnover: true },
+    cross: { from: 3 + column, to: 1, action: "cross", turnover: true },
+    counter: { from: 6 + column, to: 3 + adjacentCenter, action: "counter", turnover: true },
+    tackle: { from: 3 + column, to: 3 + column, action: "turnover", turnover: true },
+    card: {
+      from: (isDefender(actor) ? 6 : isAttacker(actor) ? 3 : 6) + column,
+      to: (isDefender(actor) ? 6 : isAttacker(actor) ? 3 : 6) + column,
+      action: "card",
+    },
+  };
+  return zones[kind] || { from: 6 + column, to: 3 + column, action: "pass" };
+}
+
+function presentationWeight(kind) {
+  return {
+    goal: 1.65,
+    chance: 1.25,
+    cross: 1.05,
+    counter: 1.1,
+    tackle: 0.9,
+    card: 1.25,
+  }[kind] || 1;
+}
+
+function withSpatialMetadata(event, actor, random) {
+  const spatial = spatialAction(event.kind, actor, random);
+  return {
+    ...event,
+    zoneFrom: spatial.from,
+    zoneTo: spatial.to,
+    action: spatial.action,
+    possessionAfter: spatial.turnover
+      ? event.side === "user" ? "opponent" : "user"
+      : event.side,
+    actionSeconds: Math.round(4 + random() * 8 * presentationWeight(event.kind)),
+    presentationWeight: presentationWeight(event.kind),
+  };
+}
+
+function calculateStoppageSeconds(events, random, maximum = 360) {
+  const seconds = events.reduce((total, event) => {
+    if (event.goal) return total + 25;
+    if (event.card === "red") return total + 45;
+    if (event.card === "yellow") return total + 18;
+    return total;
+  }, 0);
+  const variance = Math.floor(random() * 45);
+  return clamp(0, maximum, seconds + variance);
 }
 
 function buildTimeline({
@@ -574,26 +818,26 @@ function buildTimeline({
   const occupied = new Set();
   const specs = [];
   for (let index = 0; index < userGoals; index += 1) {
-    specs.push({ minute: randomMinute(random, occupied, start, end), side: "user", kind: "goal" });
+    specs.push({ ...randomEventMoment(random, occupied, start, end), side: "user", kind: "goal" });
   }
   for (let index = 0; index < rivalGoals; index += 1) {
-    specs.push({ minute: randomMinute(random, occupied, start, end), side: "opponent", kind: "goal" });
+    specs.push({ ...randomEventMoment(random, occupied, start, end), side: "opponent", kind: "goal" });
   }
   for (let index = 0; index < highlightCount; index += 1) {
     specs.push({
-      minute: randomMinute(random, occupied, start, end),
+      ...randomEventMoment(random, occupied, start, end),
       side: random() > 0.48 ? "user" : "opponent",
       kind: ["chance", "tackle", "cross", "counter"][Math.floor(random() * 4)],
     });
   }
   for (let index = 0; index < cardCount; index += 1) {
     specs.push({
-      minute: randomMinute(random, occupied, start, end),
+      ...randomEventMoment(random, occupied, start, end),
       side: random() > 0.5 ? "user" : "opponent",
       kind: "card",
     });
   }
-  specs.sort((left, right) => left.minute - right.minute);
+  specs.sort((left, right) => left.matchSecond - right.matchSecond);
 
   const { sentOff, yellows } = disciplinary;
   const active = (side, preferredLine = "") => {
@@ -629,8 +873,9 @@ function buildTimeline({
       const secondYellow = secondYellowIncident && (yellows.get(identity) || 0) >= 1;
       if (directRed || secondYellow) sentOff.add(identity);
       else yellows.set(identity, 1);
-      events.push({
+      events.push(withSpatialMetadata({
         minute: spec.minute,
+        matchSecond: spec.matchSecond,
         side: spec.side,
         kind: spec.kind,
         goal: false,
@@ -642,7 +887,7 @@ function buildTimeline({
           : secondYellow
             ? `${playerName(player)} receives a second yellow and is sent off.`
             : `${playerName(player)} goes into the book for a late challenge.`,
-      });
+      }, player, random));
       continue;
     }
 
@@ -658,15 +903,16 @@ function buildTimeline({
             attackerScore,
           );
       const keeper = goalkeeper(opponents);
-      events.push({
+      events.push(withSpatialMetadata({
         minute: spec.minute,
+        matchSecond: spec.matchSecond,
         side: spec.side,
         kind: spec.kind,
         goal: true,
         scorer: playerName(scorer),
         scorerPlayer: playerReference(scorer),
         text: `${playerName(scorer)} keeps calm and beats ${playerName(keeper)}.`,
-      });
+      }, scorer, random));
       continue;
     }
 
@@ -696,15 +942,16 @@ function buildTimeline({
       cross: `${playerName(actor)} bends in a dangerous cross and ${playerName(keeper)} claims it under pressure.`,
       counter: `${playerName(actor)} leads a rapid counter before ${playerName(other)} blocks the final pass.`,
     };
-    events.push({
+    events.push(withSpatialMetadata({
       minute: spec.minute,
+      matchSecond: spec.matchSecond,
       side: spec.side,
       kind: spec.kind,
       goal: false,
       scorer: playerName(actor),
       scorerPlayer: playerReference(actor),
       text: texts[spec.kind],
-    });
+    }, actor, random));
   }
   return { events, disciplinary };
 }
@@ -792,7 +1039,9 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
     cardCount: 1 + Math.floor(random() * 3),
   });
   const events = regularTimeline.events;
+  const regulationStoppageSeconds = calculateStoppageSeconds(events, random, 360);
   let extraTimeEvents = [];
+  let extraTimeStoppageSeconds = 0;
   const hasExtraTime = stage !== "Group stage" && userGoals === rivalGoals;
   if (hasExtraTime) {
     const extraUserGoals = poisson(userLambda * 0.28, random);
@@ -811,6 +1060,7 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
       cardCount: random() < 0.5 ? 1 : 0,
       disciplinary: regularTimeline.disciplinary,
     }).events;
+    extraTimeStoppageSeconds = calculateStoppageSeconds(extraTimeEvents, random, 120);
   }
 
   const userWon = userGoals > rivalGoals;
@@ -833,6 +1083,10 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
     userWon,
     manOfMatch,
     minuteDelay,
+    regulationStoppageSeconds,
+    extraTimeStoppageSeconds,
+    regulationEndSecond: 90 * 60 + regulationStoppageSeconds,
+    extraTimeEndSecond: 120 * 60 + extraTimeStoppageSeconds,
     events,
     extraTimeEvents,
     sentOffPlayerIds: [...regularTimeline.disciplinary.sentOff],
@@ -1307,37 +1561,167 @@ function delay(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-function animatePeriod({
-  start,
-  end,
+function currentMatchPace() {
+  const stored = readJsonStorage(MATCH_PACE_KEY, "normal");
+  return MATCH_PACES[stored] ? stored : "normal";
+}
+
+function matchPaceMultiplier(paceSelect) {
+  return MATCH_PACES[paceSelect?.value]?.multiplier || MATCH_PACES.normal.multiplier;
+}
+
+function formatMatchClock(matchSecond, stoppageBase = 0) {
+  const second = Math.max(0, Math.floor(matchSecond));
+  if (stoppageBase && second > stoppageBase) {
+    return `${stoppageBase / 60}+${Math.ceil((second - stoppageBase) / 60)}'`;
+  }
+  return `${Math.floor(second / 60)}'`;
+}
+
+async function animateClockRange(
+  clockDisplay,
+  fromSecond,
+  toSecond,
+  durationMs,
+  stoppageBase = 0,
+) {
+  const distance = Math.max(0, toSecond - fromSecond);
+  if (!distance) {
+    clockDisplay.textContent = formatMatchClock(toSecond, stoppageBase);
+    return;
+  }
+  const steps = clamp(2, 12, Math.ceil(durationMs / 45));
+  const stepDelay = Math.max(16, durationMs / steps);
+  for (let step = 1; step <= steps; step += 1) {
+    const progress = step / steps;
+    const eased = 1 - (1 - progress) ** 2;
+    clockDisplay.textContent = formatMatchClock(
+      fromSecond + distance * eased,
+      stoppageBase,
+    );
+    await delay(stepDelay);
+  }
+}
+
+function displayZone(zone, side) {
+  const validZone = clamp(0, 11, Number(zone) || 0);
+  return side === "opponent" ? MIRRORED_ZONE[validZone] : validZone;
+}
+
+function setMiniPitchZone(pitch, event, endpoint = "to", opponentName = "Opponent") {
+  if (!pitch || !event) return;
+  const semanticZone = endpoint === "from" ? event.zoneFrom : event.zoneTo;
+  const zone = displayZone(semanticZone, event.side);
+  const [x, y] = ZONE_CENTERS[zone];
+  pitch.style.setProperty("--ball-x", `${x}%`);
+  pitch.style.setProperty("--ball-y", `${y}%`);
+  const possession = endpoint === "to" && event.possessionAfter
+    ? event.possessionAfter
+    : event.side;
+  pitch.dataset.possession = possession;
+  pitch.dataset.action = event.action || event.kind || "pass";
+  pitch.querySelectorAll("[data-zone]").forEach((cell) => {
+    cell.classList.toggle("is-active", Number(cell.dataset.zone) === zone);
+  });
+  const status = pitch.parentElement?.querySelector("[data-pitch-status]");
+  if (status) {
+    status.textContent = possession === "user"
+      ? `${team.teamName} · ${event.action || event.kind}`
+      : `${opponentName} · ${event.action || event.kind}`;
+  }
+}
+
+function miniPitchMarkup() {
+  const zones = Array.from({ length: 12 }, (_, index) =>
+    `<span class="run-mini-zone" data-zone="${index}"></span>`).join("");
+  return `
+    <aside class="run-mini-pitch-wrap" aria-label="Live ball position">
+      <div class="run-mini-pitch" data-mini-pitch data-possession="user">
+        ${zones}
+        <span class="run-mini-halfway" aria-hidden="true"></span>
+        <span class="run-mini-centre-circle" aria-hidden="true"></span>
+        <span class="run-mini-box run-mini-box-top" aria-hidden="true"></span>
+        <span class="run-mini-box run-mini-box-bottom" aria-hidden="true"></span>
+        <span class="run-mini-ball" aria-hidden="true"></span>
+      </div>
+      <span class="run-mini-pitch-status" data-pitch-status>Kick-off</span>
+    </aside>
+  `;
+}
+
+async function animatePeriod({
+  startSecond,
+  endSecond,
   events,
   eventList,
   score,
   scoreDisplay,
   clockDisplay,
-  intervalMs = 100,
+  paceSelect,
+  pitch,
+  opponentName,
+  stoppageBase,
 }) {
-  return new Promise((resolve) => {
-    let minute = start - 1;
-    let eventIndex = 0;
-    const timer = window.setInterval(() => {
-      minute += 1;
-      clockDisplay.textContent = `${minute}'`;
-      while (events[eventIndex]?.minute <= minute) {
-        const event = events[eventIndex];
-        if (event.goal) {
-          if (event.side === "user") score.user += 1;
-          else score.opponent += 1;
-          scoreDisplay.textContent = `${score.user} – ${score.opponent}`;
-        }
-        eventList.insertAdjacentHTML("beforeend", eventMarkup(event));
-        eventIndex += 1;
-      }
-      if (minute < end) return;
-      window.clearInterval(timer);
-      resolve();
-    }, intervalMs);
-  });
+  let currentSecond = startSecond;
+  const orderedEvents = events.slice().sort((left, right) =>
+    Number(left.matchSecond) - Number(right.matchSecond));
+
+  for (const event of orderedEvents) {
+    const fallbackSecond = Number(event.minute || 0) * 60;
+    const eventSecond = clamp(currentSecond, endSecond, Number(event.matchSecond) || fallbackSecond);
+    const quietGap = Math.max(0, eventSecond - currentSecond);
+    if (quietGap) {
+      const quietDuration = clamp(90, 760, 95 + Math.sqrt(quietGap) * 18)
+        * matchPaceMultiplier(paceSelect);
+      await animateClockRange(
+        clockDisplay,
+        currentSecond,
+        eventSecond,
+        quietDuration,
+        stoppageBase,
+      );
+    }
+
+    const actionDuration = (440 + 390 * Number(event.presentationWeight || 1))
+      * matchPaceMultiplier(paceSelect);
+    pitch?.style.setProperty("--ball-duration", `${Math.max(180, actionDuration * 0.72)}ms`);
+    setMiniPitchZone(pitch, event, "from", opponentName);
+    await delay(35 * matchPaceMultiplier(paceSelect));
+    setMiniPitchZone(pitch, event, "to", opponentName);
+
+    if (event.goal) {
+      if (event.side === "user") score.user += 1;
+      else score.opponent += 1;
+      scoreDisplay.textContent = `${score.user} – ${score.opponent}`;
+    }
+    eventList.insertAdjacentHTML("beforeend", eventMarkup(event));
+
+    const actionEnd = Math.min(
+      endSecond,
+      Math.max(eventSecond, eventSecond + Number(event.actionSeconds || 6)),
+    );
+    await animateClockRange(
+      clockDisplay,
+      eventSecond,
+      actionEnd,
+      actionDuration,
+      stoppageBase,
+    );
+    currentSecond = actionEnd;
+  }
+
+  if (currentSecond < endSecond) {
+    const finalGap = endSecond - currentSecond;
+    const finalDuration = clamp(120, 850, 110 + Math.sqrt(finalGap) * 18)
+      * matchPaceMultiplier(paceSelect);
+    await animateClockRange(
+      clockDisplay,
+      currentSecond,
+      endSecond,
+      finalDuration,
+      stoppageBase,
+    );
+  }
 }
 
 async function animatePenaltyShootout(result, article, scoreDisplay, clockDisplay) {
@@ -1385,6 +1769,11 @@ async function animateMatch(result) {
   `;
   const article = document.createElement("article");
   article.className = "run-match-card is-live";
+  article.dataset.opponent = result.opponentName;
+  const selectedPace = currentMatchPace();
+  const paceOptions = Object.entries(MATCH_PACES).map(([value, option]) =>
+    `<option value="${value}"${value === selectedPace ? " selected" : ""}>${option.label}</option>`
+  ).join("");
   article.innerHTML = `
     <header>
       <span>${escapeHtml(result.stage)}</span>
@@ -1393,6 +1782,10 @@ async function animateMatch(result) {
         <span class="run-live-scoreboard">
           <b data-live-score>0 – 0</b>
           <span class="run-match-clock" data-match-clock aria-label="Match clock">0'</span>
+          <label class="run-match-pace">
+            <span>Pace</span>
+            <select data-match-pace aria-label="Commentary pace">${paceOptions}</select>
+          </label>
         </span>
         <strong>${escapeHtml(result.opponentName)}</strong>
       </div>
@@ -1405,25 +1798,36 @@ async function animateMatch(result) {
       <span>Goalkeeping <b>${result.formula.userGoalkeeping}–${result.formula.rivalGoalkeeping}</b></span>
       <span>Match variance <b>${result.formula.rngRoll}/100</b></span>
     </div>
-    <ol class="run-event-list" data-live-events></ol>
+    <div class="run-match-visual">
+      ${miniPitchMarkup()}
+      <ol class="run-event-list" data-live-events></ol>
+    </div>
   `;
   shell.append(article);
   elements.matches.append(shell);
   const scoreDisplay = article.querySelector("[data-live-score]");
   const clockDisplay = article.querySelector("[data-match-clock]");
   const eventList = article.querySelector("[data-live-events]");
+  const paceSelect = article.querySelector("[data-match-pace]");
+  const pitch = article.querySelector("[data-mini-pitch]");
   const summaryScore = shell.querySelector("[data-summary-score]");
   const score = { user: 0, opponent: 0 };
+  paceSelect.addEventListener("change", () => {
+    writeJsonStorage(MATCH_PACE_KEY, paceSelect.value);
+  });
 
   await animatePeriod({
-    start: 1,
-    end: 90,
+    startSecond: 0,
+    endSecond: result.regulationEndSecond || 90 * 60,
     events: result.events,
     eventList,
     score,
     scoreDisplay,
     clockDisplay,
-    intervalMs: result.minuteDelay,
+    paceSelect,
+    pitch,
+    opponentName: result.opponentName,
+    stoppageBase: 90 * 60,
   });
 
   if (result.hasExtraTime) {
@@ -1432,14 +1836,17 @@ async function animateMatch(result) {
     extra.innerHTML = '<h3>Extra time</h3><ol class="run-event-list" data-extra-events></ol>';
     article.append(extra);
     await animatePeriod({
-      start: 91,
-      end: 120,
+      startSecond: 90 * 60,
+      endSecond: result.extraTimeEndSecond || 120 * 60,
       events: result.extraTimeEvents,
       eventList: extra.querySelector("[data-extra-events]"),
       score,
       scoreDisplay,
       clockDisplay,
-      intervalMs: Math.max(70, result.minuteDelay - 15),
+      paceSelect,
+      pitch,
+      opponentName: result.opponentName,
+      stoppageBase: 120 * 60,
     });
   }
 

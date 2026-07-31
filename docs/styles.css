@@ -924,10 +924,6 @@ h1 {
     grid-template-columns: 1fr;
   }
 
-  .formation-preview {
-    order: -1;
-  }
-
   .formation-pitch {
     min-height: 560px;
   }

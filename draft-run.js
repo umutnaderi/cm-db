@@ -26,6 +26,17 @@ const ZONE_CENTERS = [
   [16.667, 62.5], [50, 62.5], [83.333, 62.5],
   [16.667, 87.5], [50, 87.5], [83.333, 87.5],
 ];
+const ZONE_TRANSITION_MATRIX = Array.from({ length: 12 }, (_, zone) => {
+  const row = Math.floor(zone / 3);
+  const column = zone % 3;
+  const targetsInRow = (targetRow) => [column, column - 1, column + 1]
+    .filter((targetColumn) => targetColumn >= 0 && targetColumn <= 2)
+    .map((targetColumn) => targetRow * 3 + targetColumn);
+  return {
+    adjacent: row > 0 ? targetsInRow(row - 1) : [0, 1, 2],
+    bypass: row === 2 ? targetsInRow(0) : [],
+  };
+});
 const CLUBS = {
   aek: { name: "AEK Athens", club: "AEK Athens" },
   ajax: { name: "Ajax", club: "AFC Ajax" },
@@ -247,12 +258,16 @@ const ENGINE_ATTRIBUTE_RULES = {
 };
 
 const ENGINE_ATTRIBUTE_ALIASES = {
+  "corners": ["Corner", "Set Pieces"],
   "finishing": ["Shooting"],
+  "free kicks": ["Free Kick", "Set Pieces"],
   "goalkeeper": ["Goalkeeping"],
   "long shots": ["Shooting"],
   "one on ones": ["One-on-Ones", "One On One"],
   "set pieces": ["Set Pieces"],
 };
+
+const engineAttributeCache = new WeakMap();
 
 function normalizedAttributeLabel(label) {
   return String(label || "")
@@ -329,11 +344,22 @@ function directEngineAttribute(raw, label) {
 }
 
 function engineAttributeDetail(player, label) {
+  const key = normalizedAttributeLabel(label);
+  const cached = player && typeof player === "object"
+    ? engineAttributeCache.get(player)?.get(key)
+    : null;
+  if (cached) return cached;
+  const remember = (detail) => {
+    if (player && typeof player === "object") {
+      if (!engineAttributeCache.has(player)) engineAttributeCache.set(player, new Map());
+      engineAttributeCache.get(player).set(key, detail);
+    }
+    return detail;
+  };
   const raw = rawPlayerAttributeMap(player);
   const direct = directEngineAttribute(raw, label);
-  if (direct) return direct;
+  if (direct) return remember(direct);
 
-  const key = normalizedAttributeLabel(label);
   const proxies = ENGINE_ATTRIBUTE_RULES[key] || [];
   let weightedTotal = 0;
   let availableWeight = 0;
@@ -346,17 +372,17 @@ function engineAttributeDetail(player, label) {
 
   const baseline = positionalAttributeBaseline(player, key);
   if (!availableWeight) {
-    return { value: baseline, source: "baseline", confidence: 0.35 };
+    return remember({ value: baseline, source: "baseline", confidence: 0.35 });
   }
 
   const proxyAverage = weightedTotal / availableWeight;
   const database = String(player?.database_slug || "");
   const proxyShare = LEGACY_ATTRIBUTE_DATABASES.has(database) ? 0.62 : 0.72;
-  return {
+  return remember({
     value: clamp(1, 20, proxyAverage * proxyShare + baseline * (1 - proxyShare)),
     source: "inferred",
     confidence: LEGACY_ATTRIBUTE_DATABASES.has(database) ? 0.58 : 0.68,
-  };
+  });
 }
 
 function engineAttribute(player, label) {
@@ -370,7 +396,7 @@ function normalizedEngineRatings(player) {
     "Heading", "Marking", "Tackling", "Positioning", "Anticipation",
     "Pace", "Acceleration", "Agility", "Balance", "Strength", "Stamina",
     "Work Rate", "Teamwork", "Decisions", "Handling", "Reflexes",
-    "One On Ones", "Jumping",
+    "One On Ones", "Jumping", "Corners", "Free Kicks", "Set Pieces",
   ];
   const ratings = Object.fromEntries(labels.map((label) => [
     label,
@@ -692,6 +718,12 @@ function teamModel(players) {
   return { lineup, attack, midfield, defence, goalkeeping, overall };
 }
 
+function teamConditionAt(model, minute) {
+  const outfield = model.lineup.filter((player) => !isGoalkeeper(player));
+  return average((outfield.length ? outfield : model.lineup)
+    .map((player) => conditionMultiplier(player, minute)));
+}
+
 function weightedPlayer(players, random, preferredLine = "", score = attackerScore) {
   if (!players.length) return null;
   const weighted = players.flatMap((player) => {
@@ -700,6 +732,179 @@ function weightedPlayer(players, random, preferredLine = "", score = attackerSco
     return Array.from({ length: weight }, () => player);
   });
   return weighted[Math.floor(random() * weighted.length)] || players[0];
+}
+
+function weightedChoice(options, random) {
+  const total = options.reduce((sum, option) => sum + Math.max(0, option.weight), 0);
+  if (!total) return options[0]?.value;
+  let roll = random() * total;
+  for (const option of options) {
+    roll -= Math.max(0, option.weight);
+    if (roll < 0) return option.value;
+  }
+  return options.at(-1)?.value;
+}
+
+function setPieceScore(player, delivery = "corner") {
+  const specialist = delivery === "corner"
+    ? playerAttribute(player, "Corners", "Set Pieces")
+    : playerAttribute(player, "Free Kicks", "Set Pieces");
+  return Math.max(specialist, playerAttribute(player, "Set Pieces"));
+}
+
+function setPieceTaker(players, delivery = "corner") {
+  const outfield = players.filter((player) => !isGoalkeeper(player));
+  return strongest(outfield.length ? outfield : players, (player) =>
+    setPieceScore(player, delivery), 1)[0] || players[0];
+}
+
+function headerScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Heading"),
+    playerAttribute(player, "Jumping"),
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Strength"),
+    playerAttribute(player, "Anticipation"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.78 + playerAbility(player) * 0.22);
+}
+
+function volleyScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Finishing", "Shooting"),
+    playerAttribute(player, "First Touch"),
+    playerAttribute(player, "Anticipation"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.75 + playerAbility(player) * 0.25);
+}
+
+function longRangeScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Long Shots", "Shooting"),
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Finishing", "Shooting"),
+    playerAttribute(player, "Creativity"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.76 + playerAbility(player) * 0.24);
+}
+
+function isWidePlayer(player) {
+  return /(?:^|\/|\s)(?:D|DM|M|AM|F|WB)[LR](?:$|\/|\s)/i
+    .test(String(player?.role || player?.position_text || ""));
+}
+
+function counterRunnerScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Pace"),
+    playerAttribute(player, "Acceleration"),
+    playerAttribute(player, "Dribbling"),
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Crossing"),
+  ]) * 5;
+  const wideBonus = isWidePlayer(player) ? 5 : 0;
+  return clamp(25, 99, attributes * 0.74 + playerAbility(player) * 0.26 + wideBonus);
+}
+
+function conditionMultiplier(player, minute) {
+  const stamina = playerAttribute(player, "Stamina");
+  const workRate = playerAttribute(player, "Work Rate");
+  const endurance = clamp(0.05, 1, (stamina * 0.68 + workRate * 0.32) / 20);
+  const fatigueProgress = clamp(0, 1, (Number(minute) - 20) / 100);
+  const fatigueCost = (0.07 + (1 - endurance) * 0.34) * fatigueProgress ** 1.15;
+  return clamp(0.58, 1, 1 - fatigueCost);
+}
+
+function conditionedScore(player, score, minute) {
+  return score(player) * conditionMultiplier(player, minute);
+}
+
+const CONGESTED_ZONES = new Set([4, 5, 7, 8]);
+
+function zonalAttribute(player, label, zone, random) {
+  const detail = engineAttributeDetail(player, label);
+  if (!CONGESTED_ZONES.has(zone)) return detail.value;
+  const uncertainty = 1 - detail.confidence;
+  const reliabilityPenalty = uncertainty * 0.14;
+  const variance = (random() - 0.5) * uncertainty * 0.34;
+  return detail.value * clamp(0.68, 1.08, 1 - reliabilityPenalty + variance);
+}
+
+function duelAttribute(player, labels, zone, random) {
+  return average(labels.map((label) => zonalAttribute(player, label, zone, random))) / 20;
+}
+
+function localizedDuel(attacker, defender, attackLabels, defenceLabels, minute, random, zone = -1) {
+  const attackerCondition = conditionMultiplier(attacker, minute);
+  const defenderCondition = conditionMultiplier(defender, minute);
+  const attackPower = duelAttribute(attacker, attackLabels, zone, random) * attackerCondition;
+  const defencePower = duelAttribute(defender, defenceLabels, zone, random) * defenderCondition;
+  const probability = attackPower + defencePower > 0
+    ? attackPower / (attackPower + defencePower)
+    : 0.5;
+  return {
+    probability,
+    won: random() < probability,
+    attackerCondition,
+    defenderCondition,
+  };
+}
+
+function defenderForColumn(opponents, column, minute, random) {
+  const defenders = opponents.filter((player) => !isGoalkeeper(player) && isDefender(player));
+  const source = defenders.length
+    ? defenders
+    : opponents.filter((player) => !isGoalkeeper(player));
+  const rolePattern = column === 0
+    ? /(?:^|\/|\s)(?:D|WB)R(?:$|\/|\s)/i
+    : column === 2
+      ? /(?:^|\/|\s)(?:D|WB)L(?:$|\/|\s)/i
+      : /(?:^|\/|\s)(?:D|DM)C(?:$|\/|\s)/i;
+  const mapped = source.filter((player) =>
+    rolePattern.test(String(player?.role || player?.position_text || "")));
+  return weightedPlayer(mapped.length ? mapped : source, random, "defence", (player) =>
+    conditionedScore(player, defenderScore, minute));
+}
+
+function bypassScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Vision"),
+    playerAttribute(player, "Passing"),
+    playerAttribute(player, "Creativity"),
+    playerAttribute(player, "Decisions"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
+}
+
+function pressingScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Work Rate"),
+    playerAttribute(player, "Stamina"),
+    playerAttribute(player, "Anticipation"),
+    playerAttribute(player, "Tackling"),
+    playerAttribute(player, "Acceleration"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
+}
+
+function poacherScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Anticipation"),
+    playerAttribute(player, "Acceleration"),
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Finishing", "Shooting"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
+}
+
+function firstTouchFinishScore(player) {
+  const attributes = average([
+    playerAttribute(player, "First Touch"),
+    playerAttribute(player, "Finishing", "Shooting"),
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Technique"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
 }
 
 function playerIdentity(player) {
@@ -748,14 +953,41 @@ function playerPreferredColumn(player, random) {
   return random() < 0.72 ? 1 : random() < 0.5 ? 0 : 2;
 }
 
-function spatialAction(kind, actor, random) {
+function spatialAction(kind, actor, random, goalType = "") {
   const column = playerPreferredColumn(actor, random);
   const adjacentCenter = column === 1 ? (random() < 0.5 ? 0 : 2) : 1;
+  if (kind === "goal") {
+    if (goalType === "long-range") {
+      return { from: 6 + column, to: 1, action: "shot", turnover: false };
+    }
+    if (goalType === "counter") {
+      return { from: 9 + (column === 1 ? adjacentCenter : column), to: 1, action: "counter", turnover: false };
+    }
+    if (goalType === "high-press") {
+      return { from: 3 + column, to: 1, action: "press", turnover: false };
+    }
+    if (goalType === "rebound") {
+      return { from: 1, to: 1, action: "rebound", turnover: false };
+    }
+    if (goalType === "cut-back") {
+      return { from: column === 2 ? 2 : 0, to: 1, action: "cut-back", turnover: false };
+    }
+    if (goalType === "set-piece-scramble") {
+      return { from: column === 2 ? 2 : 0, to: 1, action: "scramble", turnover: false };
+    }
+    if (["corner-header", "corner-volley"].includes(goalType)) {
+      return { from: column === 2 ? 2 : 0, to: 1, action: "cross", turnover: false };
+    }
+    if (goalType === "free-kick-cross") {
+      return { from: 3 + (column === 1 ? adjacentCenter : column), to: 1, action: "cross", turnover: false };
+    }
+  }
   const zones = {
     goal: { from: 3 + column, to: 1, action: "shot", turnover: false },
     chance: { from: 3 + column, to: 1, action: "shot", turnover: true },
     cross: { from: 3 + column, to: 1, action: "cross", turnover: true },
     counter: { from: 6 + column, to: 3 + adjacentCenter, action: "counter", turnover: true },
+    "through-ball": { from: 6 + column, to: column, action: "through-ball", turnover: false },
     tackle: { from: 3 + column, to: 3 + column, action: "turnover", turnover: true },
     card: {
       from: (isDefender(actor) ? 6 : isAttacker(actor) ? 3 : 6) + column,
@@ -772,21 +1004,22 @@ function presentationWeight(kind) {
     chance: 1.25,
     cross: 1.05,
     counter: 1.1,
+    "through-ball": 1.3,
     tackle: 0.9,
     card: 1.25,
   }[kind] || 1;
 }
 
 function withSpatialMetadata(event, actor, random) {
-  const spatial = spatialAction(event.kind, actor, random);
+  const spatial = spatialAction(event.kind, actor, random, event.goalType);
   return {
     ...event,
-    zoneFrom: spatial.from,
-    zoneTo: spatial.to,
-    action: spatial.action,
-    possessionAfter: spatial.turnover
+    zoneFrom: event.zoneFrom ?? spatial.from,
+    zoneTo: event.zoneTo ?? spatial.to,
+    action: event.action || spatial.action,
+    possessionAfter: event.possessionAfter || (spatial.turnover
       ? event.side === "user" ? "opponent" : "user"
-      : event.side,
+      : event.side),
     actionSeconds: Math.round(4 + random() * 8 * presentationWeight(event.kind)),
     presentationWeight: presentationWeight(event.kind),
   };
@@ -801,6 +1034,123 @@ function calculateStoppageSeconds(events, random, maximum = 360) {
   }, 0);
   const variance = Math.floor(random() * 45);
   return clamp(0, maximum, seconds + variance);
+}
+
+function goalTypeFor(players, random) {
+  const outfield = players.filter((player) => !isGoalkeeper(player));
+  const best = (score) => strongest(outfield, score, 1)[0];
+  const specialist = setPieceTaker(outfield, "free-kick");
+  const qualityBoost = (player, score) => player
+    ? clamp(0.72, 1.35, score(player) / 70)
+    : 1;
+  return weightedChoice([
+    { value: "open-play", weight: 39 },
+    { value: "corner-header", weight: 13 * qualityBoost(best(headerScore), headerScore) },
+    { value: "corner-volley", weight: 4 * qualityBoost(best(volleyScore), volleyScore) },
+    { value: "direct-free-kick", weight: 8 * qualityBoost(specialist, (player) => setPieceScore(player, "free-kick") * 5) },
+    { value: "free-kick-cross", weight: 7 * qualityBoost(best(headerScore), headerScore) },
+    { value: "long-range", weight: 15 * qualityBoost(best(longRangeScore), longRangeScore) },
+    { value: "counter", weight: 11 * qualityBoost(best(counterRunnerScore), counterRunnerScore) },
+  ], random);
+}
+
+function goalEvent(spec, players, opponents, random, forcedGoalType = "", context = {}) {
+  const outfield = players.filter((player) => !isGoalkeeper(player));
+  const oppositionOutfield = opponents.filter((player) => !isGoalkeeper(player));
+  const pool = outfield.length ? outfield : players;
+  const opponentPool = oppositionOutfield.length ? oppositionOutfield : opponents;
+  const keeper = goalkeeper(opponents);
+  const goalType = forcedGoalType || goalTypeFor(players, random);
+  const eventMinute = Number(spec.matchSecond) / 60 || Number(spec.minute) || 0;
+  const pickScorer = (score, preferredLine = "") =>
+    weightedPlayer(pool, random, preferredLine, (player) =>
+      conditionedScore(player, score, eventMinute));
+  const headerScorer = () => pickScorer(headerScore);
+  const volleyScorer = () => pickScorer(volleyScore);
+  let scorer = context.scorer || pickScorer(attackerScore, "attack");
+  let provider = context.provider || null;
+  let actorSide = spec.side;
+  let goalCredit = true;
+  let text = "";
+
+  if (goalType === "corner-header") {
+    provider = context.provider || setPieceTaker(players, "corner");
+    scorer = context.scorer || headerScorer();
+    text = `${playerName(provider)} swings in the corner and ${playerName(scorer)} powers a header beyond ${playerName(keeper)}.`;
+  } else if (goalType === "corner-volley") {
+    provider = context.provider || setPieceTaker(players, "corner");
+    scorer = context.scorer || volleyScorer();
+    text = `${playerName(provider)} delivers the corner, the clearance drops loose, and ${playerName(scorer)} volleys it home.`;
+  } else if (goalType === "direct-free-kick") {
+    scorer = context.scorer || setPieceTaker(players, "free-kick");
+    text = `${playerName(scorer)} curls the free-kick over the wall and beyond ${playerName(keeper)}.`;
+  } else if (goalType === "free-kick-cross") {
+    provider = context.provider || setPieceTaker(players, "free-kick");
+    const headedFinish = random() < 0.78;
+    scorer = context.scorer || (headedFinish ? headerScorer() : volleyScorer());
+    text = `${playerName(provider)} clips in the free-kick and ${playerName(scorer)} meets it ${headedFinish ? "with a thumping header" : "on the volley"}.`;
+  } else if (goalType === "long-range") {
+    scorer = context.scorer || pickScorer(longRangeScore, "midfield");
+    const descriptions = [
+      `lets fly from distance and gives ${playerName(keeper)} no chance`,
+      `finds the top corner with a fierce long-range strike`,
+      `takes aim from outside the box and rifles the ball past ${playerName(keeper)}`,
+    ];
+    text = `${playerName(scorer)} ${descriptions[Math.floor(random() * descriptions.length)]}.`;
+  } else if (goalType === "counter") {
+    provider = context.provider || weightedPlayer(pool, random, "", (player) =>
+      conditionedScore(player, counterRunnerScore, eventMinute));
+    scorer = context.scorer || (random() < 0.46 ? provider : pickScorer(attackerScore, "attack"));
+    text = scorer === provider
+      ? `${playerName(scorer)} races down the flank, cuts inside and finishes a devastating counter-attack.`
+      : `${playerName(provider)} bursts down the flank on the counter and squares for ${playerName(scorer)} to finish.`;
+  } else if (goalType === "high-press") {
+    scorer = context.scorer || weightedPlayer(pool, random, "", (player) =>
+      conditionedScore(player, pressingScore, eventMinute));
+    text = `Disaster at the back! ${playerName(scorer)} presses relentlessly, steals the ball on the edge of the area, and punishes the error with a clinical finish.`;
+  } else if (goalType === "rebound") {
+    scorer = context.scorer || weightedPlayer(pool, random, "attack", (player) =>
+      conditionedScore(player, poacherScore, eventMinute));
+    text = `A thunderous strike is parried by ${playerName(keeper)}, but ${playerName(scorer)} reacts faster than anyone to poke home the rebound.`;
+  } else if (goalType === "cut-back") {
+    provider = context.provider || weightedPlayer(pool, random, "", counterRunnerScore);
+    scorer = context.scorer || weightedPlayer(pool, random, "attack", firstTouchFinishScore);
+    text = `Brilliant pace down the flank! ${playerName(provider)} hits the byline, pulls it back across goal, and ${playerName(scorer)} arrives perfectly to sweep it in.`;
+  } else if (goalType === "set-piece-scramble") {
+    scorer = context.defender || weightedPlayer(opponentPool, random, "defence", defenderScore);
+    actorSide = spec.side === "user" ? "opponent" : "user";
+    goalCredit = false;
+    text = `Absolute chaos in the six-yard boxâ€”${playerName(scorer)} inadvertently deflects the set piece past ${playerName(keeper)} under immense pressure.`;
+  } else if (goalType === "own-goal") {
+    scorer = weightedPlayer(opponentPool, random, "defence", defenderScore);
+    actorSide = spec.side === "user" ? "opponent" : "user";
+    goalCredit = false;
+    text = `${playerName(scorer)} turns a dangerous ball into the wrong net under pressure—an own goal.`;
+  } else {
+    const descriptions = [
+      `keeps calm and beats ${playerName(keeper)}`,
+      `finds space in the area and drives the finish past ${playerName(keeper)}`,
+      `latches onto a through ball and slots it into the corner`,
+      `reacts first to a loose ball and finishes from close range`,
+    ];
+    text = `${playerName(scorer)} ${descriptions[Math.floor(random() * descriptions.length)]}.`;
+  }
+
+  return withSpatialMetadata({
+    minute: spec.minute,
+    matchSecond: spec.matchSecond,
+    side: spec.side,
+    actorSide,
+    kind: spec.kind,
+    goal: true,
+    goalType,
+    goalCredit,
+    scorer: playerName(scorer),
+    scorerPlayer: playerReference(scorer),
+    provider: provider ? playerName(provider) : "",
+    providerPlayer: provider ? playerReference(provider) : null,
+    text,
+  }, scorer, random);
 }
 
 function buildTimeline({
@@ -827,7 +1177,7 @@ function buildTimeline({
     specs.push({
       ...randomEventMoment(random, occupied, start, end),
       side: random() > 0.48 ? "user" : "opponent",
-      kind: ["chance", "tackle", "cross", "counter"][Math.floor(random() * 4)],
+      kind: ["chance", "tackle", "cross", "counter", "through-ball"][Math.floor(random() * 5)],
     });
   }
   for (let index = 0; index < cardCount; index += 1) {
@@ -892,68 +1242,497 @@ function buildTimeline({
     }
 
     if (spec.kind === "goal") {
-      const opponentAttackers = active("opponent")
-        .filter((player) => !isGoalkeeper(player));
-      const scorer = spec.side === "user"
-        ? weightedPlayer(active("user", "attack"), random, "attack", attackerScore)
-        : weightedPlayer(
-            opponentAttackers.length ? opponentAttackers : active("opponent"),
-            random,
-            "",
-            attackerScore,
-          );
-      const keeper = goalkeeper(opponents);
-      events.push(withSpatialMetadata({
-        minute: spec.minute,
-        matchSecond: spec.matchSecond,
-        side: spec.side,
-        kind: spec.kind,
-        goal: true,
-        scorer: playerName(scorer),
-        scorerPlayer: playerReference(scorer),
-        text: `${playerName(scorer)} keeps calm and beats ${playerName(keeper)}.`,
-      }, scorer, random));
+      events.push(goalEvent(spec, players, opponents, random));
       continue;
     }
 
     const actorPool = players.filter((player) => !isGoalkeeper(player));
-    const actorScore = spec.kind === "tackle"
-      ? defenderScore
-      : spec.kind === "chance"
-        ? attackerScore
-        : midfielderScore;
+    const eventMinute = Number(spec.matchSecond) / 60 || Number(spec.minute) || 0;
+    const actorScore = spec.kind === "chance"
+      ? attackerScore
+      : spec.kind === "counter"
+        ? counterRunnerScore
+        : spec.kind === "through-ball"
+          ? bypassScore
+          : midfielderScore;
     const actor = weightedPlayer(
       actorPool.length ? actorPool : players,
       random,
       spec.kind === "counter" ? "attack" : "midfield",
-      actorScore,
+      (player) => conditionedScore(player, actorScore, eventMinute),
     );
-    const defensiveOpponents = opponents.filter((player) => !isGoalkeeper(player));
-    const other = weightedPlayer(
-      defensiveOpponents.length ? defensiveOpponents : opponents,
-      random,
-      "defence",
-      defenderScore,
-    );
+    const column = playerPreferredColumn(actor, random);
+    const other = defenderForColumn(opponents, column, eventMinute, random);
     const keeper = goalkeeper(opponents);
-    const texts = {
-      chance: `${playerName(actor)} tests ${playerName(keeper)}, who makes the save.`,
-      tackle: `${playerName(actor)} drives forward, but ${playerName(other)} times the tackle perfectly.`,
-      cross: `${playerName(actor)} bends in a dangerous cross and ${playerName(keeper)} claims it under pressure.`,
-      counter: `${playerName(actor)} leads a rapid counter before ${playerName(other)} blocks the final pass.`,
-    };
+    const duelAttributes = spec.kind === "through-ball"
+      ? [["Vision", "Passing", "Creativity", "Decisions"], ["Positioning", "Anticipation", "Decisions"]]
+      : spec.kind === "cross"
+        ? [["Crossing", "Technique", "Passing"], ["Positioning", "Anticipation", "Pace"]]
+        : spec.kind === "counter"
+          ? [["Pace", "Acceleration", "Dribbling"], ["Pace", "Positioning", "Tackling"]]
+          : [["Dribbling", "Technique", "Agility"], ["Tackling", "Positioning", "Strength"]];
+    const duel = localizedDuel(
+      actor,
+      other,
+      duelAttributes[0],
+      duelAttributes[1],
+      eventMinute,
+      random,
+    );
+    const oppositeSide = spec.side === "user" ? "opponent" : "user";
+    let text;
+    let zoneFrom;
+    let zoneTo;
+    let action;
+    let possessionAfter;
+    if (spec.kind === "chance") {
+      text = `${playerName(actor)} tests ${playerName(keeper)}, who makes the save.`;
+      possessionAfter = oppositeSide;
+    } else if (spec.kind === "through-ball") {
+      zoneFrom = 6 + column;
+      zoneTo = duel.won ? column : 3 + column;
+      action = "through-ball";
+      possessionAfter = duel.won ? spec.side : oppositeSide;
+      text = duel.won
+        ? `${playerName(actor)} sees the run early and threads a pass beyond ${playerName(other)}, bypassing midfield completely.`
+        : `${playerName(actor)} tries to split the lines, but ${playerName(other)} reads the pass in the bypassed zone.`;
+    } else if (spec.kind === "tackle") {
+      action = "dribble";
+      possessionAfter = duel.won ? spec.side : oppositeSide;
+      text = duel.won
+        ? `${playerName(actor)} takes on ${playerName(other)} and wins the one-on-one duel.`
+        : `${playerName(actor)} attempts the dribble, but ${playerName(other)} wins the duel and takes possession.`;
+    } else if (spec.kind === "cross") {
+      possessionAfter = duel.won ? spec.side : oppositeSide;
+      text = duel.won
+        ? `${playerName(actor)} beats ${playerName(other)} and bends a dangerous cross into the area.`
+        : `${playerName(other)} closes down ${playerName(actor)} and blocks the cross.`;
+    } else {
+      possessionAfter = duel.won ? spec.side : oppositeSide;
+      text = duel.won
+        ? `${playerName(actor)} surges past ${playerName(other)} and keeps the counter-attack racing forward.`
+        : `${playerName(other)} matches ${playerName(actor)} for pace and stops the counter.`;
+    }
     events.push(withSpatialMetadata({
       minute: spec.minute,
       matchSecond: spec.matchSecond,
       side: spec.side,
       kind: spec.kind,
       goal: false,
+      duelWon: spec.kind === "chance" ? null : duel.won,
+      duelProbability: Number(duel.probability.toFixed(3)),
+      actorCondition: Number(duel.attackerCondition.toFixed(3)),
+      defenderCondition: Number(duel.defenderCondition.toFixed(3)),
+      defender: playerName(other),
+      defenderPlayer: playerReference(other),
+      zoneFrom,
+      zoneTo,
+      bypassedZone: spec.kind === "through-ball" ? 3 + column : null,
+      action,
+      possessionAfter,
       scorer: playerName(actor),
       scorerPlayer: playerReference(actor),
-      text: texts[spec.kind],
+      text,
     }, actor, random));
   }
   return { events, disciplinary };
+}
+
+function transitionShotChance(shooter, keeper, minute, baseChance, score = attackerScore) {
+  const attackPower = conditionedScore(shooter, score, minute) / 100;
+  const keeperPower = conditionedScore(keeper, goalkeeperScore, minute) / 100;
+  const share = attackPower / Math.max(0.01, attackPower + keeperPower);
+  return clamp(0.008, 0.32, baseChance * (0.45 + share * 1.1) * 0.4);
+}
+
+function buildTransitionTimeline({
+  random,
+  ourPlayers,
+  roster,
+  start,
+  end,
+  intensity = 1,
+  disciplinary = { sentOff: new Set(), yellows: new Map() },
+}) {
+  const events = [];
+  const { sentOff, yellows } = disciplinary;
+  const firstSecond = start * 60;
+  const lastSecond = end * 60 + 59;
+  const maxTicks = Math.max(18, Math.round((end - start) * 1.08 * intensity));
+  const highlightLimit = Math.max(4, Math.round((end - start) / 6.5));
+  let highlightCount = 0;
+  let matchSecond = firstSecond;
+  let side = random() < 0.5 ? "user" : "opponent";
+  let zone = 6 + Math.floor(random() * 3);
+  let counterSteps = 0;
+
+  const opposite = (value) => value === "user" ? "opponent" : "user";
+  const active = (activeSide) => {
+    const source = activeSide === "user" ? ourPlayers : roster;
+    return source.filter((player) =>
+      !sentOff.has(`${activeSide}:${playerIdentity(player)}`));
+  };
+  const outfield = (players) => players.filter((player) => !isGoalkeeper(player));
+  const moment = () => ({
+    minute: Math.floor(matchSecond / 60),
+    matchSecond,
+    side,
+    kind: "transition",
+  });
+  const resetFromKickoff = (kickoffSide) => {
+    side = kickoffSide;
+    zone = 6 + Math.floor(random() * 3);
+    counterSteps = 0;
+  };
+  const addGoal = (goalType, players, opponents, context = {}) => {
+    events.push(goalEvent(
+      { ...moment(), kind: "goal" },
+      players,
+      opponents,
+      random,
+      goalType,
+      context,
+    ));
+    resetFromKickoff(opposite(side));
+  };
+  const addDuelEvent = ({
+    kind,
+    actor,
+    defender,
+    duel,
+    from,
+    to,
+    action,
+    text,
+    possession,
+    bypassedZone = null,
+  }) => {
+    events.push(withSpatialMetadata({
+      ...moment(),
+      kind,
+      goal: false,
+      duelWon: duel?.won ?? null,
+      duelProbability: duel ? Number(duel.probability.toFixed(3)) : null,
+      actorCondition: duel ? Number(duel.attackerCondition.toFixed(3)) : null,
+      defenderCondition: duel ? Number(duel.defenderCondition.toFixed(3)) : null,
+      defender: defender ? playerName(defender) : "",
+      defenderPlayer: defender ? playerReference(defender) : null,
+      zoneFrom: from,
+      zoneTo: to,
+      bypassedZone,
+      action,
+      possessionAfter: possession,
+      scorer: playerName(actor),
+      scorerPlayer: playerReference(actor),
+      text,
+    }, actor, random));
+    highlightCount += 1;
+  };
+
+  for (let tick = 0; tick < maxTicks && matchSecond < lastSecond; tick += 1) {
+    matchSecond = Math.min(lastSecond, matchSecond + 28 + Math.floor(random() * 58));
+    const players = active(side);
+    const opponents = active(opposite(side));
+    if (!players.length || !opponents.length) break;
+    const attackingPool = outfield(players).length ? outfield(players) : players;
+    const defendingPool = outfield(opponents).length ? outfield(opponents) : opponents;
+    const minute = matchSecond / 60;
+    const row = Math.floor(zone / 3);
+    const column = zone % 3;
+    const preferredLine = row >= 3 ? "defence" : row === 2 ? "midfield" : "attack";
+    const transitionScore = row >= 2
+      ? bypassScore
+      : row === 1 || (row === 0 && column !== 1)
+        ? counterRunnerScore
+        : attackerScore;
+    const actor = weightedPlayer(attackingPool, random, preferredLine, (player) =>
+      conditionedScore(player, transitionScore, minute));
+    const defender = defenderForColumn(defendingPool, column, minute, random);
+    const keeper = goalkeeper(opponents);
+
+    if (random() < 0.014) {
+      const identity = `${opposite(side)}:${playerIdentity(defender)}`;
+      const previousYellow = yellows.get(identity) || 0;
+      const directRed = random() < 0.018;
+      const secondYellow = previousYellow === 1 && random() < 0.18;
+      const card = directRed || secondYellow ? "red" : "yellow";
+      if (card === "red") sentOff.add(identity);
+      else yellows.set(identity, 1);
+      events.push(withSpatialMetadata({
+        ...moment(),
+        side: opposite(side),
+        actorSide: opposite(side),
+        kind: "card",
+        goal: false,
+        card,
+        zoneFrom: MIRRORED_ZONE[zone],
+        zoneTo: MIRRORED_ZONE[zone],
+        possessionAfter: side,
+        scorer: playerName(defender),
+        scorerPlayer: playerReference(defender),
+        text: directRed
+          ? `${playerName(defender)} is shown a straight red card for stopping the transition recklessly.`
+          : secondYellow
+            ? `${playerName(defender)} receives a second yellow and is sent off.`
+            : `${playerName(defender)} is booked for halting ${playerName(actor)}'s progress.`,
+      }, defender, random));
+      if (row <= 1 && random() < 0.46) {
+        const taker = setPieceTaker(players, "free-kick");
+        const direct = column === 1 && random() < 0.58;
+        if (direct) {
+          const freeKickChance = transitionShotChance(
+            taker,
+            keeper,
+            minute,
+            0.13,
+            (player) => setPieceScore(player, "free-kick") * 5,
+          );
+          if (random() < freeKickChance) {
+            addGoal("direct-free-kick", players, opponents, { scorer: taker });
+            continue;
+          }
+        } else {
+          const target = weightedPlayer(attackingPool, random, "", (player) =>
+            conditionedScore(player, headerScore, minute));
+          const marker = defenderForColumn(defendingPool, 1, minute, random);
+          const freeKickDuel = localizedDuel(
+            target,
+            marker,
+            ["Heading", "Jumping", "Strength", "Off the Ball"],
+            ["Heading", "Jumping", "Strength", "Positioning"],
+            minute,
+            random,
+            1,
+          );
+          if (freeKickDuel.won
+            && random() < transitionShotChance(target, keeper, minute, 0.14, headerScore)) {
+            addGoal("free-kick-cross", players, opponents, { provider: taker, scorer: target });
+            continue;
+          }
+        }
+        side = opposite(side);
+        zone = 7;
+        counterSteps = 0;
+        continue;
+      }
+    }
+
+    if (row <= 1) {
+      const wideByline = row === 0 && column !== 1 && isWidePlayer(actor);
+      if (wideByline && random() < 0.42) {
+        const bylineDuel = localizedDuel(
+          actor,
+          defender,
+          ["Pace", "Acceleration", "Dribbling"],
+          ["Pace", "Positioning", "Tackling"],
+          minute,
+          random,
+          zone,
+        );
+        if (bylineDuel.won) {
+          const receiver = weightedPlayer(attackingPool, random, "attack", (player) =>
+            conditionedScore(player, firstTouchFinishScore, minute));
+          if (random() < transitionShotChance(receiver, keeper, minute, 0.3, firstTouchFinishScore)) {
+            addGoal("cut-back", players, opponents, { provider: actor, scorer: receiver });
+            continue;
+          }
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance", actor: receiver, defender, duel: bylineDuel,
+              from: zone, to: 1, action: "cut-back", possession: opposite(side),
+              text: `${playerName(actor)} reaches the byline and cuts it back, but ${playerName(receiver)} sends the first-time finish wide.`,
+            });
+          }
+          side = opposite(side);
+          zone = 7;
+          continue;
+        }
+      }
+
+      const longRange = row === 1 && random() < 0.34;
+      const shooter = weightedPlayer(attackingPool, random, longRange ? "midfield" : "attack", (player) =>
+        conditionedScore(player, longRange ? longRangeScore : attackerScore, minute));
+      const baseChance = longRange ? 0.075 : column === 1 ? 0.19 : 0.11;
+      if (random() < transitionShotChance(
+        shooter,
+        keeper,
+        minute,
+        baseChance,
+        longRange ? longRangeScore : attackerScore,
+      )) {
+        const route = longRange
+          ? "long-range"
+          : counterSteps > 0
+            ? "counter"
+            : "open-play";
+        addGoal(route, players, opponents, { provider: actor, scorer: shooter });
+        continue;
+      }
+
+      const parried = random() < clamp(0.08, 0.28,
+        0.2 - playerAttribute(keeper, "Handling") / 180);
+      if (parried) {
+        const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
+          conditionedScore(player, poacherScore, minute));
+        const reboundDefender = defenderForColumn(defendingPool, 1, minute, random);
+        const reboundDuel = localizedDuel(
+          poacher,
+          reboundDefender,
+          ["Anticipation", "Acceleration", "Off the Ball"],
+          ["Positioning", "Anticipation", "Strength"],
+          minute,
+          random,
+          1,
+        );
+        if (reboundDuel.won
+          && random() < transitionShotChance(poacher, keeper, minute, 0.36, poacherScore)) {
+          addGoal("rebound", players, opponents, { scorer: poacher });
+          continue;
+        }
+      }
+
+      const corner = random() < 0.16;
+      if (corner) {
+        const taker = setPieceTaker(players, "corner");
+        const volley = random() < 0.22;
+        const finishScore = volley ? volleyScore : headerScore;
+        const target = weightedPlayer(attackingPool, random, "", (player) =>
+          conditionedScore(player, finishScore, minute));
+        const marker = defenderForColumn(defendingPool, 1, minute, random);
+        const aerialDuel = localizedDuel(
+          target,
+          marker,
+          volley
+            ? ["Technique", "Finishing", "First Touch", "Anticipation"]
+            : ["Heading", "Jumping", "Strength", "Off the Ball"],
+          ["Heading", "Jumping", "Strength", "Positioning"],
+          minute,
+          random,
+          1,
+        );
+        const attackPressure = average(strongest(attackingPool, headerScore, 3).map(headerScore));
+        const defencePressure = average(strongest(defendingPool, headerScore, 3).map(headerScore));
+        const scrambleChance = clamp(0.008, 0.085,
+          0.018 + Math.max(0, attackPressure - defencePressure) / 420);
+        if (aerialDuel.won && random() < scrambleChance) {
+          addGoal("set-piece-scramble", players, opponents, { provider: taker, defender: marker });
+          continue;
+        }
+        if (aerialDuel.won
+          && random() < transitionShotChance(target, keeper, minute, volley ? 0.12 : 0.15, finishScore)) {
+          addGoal(volley ? "corner-volley" : "corner-header", players, opponents, { provider: taker, scorer: target });
+          continue;
+        }
+        if (highlightCount < highlightLimit && random() < 0.45) {
+          addDuelEvent({
+            kind: "cross", actor: taker, defender: marker, duel: aerialDuel,
+            from: column === 2 ? 2 : 0, to: 1, action: "corner", possession: opposite(side),
+            text: aerialDuel.won
+              ? `${playerName(taker)} finds ${playerName(target)} from the corner, but the header flashes wide.`
+              : `${playerName(marker)} rises above ${playerName(target)} and clears ${playerName(taker)}'s corner.`,
+          });
+        }
+      } else if (highlightCount < highlightLimit && random() < 0.55) {
+        addDuelEvent({
+          kind: "chance", actor: shooter, defender, duel: null,
+          from: zone, to: 1, action: "shot", possession: opposite(side),
+          text: longRange
+            ? `${playerName(shooter)} drives one from distance and ${playerName(keeper)} pushes it away.`
+            : `${playerName(shooter)} gets a sight of goal, but ${playerName(keeper)} makes the save.`,
+        });
+      }
+      side = opposite(side);
+      zone = 6 + Math.floor(random() * 3);
+      counterSteps = 0;
+      continue;
+    }
+
+    const bypass = row === 2
+      && random() < clamp(0.04, 0.3, (bypassScore(actor) - 45) / 180);
+    const attackLabels = bypass
+      ? ["Vision", "Passing", "Creativity", "Decisions"]
+      : ["Passing", "Technique", "Decisions", "Teamwork"];
+    const transitionDuel = localizedDuel(
+      actor,
+      defender,
+      attackLabels,
+      ["Positioning", "Anticipation", "Tackling", "Decisions"],
+      minute,
+      random,
+      zone,
+    );
+    const matrixTargets = bypass
+      ? ZONE_TRANSITION_MATRIX[zone].bypass
+      : ZONE_TRANSITION_MATRIX[zone].adjacent;
+    const preferredColumn = playerPreferredColumn(actor, random);
+    const nextZone = weightedChoice(matrixTargets.map((target) => ({
+      value: target,
+      weight: target % 3 === preferredColumn ? 3 : target % 3 === column ? 2 : 1,
+    })), random);
+    const intermediateZone = Math.max(0, row - 1) * 3 + column;
+
+    if (transitionDuel.won) {
+      if (bypass && highlightCount < highlightLimit) {
+        addDuelEvent({
+          kind: "through-ball", actor, defender, duel: transitionDuel,
+          from: zone, to: nextZone, action: "through-ball", possession: side,
+          bypassedZone: intermediateZone,
+          text: `${playerName(actor)} sees the run early and threads a pass beyond ${playerName(defender)}, bypassing midfield completely.`,
+        });
+      }
+      zone = nextZone;
+      if (counterSteps > 0) counterSteps -= 1;
+      continue;
+    }
+
+    if (bypass && highlightCount < highlightLimit) {
+      addDuelEvent({
+        kind: "through-ball", actor, defender, duel: transitionDuel,
+        from: zone, to: intermediateZone, action: "interception", possession: opposite(side),
+        bypassedZone: intermediateZone,
+        text: `${playerName(actor)} tries to split the lines, but ${playerName(defender)} reads the pass in the bypassed zone.`,
+      });
+    }
+
+    const highPressZone = [3, 5].includes(zone);
+    if (highPressZone) {
+      const presser = weightedPlayer(attackingPool, random, "", (player) =>
+        conditionedScore(player, pressingScore, minute));
+      const pressDuel = localizedDuel(
+        presser,
+        defender,
+        ["Work Rate", "Stamina", "Anticipation", "Tackling"],
+        ["Passing", "Decisions", "Technique", "Composure"],
+        minute,
+        random,
+        zone,
+      );
+      if (pressDuel.won
+        && random() < transitionShotChance(presser, keeper, minute, 0.29, pressingScore)) {
+        addGoal("high-press", players, opponents, { scorer: presser });
+        continue;
+      }
+    }
+
+    if (!bypass && highlightCount < highlightLimit && random() < 0.2) {
+      addDuelEvent({
+        kind: "tackle", actor, defender, duel: transitionDuel,
+        from: zone, to: zone, action: "turnover", possession: opposite(side),
+        text: `${playerName(defender)} wins the localized duel against ${playerName(actor)} and takes possession.`,
+      });
+    }
+    side = opposite(side);
+    zone = MIRRORED_ZONE[zone];
+    counterSteps = 3;
+  }
+
+  return {
+    events: events.sort((left, right) => left.matchSecond - right.matchSecond),
+    disciplinary,
+    userGoals: events.filter((event) => event.goal && event.side === "user").length,
+    rivalGoals: events.filter((event) => event.goal && event.side === "opponent").length,
+    ticks: maxTicks,
+  };
 }
 
 function manOfTheMatch(events, userModel, rivalModel, random, winnerSide) {
@@ -977,14 +1756,27 @@ function manOfTheMatch(events, userModel, rivalModel, random, winnerSide) {
     });
   }
   for (const event of events) {
-    const key = `${event.side}:${event.scorerPlayer?.database || scenario.database}:${event.scorerPlayer?.sourcePersonId || event.scorer}`;
+    const actorSide = event.actorSide || event.side;
+    const key = `${actorSide}:${event.scorerPlayer?.database || scenario.database}:${event.scorerPlayer?.sourcePersonId || event.scorer}`;
     const entry = scores.get(key);
     if (!entry) continue;
-    if (event.goal) entry.score += 4.4;
-    else if (event.kind === "tackle") entry.score += 1.15;
-    else if (["chance", "counter", "cross"].includes(event.kind)) entry.score += 0.72;
+    if (event.goal && event.goalCredit === false) entry.score -= 1.4;
+    else if (event.goal) entry.score += 4.4;
+    else if (event.duelWon === true) entry.score += 0.9;
+    else if (event.kind === "chance") entry.score += 0.72;
     if (event.card === "yellow") entry.score -= 0.45;
     if (event.card === "red") entry.score -= 2.2;
+    if (event.providerPlayer) {
+      const providerKey = `${event.side}:${event.providerPlayer.database || scenario.database}:${event.providerPlayer.sourcePersonId || event.provider}`;
+      const providerEntry = scores.get(providerKey);
+      if (providerEntry && providerEntry !== entry) providerEntry.score += 0.85;
+    }
+    if (event.duelWon === false && event.defenderPlayer) {
+      const defenderSide = event.side === "user" ? "opponent" : "user";
+      const defenderKey = `${defenderSide}:${event.defenderPlayer.database || scenario.database}:${event.defenderPlayer.sourcePersonId || event.defender}`;
+      const defenderEntry = scores.get(defenderKey);
+      if (defenderEntry) defenderEntry.score += 0.9;
+    }
   }
   for (const entry of scores.values()) {
     if (winnerSide && entry.side === winnerSide) entry.score += 0.45;
@@ -1007,59 +1799,35 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
   const rivalModel = teamModel(roster);
   const rivalOvr = Math.round(rivalModel.overall);
   const rngRoll = Math.round(random() * 100);
-  const rngSwing = (random() + random() - 1) * 0.72;
-  const userAttackEdge = (userModel.attack - rivalModel.defence) / 28;
-  const rivalAttackEdge = (rivalModel.attack - userModel.defence) / 28;
-  const midfieldEdge = (userModel.midfield - rivalModel.midfield) / 72;
-  const userKeeperEffect = (72 - userModel.goalkeeping) / 62;
-  const rivalKeeperEffect = (72 - rivalModel.goalkeeping) / 62;
-  const userLambda = clamp(
-    0.18,
-    3.65,
-    1.18 + userAttackEdge + midfieldEdge + rivalKeeperEffect + rngSwing,
-  );
-  const rivalLambda = clamp(
-    0.18,
-    3.65,
-    1.18 + rivalAttackEdge - midfieldEdge + userKeeperEffect - rngSwing * 0.72,
-  );
-  const regularUserGoals = poisson(userLambda, random);
-  const regularRivalGoals = poisson(rivalLambda, random);
-  let userGoals = regularUserGoals;
-  let rivalGoals = regularRivalGoals;
-  const regularTimeline = buildTimeline({
+  const userLateCondition = teamConditionAt(userModel, 85);
+  const rivalLateCondition = teamConditionAt(rivalModel, 85);
+  const regularTimeline = buildTransitionTimeline({
     random,
     ourPlayers,
     roster,
-    userGoals: regularUserGoals,
-    rivalGoals: regularRivalGoals,
     start: 3,
     end: 89,
-    highlightCount: 8 + Math.floor(random() * 4),
-    cardCount: 1 + Math.floor(random() * 3),
   });
   const events = regularTimeline.events;
+  let userGoals = regularTimeline.userGoals;
+  let rivalGoals = regularTimeline.rivalGoals;
   const regulationStoppageSeconds = calculateStoppageSeconds(events, random, 360);
   let extraTimeEvents = [];
   let extraTimeStoppageSeconds = 0;
   const hasExtraTime = stage !== "Group stage" && userGoals === rivalGoals;
   if (hasExtraTime) {
-    const extraUserGoals = poisson(userLambda * 0.28, random);
-    const extraRivalGoals = poisson(rivalLambda * 0.28, random);
-    userGoals += extraUserGoals;
-    rivalGoals += extraRivalGoals;
-    extraTimeEvents = buildTimeline({
+    const extraTimeline = buildTransitionTimeline({
       random,
       ourPlayers,
       roster,
-      userGoals: extraUserGoals,
-      rivalGoals: extraRivalGoals,
       start: 91,
       end: 120,
-      highlightCount: 4,
-      cardCount: random() < 0.5 ? 1 : 0,
+      intensity: 1.08,
       disciplinary: regularTimeline.disciplinary,
-    }).events;
+    });
+    userGoals += extraTimeline.userGoals;
+    rivalGoals += extraTimeline.rivalGoals;
+    extraTimeEvents = extraTimeline.events;
     extraTimeStoppageSeconds = calculateStoppageSeconds(extraTimeEvents, random, 120);
   }
 
@@ -1067,7 +1835,7 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
   const winnerSide = userGoals === rivalGoals ? "" : userWon ? "user" : "opponent";
   const allEvents = [...events, ...extraTimeEvents];
   const manOfMatch = manOfTheMatch(allEvents, userModel, rivalModel, random, winnerSide);
-  const closeness = Math.abs(userLambda - rivalLambda) < 0.38 ? 35 : 0;
+  const closeness = Math.abs(userModel.overall - rivalModel.overall) < 6 ? 35 : 0;
   const minuteDelay = 110 + Math.floor(random() * 91) + closeness;
 
   return {
@@ -1094,14 +1862,15 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
       userOvr,
       rivalOvr,
       rngRoll,
-      userLambda: userLambda.toFixed(2),
-      rivalLambda: rivalLambda.toFixed(2),
+      transitionTicks: regularTimeline.ticks,
       userAttack: Math.round(userModel.attack),
       rivalAttack: Math.round(rivalModel.attack),
       userDefence: Math.round(userModel.defence),
       rivalDefence: Math.round(rivalModel.defence),
       userGoalkeeping: Math.round(userModel.goalkeeping),
       rivalGoalkeeping: Math.round(rivalModel.goalkeeping),
+      userLateCondition: userLateCondition.toFixed(2),
+      rivalLateCondition: rivalLateCondition.toFixed(2),
     },
   };
 }
@@ -1454,7 +2223,7 @@ function updateUserRecord(result) {
   else if (result.userWon) record.wins += 1;
   else record.losses += 1;
   [...result.events, ...result.extraTimeEvents]
-    .filter((event) => event.goal && event.side === "user")
+    .filter((event) => event.goal && event.side === "user" && event.goalCredit !== false)
     .forEach((event) => {
       const existing = record.scorers[event.scorer] || {
         goals: 0,

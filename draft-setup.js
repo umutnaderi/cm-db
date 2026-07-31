@@ -907,7 +907,13 @@ const QUALITY_ABILITY_FLOOR = 140;
 const MIN_QUALITY_CHOICES_PER_ROLL = 3;
 const SUGGESTIONS_PER_ROLL = 5;
 const DATABASES_PER_ROLL = 5;
+const FULL_DATABASE_POOL_SLOT_THRESHOLD = 4;
 const MAX_CHOICES_PER_DATABASE = 1;
+
+function usesFullDatabasePool(openSlots = remainingSlots()) {
+  return openSlots.length > 0
+    && openSlots.length <= FULL_DATABASE_POOL_SLOT_THRESHOLD;
+}
 
 function abilityDropTier(candidate) {
   const ability = Number(candidate.current_ability || 0);
@@ -944,6 +950,9 @@ function selectRollDatabases(pool, seed) {
 
   const allDatabases = [...grouped.keys()];
   if (allDatabases.length < DATABASES_PER_ROLL) return [];
+  if (usesFullDatabasePool(openSlots)) {
+    return allDatabases;
+  }
   const random = seededRandom(seed + 991);
   const combinations = [];
   const buildCombinations = (start, selection) => {
@@ -1600,7 +1609,9 @@ async function rollPlayers() {
   if (isReroll) state.rerollsRemaining -= 1;
   state.rolling = true;
   state.selectedCandidateKey = "";
-  rollIntro.textContent = "Drawing this roll from five classic seasons…";
+  rollIntro.textContent = usesFullDatabasePool()
+    ? "Drawing this roll from every eligible classic season…"
+    : "Drawing this roll from five classic seasons…";
   suggestionHelp.textContent =
     "Finding choices that fit your unfilled positions.";
   renderSuggestions("Loading player choices…");
@@ -1612,6 +1623,7 @@ async function rollPlayers() {
       Date.now() ^
       ((state.rollNumber + 1) * 104729);
     const openSlots = remainingSlots();
+    const fullDatabasePool = usesFullDatabasePool(openSlots);
     const openRoles = openSlots.map((item) => item.effectiveRole);
     const targetPositions =
       openRoles.length <= 5 ? [...new Set(openRoles)] : [];
@@ -1631,7 +1643,10 @@ async function rollPlayers() {
       );
       if (poolCoversLateTargets(rollPool, openSlots)) break;
     }
-    if (rollDatabases.length !== DATABASES_PER_ROLL) {
+    if (
+      rollDatabases.length < DATABASES_PER_ROLL ||
+      (!fullDatabasePool && rollDatabases.length !== DATABASES_PER_ROLL)
+    ) {
       throw new Error(
         "Five suitable seasons could not be found for this formation.",
       );
@@ -1664,7 +1679,9 @@ async function rollPlayers() {
       ? 0
       : state.premiumDrought + 1;
     state.rollNumber += 1;
-    rollIntro.textContent = `${state.suggestions.length} players rolled from five classic seasons.`;
+    rollIntro.textContent = fullDatabasePool
+      ? `${state.suggestions.length} players rolled from all ${rollDatabases.length} eligible classic seasons.`
+      : `${state.suggestions.length} players rolled from five classic seasons.`;
     suggestionHelp.textContent =
       state.rerollsRemaining > 0
         ? `Select a player and position, or use one of ${state.rerollsRemaining} remaining re-rolls.`

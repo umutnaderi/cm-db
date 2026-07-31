@@ -262,6 +262,35 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       "With eight seasons, a reroll must include all three unseen seasons and two repeats",
     );
     state.databasesUsedForCurrentPick.clear();
+    state.drafted.clear();
+    const fourSlotFormation = currentSlots();
+    for (const item of fourSlotFormation.slice(4)) {
+      state.drafted.set(item.id, {
+        canonical_player_public_id: "four-slot-drafted-" + item.id,
+      });
+    }
+    const fullLateDatabasePool = Array.from({ length: 8 }, (_, databaseIndex) =>
+      Array.from({ length: 5 }, (_, playerIndex) => ({
+        database_slug: "late-full-db-" + databaseIndex,
+        source_person_id: "late-full-" + databaseIndex + "-" + playerIndex,
+        canonical_player_public_id: "late-full-player-" + databaseIndex + "-" + playerIndex,
+        current_ability: databaseIndex >= 5 ? 150 + playerIndex : 130 + playerIndex,
+        position_ratings: universalRatings,
+      })),
+    ).flat();
+    const fullLateDatabases = selectRollDatabases(fullLateDatabasePool, 45);
+    globalThis.assert.equal(
+      fullLateDatabases.length,
+      8,
+      "Four remaining slots must search every eligible database simultaneously",
+    );
+    const fullLateRoll = chooseSuggestions(fullLateDatabasePool, 45);
+    globalThis.assert.equal(fullLateRoll.length, 5);
+    globalThis.assert.ok(
+      fullLateRoll.filter((candidate) => Number(candidate.current_ability || 0) >= 140).length >= 3,
+      "The full late-stage pool must not hide CA 140+ candidates in excluded databases",
+    );
+    state.drafted.clear();
     const qualityAwarePairPool = [
       "low-a", "low-b", "low-c", "low-d", "low-e",
       "quality-a", "quality-b", "quality-c",
@@ -703,6 +732,13 @@ assert.ok(runSourceText.includes("data-share-squad"), "Finished runs must offer 
 assert.ok(runSourceText.includes("squadSeed: sharedSquad.seed"), "Records must carry the squad seed");
 assert.ok(runSourceText.includes("group-draw"), "The run must seed a random group draw");
 assert.ok(runSourceText.includes("scenario.database"), "Opponent searches must use the selected season");
+assert.ok(runSourceText.includes("ZONE_TRANSITION_MATRIX"));
+assert.ok(runSourceText.includes("buildTransitionTimeline"));
+const playedMatchSource = runSourceText.slice(
+  runSourceText.indexOf("function matchSimulation("),
+  runSourceText.indexOf("function attributeValue("),
+);
+assert.ok(!playedMatchSource.includes("poisson("), "Played match scores must emerge from transitions");
 
 const sharedSquadHtml = fs.readFileSync(new URL("../draft-squad.html", import.meta.url), "utf8");
 const sharedSquadSource = fs.readFileSync(new URL("../draft-squad.js", import.meta.url), "utf8");
@@ -770,6 +806,9 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
     (async () => {
       const opponentRoster = globalThis.testOpponentRoster;
       let redCards = 0;
+      let throughBallCount = 0;
+      let simulatedGoals = 0;
+      const organicGoalTypes = new Set();
       for (let index = 0; index < 180; index += 1) {
         state.matchNumber = index;
         const result = matchSimulation("milan", opponentRoster, index % 2 ? "Group stage" : "Round of 16");
@@ -785,6 +824,8 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         redCards += allEvents.filter((event) => event.card === "red").length;
         const userGoals = allEvents.filter((event) => event.goal && event.side === "user").length;
         const rivalGoals = allEvents.filter((event) => event.goal && event.side === "opponent").length;
+        simulatedGoals += userGoals + rivalGoals;
+        allEvents.filter((event) => event.goal).forEach((event) => organicGoalTypes.add(event.goalType));
         globalThis.assert.equal(userGoals, result.userGoals);
         globalThis.assert.equal(rivalGoals, result.rivalGoals);
         for (const event of allEvents) {
@@ -794,6 +835,13 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
           globalThis.assert.ok(event.actionSeconds >= 4);
           globalThis.assert.ok(event.presentationWeight > 0);
           globalThis.assert.ok(["user", "opponent"].includes(event.possessionAfter));
+          if (event.kind === "through-ball") {
+            throughBallCount += 1;
+            globalThis.assert.ok(["through-ball", "interception"].includes(event.action));
+            globalThis.assert.ok(event.bypassedZone >= 3 && event.bypassedZone <= 5);
+            globalThis.assert.ok(event.duelProbability > 0 && event.duelProbability < 1);
+            globalThis.assert.equal(typeof event.duelWon, "boolean");
+          }
         }
         for (const event of allEvents.filter((item) => item.text.includes(" tests "))) {
           globalThis.assert.ok(
@@ -810,6 +858,15 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         }
       }
       globalThis.assert.ok(redCards <= 12, "Red cards are too frequent: " + redCards);
+      globalThis.assert.ok(throughBallCount > 0, "The timeline should generate zonal bypass attempts");
+      globalThis.assert.ok(
+        simulatedGoals >= 180 && simulatedGoals <= 900,
+        "Organic scoring rate is outside the expected range: " + simulatedGoals + " goals in 180 matches",
+      );
+      globalThis.assert.ok(
+        organicGoalTypes.size >= 5,
+        "Transition play should produce varied causal goals: " + [...organicGoalTypes].join(", "),
+      );
       globalThis.assert.equal(displayZone(0, "user"), 0);
       globalThis.assert.equal(displayZone(0, "opponent"), 11);
       globalThis.assert.equal(displayZone(5, "opponent"), 6);
@@ -843,6 +900,97 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         attributes: eliteAttributes({ Finishing: 19, "Off the Ball": 19, Heading: 18, Technique: 18, Pace: 17, Creativity: 16, Passing: 16 }),
       };
       globalThis.assert.ok(attackerScore(eliteForward) > attackerScore(ordinaryForward) + 20);
+      const lowEngine = {
+        ...eliteForward,
+        attributes: eliteAttributes({
+          Dribbling: 18, Technique: 18, Agility: 18, Stamina: 5, "Work Rate": 5,
+          Tackling: 8, Positioning: 8, Strength: 9,
+        }),
+      };
+      const tirelessEngine = {
+        ...lowEngine,
+        attributes: eliteAttributes({
+          Dribbling: 18, Technique: 18, Agility: 18, Stamina: 19, "Work Rate": 19,
+          Tackling: 8, Positioning: 8, Strength: 9,
+        }),
+      };
+      globalThis.assert.equal(conditionMultiplier(lowEngine, 15), 1);
+      globalThis.assert.ok(conditionMultiplier(tirelessEngine, 88) > conditionMultiplier(lowEngine, 88));
+      const freshDuel = localizedDuel(
+        lowEngine,
+        ordinaryForward,
+        ["Dribbling", "Technique", "Agility"],
+        ["Tackling", "Positioning", "Strength"],
+        15,
+        seededRandom(55),
+      );
+      const tiredDuel = localizedDuel(
+        lowEngine,
+        ordinaryForward,
+        ["Dribbling", "Technique", "Agility"],
+        ["Tackling", "Positioning", "Strength"],
+        88,
+        seededRandom(55),
+      );
+      globalThis.assert.ok(freshDuel.probability > tiredDuel.probability);
+      const specialistRoster = [
+        {
+          ...ordinaryForward,
+          canonical_player_name: "Corner Expert",
+          source_person_id: "corner-expert",
+          role: "MR",
+          attributes: eliteAttributes({ Corners: 20, "Set Pieces": 18, "Free Kicks": 11 }),
+        },
+        {
+          ...ordinaryForward,
+          canonical_player_name: "Free Kick Expert",
+          source_person_id: "free-kick-expert",
+          role: "MC",
+          attributes: eliteAttributes({ Corners: 10, "Set Pieces": 16, "Free Kicks": 20 }),
+        },
+        {
+          ...eliteForward,
+          canonical_player_name: "Aerial Expert",
+          source_person_id: "aerial-expert",
+          attributes: eliteAttributes({ Heading: 20, Jumping: 20, "Off the Ball": 19, Strength: 19, Anticipation: 18 }),
+        },
+      ];
+      globalThis.assert.equal(playerName(setPieceTaker(specialistRoster, "corner")), "Corner Expert");
+      globalThis.assert.equal(playerName(setPieceTaker(specialistRoster, "free-kick")), "Free Kick Expert");
+      globalThis.assert.ok(headerScore(specialistRoster[2]) > headerScore(ordinaryForward));
+      globalThis.assert.ok(
+        counterRunnerScore({ ...eliteForward, role: "FR" })
+          > counterRunnerScore({ ...eliteForward, role: "FC" }),
+        "A fast wide player should receive a flank counter bonus",
+      );
+      const forcedGoalTypes = [
+        "open-play", "corner-header", "corner-volley", "direct-free-kick",
+        "free-kick-cross", "long-range", "counter", "own-goal", "high-press",
+        "rebound", "cut-back", "set-piece-scramble",
+      ];
+      for (const [index, goalType] of forcedGoalTypes.entries()) {
+        const event = goalEvent(
+          { minute: 20, matchSecond: 1200, side: "user", kind: "goal" },
+          specialistRoster,
+          opponentRoster,
+          seededRandom(9000 + index),
+          goalType,
+        );
+        globalThis.assert.equal(event.goalType, goalType);
+        globalThis.assert.ok(event.text.length > 35, event.text);
+        if (["own-goal", "set-piece-scramble"].includes(goalType)) {
+          globalThis.assert.equal(event.goalCredit, false);
+          globalThis.assert.equal(event.actorSide, "opponent");
+        }
+      }
+      const cornerGoal = goalEvent(
+        { minute: 22, matchSecond: 1320, side: "user", kind: "goal" },
+        specialistRoster,
+        opponentRoster,
+        seededRandom(42),
+        "corner-header",
+      );
+      globalThis.assert.equal(cornerGoal.provider, "Corner Expert");
       const legacyZidane = {
         current_ability: 168,
         database_slug: "cm9697_vanilla_original",

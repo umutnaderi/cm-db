@@ -1,4 +1,38 @@
-import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260731-59";
+import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260801-68";
+
+const FRIEND_SESSION_KEY = "retroball-friend-session-v1";
+
+function friendSessionFromPage() {
+  const parse = (value) => {
+    try {
+      const source = String(value || "");
+      const params = new URLSearchParams(source.startsWith("#") ? source.slice(1) : source);
+      const session = {
+        code: String(params.get("room") || "").toUpperCase(),
+        token: params.get("token") || "",
+        role: params.get("role") === "host" ? "host" : "guest",
+        name: sessionStorage.getItem("retroball-friend-name") || "Manager",
+      };
+      return /^[A-HJ-NP-Z2-9]{6}$/.test(session.code) &&
+        /^[A-Za-z0-9_-]{32}$/.test(session.token) ? session : null;
+    } catch {
+      return null;
+    }
+  };
+  const fromHash = parse(window.location.hash);
+  if (fromHash) {
+    sessionStorage.setItem(FRIEND_SESSION_KEY, JSON.stringify(fromHash));
+    return fromHash;
+  }
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(FRIEND_SESSION_KEY) || "null");
+    return parse(new URLSearchParams(stored || {}).toString());
+  } catch {
+    return null;
+  }
+}
+
+const friendSession = friendSessionFromPage();
 
 const PITCH_ROWS = {
   F: 14,
@@ -243,6 +277,7 @@ const state = {
   offeredPlayerIds: new Set(),
   databasesUsedForCurrentPick: new Set(),
   scenario: "ucl0304",
+  classicScenario: "ucl0304",
 };
 
 const formationChoices = document.querySelector("#formationChoices");
@@ -258,6 +293,7 @@ const suggestions = document.querySelector("#draftSuggestions");
 const suggestionsPanel = document.querySelector(".draft-suggestions-panel");
 const captainPrompt = document.querySelector("#draftCaptainPrompt");
 const suggestionHelp = document.querySelector("#draftSuggestionHelp");
+const modeKicker = document.querySelector("#draftModeKicker");
 const progress = document.querySelector("#draftProgress");
 const squadList = document.querySelector("#draftSquadList");
 const teamNameInput = document.querySelector("#draftTeamName");
@@ -268,7 +304,18 @@ const defenceOverall = document.querySelector("#draftDefenceOverall");
 const simulateButton = document.querySelector("#draftSimulateButton");
 const squadPanel = document.querySelector(".draft-squad-panel");
 const scenarioChoices = document.querySelector("#draftScenarioChoices");
+const scenarioPicker = document.querySelector("#draftScenarioPicker");
+const scenarioLegend = document.querySelector("#draftScenarioLegend");
+const scenarioDescription = document.querySelector("#draftScenarioDescription");
 const DRAFT_TEAM_STORAGE_KEY = "retroball-draft-team-v1";
+
+function isDatabaseDraftMode() {
+  return state.mode === "Classic" || state.mode === "Titan Fight";
+}
+
+function minimumDraftAbility() {
+  return state.mode === "Titan Fight" ? 165 : 100;
+}
 
 function effectiveRole(item) {
   if (item.styleRoles) return item.styleRoles[state.style] || item.role;
@@ -488,6 +535,7 @@ function squadSnapshot() {
     formation: state.formation,
     style: state.style,
     captainSlotId: state.captainSlotId,
+    mode: state.mode,
     scenario: state.scenario,
     players,
     overalls: {
@@ -523,6 +571,37 @@ function clearPersistedSquad() {
   } catch {
     // Ignore storage restrictions.
   }
+}
+
+function renderScenarioPicker() {
+  if (friendSession) {
+    scenarioPicker.classList.add("is-friendly");
+    scenarioLegend.textContent = "Friendly match";
+    scenarioDescription.textContent =
+      "Finish your XI and captain, then submit it to the private room.";
+    scenarioChoices.hidden = true;
+    simulateButton.innerHTML = 'Submit squad <span aria-hidden="true">→</span>';
+    return;
+  }
+  const titanSelected = state.mode === "Titan Fight";
+  if (titanSelected) state.scenario = "titan";
+  else if (state.scenario === "titan") state.scenario = state.classicScenario;
+
+  scenarioPicker.classList.toggle("is-titan", titanSelected);
+  scenarioLegend.textContent = titanSelected
+    ? "Titan Fight scenario"
+    : "Championship scenario";
+  scenarioDescription.textContent = titanSelected
+    ? "The eight legendary opponents will be drawn in a random order."
+    : "Your group will be drawn when the run begins.";
+  scenarioChoices.querySelectorAll("[data-scenario]").forEach((button) => {
+    const isTitanScenario = button.dataset.scenario === "titan";
+    button.hidden = titanSelected !== isTitanScenario;
+    button.classList.toggle("is-selected", button.dataset.scenario === state.scenario);
+  });
+  simulateButton.innerHTML = titanSelected
+    ? 'Start the Titan Fight <span aria-hidden="true">→</span>'
+    : 'Simulate the Championship <span aria-hidden="true">→</span>';
 }
 
 function renderSquadSummary() {
@@ -857,7 +936,7 @@ function poolCoversLateTargets(pool, slots) {
   const eligible = pool.filter((candidate) => {
     const identity = candidateIdentity(candidate);
     return (
-      Number(candidate.current_ability || 0) >= 100 &&
+      Number(candidate.current_ability || 0) >= minimumDraftAbility() &&
       !draftedIds.has(identity) &&
       !state.offeredPlayerIds.has(identity)
     );
@@ -911,8 +990,14 @@ const FULL_DATABASE_POOL_SLOT_THRESHOLD = 4;
 const MAX_CHOICES_PER_DATABASE = 1;
 
 function usesFullDatabasePool(openSlots = remainingSlots()) {
-  return openSlots.length > 0
+  return state.mode === "Titan Fight" || openSlots.length > 0
     && openSlots.length <= FULL_DATABASE_POOL_SLOT_THRESHOLD;
+}
+
+function maximumChoicesPerDatabase() {
+  return state.mode === "Titan Fight"
+    ? SUGGESTIONS_PER_ROLL
+    : MAX_CHOICES_PER_DATABASE;
 }
 
 function abilityDropTier(candidate) {
@@ -928,7 +1013,7 @@ function selectRollDatabases(pool, seed) {
   const eligible = pool.filter((candidate) => {
     const identity = candidateIdentity(candidate);
     return (
-      Number(candidate.current_ability || 0) >= 100 &&
+      Number(candidate.current_ability || 0) >= minimumDraftAbility() &&
       !draftedIds.has(identity) &&
       !state.offeredPlayerIds.has(identity) &&
       openSlots.some((slotItem) =>
@@ -949,6 +1034,7 @@ function selectRollDatabases(pool, seed) {
   }
 
   const allDatabases = [...grouped.keys()];
+  if (state.mode === "Titan Fight") return allDatabases;
   if (allDatabases.length < DATABASES_PER_ROLL) return [];
   if (usesFullDatabasePool(openSlots)) {
     return allDatabases;
@@ -1024,7 +1110,7 @@ function chooseSuggestions(pool, seed) {
   const eligible = pool.filter((candidate) => {
     const identity = candidateIdentity(candidate);
     return (
-      Number(candidate.current_ability || 0) >= 100 &&
+      Number(candidate.current_ability || 0) >= minimumDraftAbility() &&
       !draftedIds.has(identity) &&
       !state.offeredPlayerIds.has(identity) &&
       openSlots.some((slotItem) =>
@@ -1068,7 +1154,7 @@ function chooseSuggestions(pool, seed) {
       const identity = candidateIdentity(candidate);
       return (
         (databaseCounts.get(candidate.database_slug) || 0) <
-          MAX_CHOICES_PER_DATABASE &&
+          maximumChoicesPerDatabase() &&
         !usedPlayers.has(identity)
       );
     });
@@ -1158,7 +1244,7 @@ function chooseSuggestions(pool, seed) {
     const replacement =
       sameDatabase ||
       ((databaseCounts.get(candidate.database_slug) || 0) <
-      MAX_CHOICES_PER_DATABASE
+      maximumChoicesPerDatabase()
         ? sameFitIndexes.at(-1)
         : null);
     if (!replacement) return false;
@@ -1211,7 +1297,7 @@ function chooseSuggestions(pool, seed) {
           const replacementIndexes = sameDatabaseIndexes.length
             ? sameDatabaseIndexes
             : (databaseCounts.get(candidate.database_slug) || 0) <
-                MAX_CHOICES_PER_DATABASE
+                maximumChoicesPerDatabase()
               ? selected.map((_, index) => index)
               : [];
           return replacementIndexes
@@ -1513,7 +1599,7 @@ function renderPitch() {
       : 'Roll the Dice <span aria-hidden="true">🎲</span>';
   const rollDisabled =
     state.rolling ||
-    state.mode !== "Classic" ||
+    !isDatabaseDraftMode() ||
     state.drafted.size >= 11 ||
     (isReroll && state.rerollsRemaining <= 0);
   for (const button of [rollButton, mobileRollButton]) {
@@ -1595,13 +1681,17 @@ function resetDraft(message) {
   state.offeredPlayerIds.clear();
   state.databasesUsedForCurrentPick.clear();
   rollIntro.textContent = message;
-  suggestionHelp.textContent = "Roll the dice for five database-backed choices.";
+  suggestionHelp.textContent = state.mode === "Titan Fight"
+    ? "Every suggestion has CA 165 or higher. Build an XI to face the Titans."
+    : "Roll the dice for five database-backed choices.";
+  modeKicker.textContent = state.mode === "Titan Fight" ? "Titan roll" : `${state.mode} roll`;
+  renderScenarioPicker();
   renderSuggestions();
   renderPitch();
 }
 
 async function rollPlayers() {
-  if (state.mode !== "Classic" || state.rolling || state.drafted.size >= 11)
+  if (!isDatabaseDraftMode() || state.rolling || state.drafted.size >= 11)
     return;
   const isReroll = state.suggestions.length > 0;
   if (isReroll && state.rerollsRemaining <= 0) return;
@@ -1610,8 +1700,8 @@ async function rollPlayers() {
   state.rolling = true;
   state.selectedCandidateKey = "";
   rollIntro.textContent = usesFullDatabasePool()
-    ? "Drawing this roll from every eligible classic season…"
-    : "Drawing this roll from five classic seasons…";
+    ? `Drawing this roll from every eligible ${state.mode === "Titan Fight" ? "elite" : "classic"} season…`
+    : `Drawing this roll from five ${state.mode === "Titan Fight" ? "elite" : "classic"} seasons…`;
   suggestionHelp.textContent =
     "Finding choices that fit your unfilled positions.";
   renderSuggestions("Loading player choices…");
@@ -1630,23 +1720,39 @@ async function rollPlayers() {
     let rollSeed = seed;
     let rollDatabases = [];
     let rollPool = [];
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const accumulatedPool = new Map();
+    const maximumAttempts = state.mode === "Titan Fight" ? 6 : 3;
+    for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
       rollSeed = seed + attempt * 1_000_003;
       const payload = await getDraftCandidates({
         seed: rollSeed,
         perDatabase: openSlots.length <= 3 ? 30 : 28,
         positions: targetPositions,
+        minAbility: minimumDraftAbility(),
       });
-      rollDatabases = selectRollDatabases(payload.items, rollSeed);
-      rollPool = payload.items.filter((candidate) =>
+      payload.items.forEach((candidate) => {
+        accumulatedPool.set(candidateKey(candidate), candidate);
+      });
+      const accumulatedItems = [...accumulatedPool.values()];
+      rollDatabases = selectRollDatabases(accumulatedItems, rollSeed);
+      rollPool = accumulatedItems.filter((candidate) =>
         rollDatabases.includes(candidate.database_slug),
       );
-      if (poolCoversLateTargets(rollPool, openSlots)) break;
+      const hasRequiredDatabaseMix = state.mode === "Titan Fight"
+        ? rollDatabases.length > 0
+        : rollDatabases.length >= DATABASES_PER_ROLL
+          && (fullDatabasePool || rollDatabases.length === DATABASES_PER_ROLL);
+      if (hasRequiredDatabaseMix && poolCoversLateTargets(rollPool, openSlots)) break;
     }
-    if (
+    if (state.mode === "Titan Fight" && !rollDatabases.length) {
+      throw new Error(
+        "No CA 165+ players could be found for the open positions.",
+      );
+    }
+    if (state.mode !== "Titan Fight" && (
       rollDatabases.length < DATABASES_PER_ROLL ||
       (!fullDatabasePool && rollDatabases.length !== DATABASES_PER_ROLL)
-    ) {
+    )) {
       throw new Error(
         "Five suitable seasons could not be found for this formation.",
       );
@@ -1680,8 +1786,8 @@ async function rollPlayers() {
       : state.premiumDrought + 1;
     state.rollNumber += 1;
     rollIntro.textContent = fullDatabasePool
-      ? `${state.suggestions.length} players rolled from all ${rollDatabases.length} eligible classic seasons.`
-      : `${state.suggestions.length} players rolled from five classic seasons.`;
+      ? `${state.suggestions.length} players rolled from all ${rollDatabases.length} eligible ${state.mode === "Titan Fight" ? "elite" : "classic"} seasons.`
+      : `${state.suggestions.length} players rolled from five ${state.mode === "Titan Fight" ? "elite" : "classic"} seasons.`;
     suggestionHelp.textContent =
       state.rerollsRemaining > 0
         ? `Select a player and position, or use one of ${state.rerollsRemaining} remaining re-rolls.`
@@ -1731,6 +1837,12 @@ function bindChoiceGroup(container, key) {
       );
       suggestionHelp.textContent =
         "Switch back to Classic to roll database players.";
+      return;
+    }
+    if (key === "mode" && state.mode === "Titan Fight") {
+      resetDraft(
+        "Titan Fight selected. Draft only elite players with CA 165 or higher.",
+      );
       return;
     }
     resetDraft(
@@ -1843,6 +1955,7 @@ scenarioChoices.addEventListener("click", (event) => {
   const button = event.target.closest("[data-scenario]");
   if (!button || button.dataset.scenario === state.scenario) return;
   state.scenario = button.dataset.scenario;
+  if (state.scenario !== "titan") state.classicScenario = state.scenario;
   scenarioChoices.querySelectorAll("[data-scenario]").forEach((item) => {
     item.classList.toggle("is-selected", item === button);
   });
@@ -1850,7 +1963,9 @@ scenarioChoices.addEventListener("click", (event) => {
 });
 simulateButton.addEventListener("click", () => {
   persistSquad();
-  window.location.href = "draft-run.html";
+  window.location.href = friendSession
+    ? `draft-run.html${window.location.hash}`
+    : "draft-run.html";
 });
 
 renderSuggestions();

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Championship Run · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260731-64">
+    <link rel="stylesheet" href="styles.css?v=20260802-02">
   </head>
   <body class="draft-run-page">
     <main class="draft-run-shell">
@@ -46,7 +46,7 @@
         </div>
 
         <aside class="run-sidebar">
-          <section class="run-table-card">
+          <section class="run-table-card" id="runTablePanel">
             <div class="run-section-heading">
               <span class="draft-panel-kicker">Standings</span>
               <h2 id="runGroupHeading">Group</h2>
@@ -69,32 +69,37 @@
             <ol class="run-squad-list" id="runSquadList"></ol>
           </section>
 
-          <section class="run-records-card" id="runRecordsPanel" hidden>
-            <div class="run-section-heading">
-              <span class="draft-panel-kicker">Hall of fame</span>
-              <h2>Run records</h2>
-            </div>
-            <form class="run-record-form" id="runRecordForm">
-              <label for="runRecordUsername">Save this run</label>
-              <div>
-                <input id="runRecordUsername" name="username" maxlength="24" minlength="2" placeholder="Username" required>
-                <button type="submit">Save</button>
-              </div>
-              <small id="runRecordStatus">Save your progress after each match.</small>
-            </form>
-            <div class="run-record-table-wrap">
-              <table class="run-record-table">
-                <thead><tr><th>User</th><th>Stage</th><th>Captain</th><th>Top scorer</th><th>Dominator</th><th>Squad</th></tr></thead>
-                <tbody id="runRecordRows"></tbody>
-              </table>
-            </div>
-          </section>
         </aside>
       </section>
 
       <section class="run-result-card" id="runResultCard" hidden></section>
+
+      <form class="run-record-form" id="runRecordForm" hidden>
+        <label for="runRecordUsername">Save this run</label>
+        <div>
+          <input id="runRecordUsername" name="username" maxlength="24" minlength="2" placeholder="Username" required>
+          <button type="submit">Save</button>
+        </div>
+        <small id="runRecordStatus">Save this finished run to the Hall of Fame.</small>
+      </form>
     </main>
 
-    <script src="draft-run.js?v=20260731-64" type="module"></script>
+    <section class="run-records-modal" id="runRecordsPanel" role="dialog" aria-modal="true" aria-labelledby="runRecordsTitle" hidden>
+      <div class="run-records-dialog">
+        <button class="run-records-close" id="runRecordsClose" type="button" aria-label="Close Hall of Fame">&times;</button>
+        <div class="run-section-heading">
+          <span class="draft-panel-kicker">Hall of fame</span>
+          <h2 id="runRecordsTitle">Run records</h2>
+        </div>
+        <div class="run-record-table-wrap">
+          <table class="run-record-table">
+            <thead><tr><th>User</th><th>Mode</th><th>Stage</th><th>Captain</th><th>Top scorer</th><th>Dominator</th><th>Squad</th></tr></thead>
+            <tbody id="runRecordRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <script src="draft-run.js?v=20260802-04" type="module"></script>
   </body>
 </html>

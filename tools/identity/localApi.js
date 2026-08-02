@@ -517,6 +517,7 @@ function draftCandidates(params) {
   const parsedSeed = Number.parseInt(params.get("seed") || "0", 10);
   const seed = Number.isFinite(parsedSeed) ? Math.abs(parsedSeed) : 0;
   const perDatabase = integer(params.get("perDatabase"), 18, 8, 30);
+  const minAbility = integer(params.get("minAbility"), 100, 100, 200);
   const supportedPositions = new Set([
     "GK", "SW",
     "DL", "DC", "DR", "WBL", "WBR",
@@ -570,6 +571,7 @@ function draftCandidates(params) {
     WHERE ps.database_slug = ?
       AND ps.current_ability IS NOT NULL
       AND ps.current_ability BETWEEN 100 AND 200
+      AND ps.current_ability >= ?
     ORDER BY
       abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
       ps.source_person_id
@@ -586,7 +588,8 @@ function draftCandidates(params) {
          AND profile.source_person_id = ps.source_person_id
         WHERE ps.database_slug = ?
           AND ps.current_ability IS NOT NULL
-          AND ps.current_ability BETWEEN 100 AND 200
+      AND ps.current_ability BETWEEN 100 AND 200
+          AND ps.current_ability >= ?
           AND (${positionMatchSql})
         ORDER BY
           abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
@@ -604,6 +607,7 @@ function draftCandidates(params) {
      AND profile.source_person_id = ps.source_person_id
     WHERE ps.database_slug = ?
       AND ps.current_ability BETWEEN 140 AND 200
+      AND ps.current_ability >= ?
     ORDER BY
       ps.current_ability DESC,
       ps.source_person_id
@@ -613,18 +617,21 @@ function draftCandidates(params) {
     const databaseSeed = (seed * 31 + (index + 1) * 397) % 2_147_483_647;
     const randomRows = statement.all(
       database.slug,
+      minAbility,
       databaseSeed,
       perDatabase,
     );
     const targetedRows = targetedStatement
       ? targetedStatement.all(
           database.slug,
+          minAbility,
           ...priorityPatterns,
           (databaseSeed + 8191) % 2_147_483_647,
         )
       : [];
     const qualityRows = qualityStatement.all(
       database.slug,
+      minAbility,
       (databaseSeed + 16_381) % 120,
     );
     const rows = [...new Map(

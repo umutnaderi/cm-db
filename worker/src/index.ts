@@ -1,5 +1,6 @@
 import leagueMapData from "./league-map.json";
 import nameTokenIndexData from "./name-token-index.json";
+export { FriendMatchRoom } from "./friend-room";
 
 type QueryRow = Record<string, unknown>;
 type LeagueMap = Record<string, Record<string, string>>;
@@ -8,6 +9,23 @@ type QueryInput = string | {
   sql: string;
   args?: Array<string | number | null>;
 };
+
+const FRIEND_ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const FRIEND_ROOM_TOKEN_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+function secureRandomText(length: number, alphabet: string): string {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((value) => alphabet[value % alphabet.length]).join("");
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 const DRAFT_POSITION_ROLES = new Set([
   "GK", "SW",
@@ -647,6 +665,57 @@ export default {
 
     const url = new URL(request.url);
 
+    if (url.pathname === "/api/friend-rooms") {
+      if (request.method !== "POST") {
+        return json({ error: "Method not allowed." }, env, 405, 0);
+      }
+      const body = await request.json<{ hostName?: unknown }>().catch(() => null);
+      const hostName = String(body?.hostName || "Host").trim().slice(0, 24) || "Host";
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const code = secureRandomText(6, FRIEND_ROOM_CODE_ALPHABET);
+        const hostToken = secureRandomText(32, FRIEND_ROOM_TOKEN_ALPHABET);
+        const guestToken = secureRandomText(32, FRIEND_ROOM_TOKEN_ALPHABET);
+        const room = env.FRIEND_MATCH_ROOMS.getByName(code);
+        const created = await room.createRoom({
+          code,
+          hostTokenHash: await sha256Hex(hostToken),
+          guestTokenHash: await sha256Hex(guestToken),
+          hostName,
+        });
+        if (created) {
+          return json({ code, hostToken, guestToken }, env, 201, 0);
+        }
+      }
+      return json({ error: "Could not allocate a room code." }, env, 503, 0);
+    }
+
+    const friendRoomMatch = url.pathname.match(
+      /^\/api\/friend-rooms\/([A-HJ-NP-Z2-9]{6})(\/websocket)?$/,
+    );
+    if (friendRoomMatch) {
+      const code = friendRoomMatch[1];
+      const room = env.FRIEND_MATCH_ROOMS.getByName(code);
+      if (!friendRoomMatch[2]) {
+        if (request.method !== "GET") {
+          return json({ error: "Method not allowed." }, env, 405, 0);
+        }
+        const roomState = await room.publicState();
+        return roomState
+          ? json(roomState, env, 200, 0)
+          : json({ error: "Room not found." }, env, 404, 0);
+      }
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+        return json({ error: "Expected WebSocket upgrade." }, env, 426, 0);
+      }
+      const token = url.searchParams.get("token") || "";
+      if (!/^[A-Za-z0-9_-]{32}$/.test(token)) {
+        return json({ error: "A valid room token is required." }, env, 403, 0);
+      }
+      const headers = new Headers(request.headers);
+      headers.set("x-room-token-hash", await sha256Hex(token));
+      return room.fetch(new Request(request, { headers }));
+    }
+
     const db = d1Client(env.DB);
 
     try {
@@ -788,7 +857,7 @@ export default {
         if (request.method === "GET") {
           const result = await env.DB.prepare(`
             SELECT
-              id, username, team_name, stage, stage_rank, champion, squad_seed,
+              id, username, team_name, mode, stage, stage_rank, champion, squad_seed,
               captain_name, captain_database, captain_source_person_id,
               top_scorer_name, top_scorer_database, top_scorer_source_person_id,
               top_scorer_goals,
@@ -817,6 +886,8 @@ export default {
         const usernameKey = username.toLocaleLowerCase("en-US");
         const runId = text("runId", 80);
         const stage = text("stage", 40);
+        const requestedMode = text("mode", 24);
+        const mode = requestedMode === "Titan Fight" ? requestedMode : "Classic";
         const squadSeed = text("squadSeed", 24).toUpperCase();
         const captainName = text("captainName", 100);
         const topScorerName = text("topScorerName", 100);
@@ -828,16 +899,17 @@ export default {
 
         await env.DB.prepare(`
           INSERT INTO draft_records (
-            run_id, username, username_key, team_name, stage, stage_rank, champion, squad_seed,
+            run_id, username, username_key, team_name, mode, stage, stage_rank, champion, squad_seed,
             captain_name, captain_database, captain_source_person_id,
             top_scorer_name, top_scorer_database, top_scorer_source_person_id,
             top_scorer_goals,
             dominator_name, dominator_database, dominator_source_person_id, dominator_awards,
             played, wins, draws, losses, goals_for, goals_against
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(run_id, username_key) DO UPDATE SET
             username = excluded.username,
             team_name = excluded.team_name,
+            mode = excluded.mode,
             stage = excluded.stage,
             stage_rank = excluded.stage_rank,
             champion = excluded.champion,
@@ -862,7 +934,7 @@ export default {
             updated_at = CURRENT_TIMESTAMP
         `).bind(
           runId, username, usernameKey, text("teamName", 60) || "Ultimate XI",
-          stage, integer("stageRank", 10), integer("champion", 1),
+          mode, stage, integer("stageRank", 10), integer("champion", 1),
           /^XI-[A-Z0-9]{10,18}$/.test(squadSeed) ? squadSeed : null,
           captainName, text("captainDatabase", 80) || null,
           text("captainSourcePersonId", 80) || null,
@@ -899,6 +971,11 @@ export default {
           10,
         );
         const perDatabase = Math.min(30, Math.max(8, parsedLimit || 18));
+        const parsedMinAbility = Number.parseInt(
+          url.searchParams.get("minAbility") || "100",
+          10,
+        );
+        const minAbility = Math.min(200, Math.max(100, parsedMinAbility || 100));
         const positionPatterns = draftPositionPatterns(url.searchParams.get("positions"));
         const positionMatchSql = positionPatterns.length
           ? positionPatterns.map(
@@ -928,6 +1005,7 @@ export default {
                   WHERE ps.database_slug = ?
                     AND ps.current_ability IS NOT NULL
                     AND ps.current_ability BETWEEN 100 AND 200
+                    AND ps.current_ability >= ?
                   ORDER BY
                     abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
                     ps.source_person_id
@@ -942,6 +1020,7 @@ export default {
               `,
               args: [
                 database.slug as string,
+                minAbility,
                 databaseSeed,
                 perDatabase,
               ],
@@ -963,6 +1042,7 @@ export default {
                       WHERE ps.database_slug = ?
                         AND ps.current_ability IS NOT NULL
                         AND ps.current_ability BETWEEN 100 AND 200
+                        AND ps.current_ability >= ?
                         AND (${positionMatchSql})
                       ORDER BY
                         abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
@@ -978,6 +1058,7 @@ export default {
                   `,
                   args: [
                     database.slug as string,
+                    minAbility,
                     ...positionPatterns,
                     databaseSeed,
                   ],
@@ -998,6 +1079,7 @@ export default {
                   ${playerSearchBaseSelectColumns()}
                   WHERE ps.database_slug = ?
                     AND ps.current_ability BETWEEN 140 AND 200
+                    AND ps.current_ability >= ?
                   ORDER BY
                     ps.current_ability DESC,
                     ps.source_person_id
@@ -1012,6 +1094,7 @@ export default {
               `,
               args: [
                 database.slug as string,
+                minAbility,
                 databaseSeed % 120,
               ],
             };

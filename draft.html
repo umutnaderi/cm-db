@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Ultimate Draft · Old-School-Football</title>
-    <link rel="stylesheet" href="styles.css">
+    <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
+    <link rel="stylesheet" href="styles.css?v=20260802-01">
   </head>
   <body class="destination-page draft-page">
     <main class="destination-shell draft-entry">
@@ -18,11 +19,67 @@
         <button class="draft-entry-button draft-play-friends" type="button">Play with Friends</button>
       </nav>
 
+      <section class="draft-entry-hall" aria-labelledby="draftHallTitle">
+        <header>
+          <span>Hall of fame</span>
+          <h2 id="draftHallTitle">Greatest runs</h2>
+        </header>
+        <ol class="draft-entry-hall-list" id="draftHallList" aria-live="polite">
+          <li class="is-status">Loading legendary runs...</li>
+        </ol>
+      </section>
+
       <a class="placeholder-back" href="index.html">Back to destinations</a>
     </main>
+
+    <section class="draft-friends-modal" id="draftFriendsModal" role="dialog" aria-modal="true" aria-labelledby="draftFriendsTitle" hidden>
+      <div class="draft-friends-dialog">
+        <button class="draft-friends-close" id="draftFriendsClose" type="button" aria-label="Close Play with Friends">&times;</button>
+        <span class="eyebrow">Live private room</span>
+        <h2 id="draftFriendsTitle">Play with Friends</h2>
+        <div class="draft-friends-start" id="draftFriendsStart">
+          <p>Create a private room, then send the invitation link to your opponent.</p>
+          <form id="draftFriendsCreateForm">
+            <label for="draftFriendsName">Your name</label>
+            <div>
+              <input id="draftFriendsName" maxlength="24" minlength="2" placeholder="Manager name" required>
+              <button type="submit">Create room</button>
+            </div>
+          </form>
+          <form id="draftFriendsJoinForm">
+            <label for="draftFriendsInvite">Or paste an invitation</label>
+            <div>
+              <input id="draftFriendsInvite" placeholder="Invitation link" required>
+              <button type="submit">Join room</button>
+            </div>
+          </form>
+        </div>
+        <div class="draft-friends-room" id="draftFriendsRoom" hidden>
+          <div class="draft-friends-code">
+            <span>Room code</span>
+            <strong id="draftFriendsCode">------</strong>
+          </div>
+          <div class="draft-friends-invite" id="draftFriendsInvitePanel">
+            <input id="draftFriendsInviteLink" readonly aria-label="Friend invitation link">
+            <button id="draftFriendsCopy" type="button" disabled>Copy invitation</button>
+          </div>
+          <div class="draft-friends-players">
+            <article data-friend-role="host">
+              <span>Host</span><strong>Waiting...</strong><small>Offline</small>
+            </article>
+            <article data-friend-role="guest">
+              <span>Guest</span><strong>Waiting...</strong><small>Offline</small>
+            </article>
+          </div>
+          <p class="draft-friends-status" id="draftFriendsStatus">Connecting to the room...</p>
+          <button class="draft-friends-ready" id="draftFriendsReady" type="button" disabled>Ready</button>
+        </div>
+      </div>
+    </section>
 
     <footer class="site-footer">
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
+    <script src="draft.js?v=20260802-01" type="module"></script>
   </body>
 </html>

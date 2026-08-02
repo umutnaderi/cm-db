@@ -5,6 +5,159 @@ import {
   createDraftSquad,
   formatDraftSquadText,
 } from "../src/lib/draftSquad.js";
+import {
+  MATCH_TIMELINE_VERSION,
+  createCanonicalMatchTimeline,
+  reduceMatchTimeline,
+} from "../src/lib/matchTimeline.js";
+import {
+  createMatchPlaybackController,
+  estimateServerClockOffset,
+} from "../src/lib/matchPlayback.js";
+
+const timelineResult = {
+  userGoals: 2,
+  rivalGoals: 1,
+  userWon: true,
+  hasExtraTime: true,
+  regulationEndSecond: 90 * 60 + 60,
+  extraTimeEndSecond: 120 * 60,
+  events: [
+    {
+      minute: 12,
+      matchSecond: 12 * 60 + 8,
+      side: "user",
+      kind: "goal",
+      goal: true,
+      scorer: "Home Forward",
+      text: "Home Forward scores.",
+      zoneFrom: 4,
+      zoneTo: 1,
+      action: "shot",
+      possessionAfter: "opponent",
+      actionSeconds: 7,
+      presentationWeight: 1.65,
+    },
+    {
+      minute: 44,
+      matchSecond: 44 * 60 + 20,
+      side: "opponent",
+      kind: "card",
+      card: "yellow",
+      scorer: "Away Defender",
+      text: "Away Defender is booked.",
+      zoneFrom: 7,
+      zoneTo: 7,
+      action: "card",
+      possessionAfter: "user",
+      actionSeconds: 5,
+      presentationWeight: 1.25,
+    },
+  ],
+  extraTimeEvents: [
+    {
+      minute: 105,
+      matchSecond: 105 * 60 + 2,
+      side: "opponent",
+      kind: "goal",
+      goal: true,
+      scorer: "Away Forward",
+      text: "Away Forward scores.",
+      zoneFrom: 3,
+      zoneTo: 1,
+      action: "shot",
+      possessionAfter: "user",
+      actionSeconds: 6,
+      presentationWeight: 1.65,
+    },
+    {
+      minute: 118,
+      matchSecond: 118 * 60 + 11,
+      side: "user",
+      kind: "goal",
+      goal: true,
+      scorer: "Home Midfielder",
+      text: "Home Midfielder scores.",
+      zoneFrom: 6,
+      zoneTo: 1,
+      action: "shot",
+      possessionAfter: "opponent",
+      actionSeconds: 6,
+      presentationWeight: 1.65,
+    },
+  ],
+  shootout: null,
+  penaltyEvents: [],
+};
+const canonicalTimeline = createCanonicalMatchTimeline(timelineResult);
+assert.equal(canonicalTimeline.version, MATCH_TIMELINE_VERSION);
+assert.deepEqual(canonicalTimeline, createCanonicalMatchTimeline(timelineResult));
+assert.deepEqual(JSON.parse(JSON.stringify(canonicalTimeline)), canonicalTimeline);
+assert.deepEqual(canonicalTimeline.periods.map((period) => period.phase), [
+  "regulation",
+  "extra-time",
+]);
+const canonicalMatchEvents = canonicalTimeline.events.filter((event) => event.type === "match-event");
+assert.equal(canonicalMatchEvents.length, 4);
+const suspenseEvents = canonicalTimeline.events.filter((event) => event.type === "suspense");
+assert.equal(suspenseEvents.length, 3);
+assert.equal(suspenseEvents[0].endAtMs - suspenseEvents[0].atMs, 1_500);
+const suspenseState = reduceMatchTimeline(canonicalTimeline, suspenseEvents[0].atMs + 500);
+assert.equal(suspenseState.suspense.label, "CHANCE!");
+const beforeFirstGoal = reduceMatchTimeline(canonicalTimeline, canonicalMatchEvents[0].atMs - 1);
+assert.equal(beforeFirstGoal.userGoals, 0);
+const afterFirstGoal = reduceMatchTimeline(canonicalTimeline, canonicalMatchEvents[0].atMs);
+assert.equal(afterFirstGoal.userGoals, 1);
+assert.equal(afterFirstGoal.latestEvent.scorer, "Home Forward");
+assert.ok(afterFirstGoal.possession.user > afterFirstGoal.possession.opponent);
+assert.equal(afterFirstGoal.possession.windowMinutes, 10);
+const finalTimelineState = reduceMatchTimeline(canonicalTimeline, canonicalTimeline.durationMs);
+assert.equal(finalTimelineState.userGoals, 2);
+assert.equal(finalTimelineState.rivalGoals, 1);
+assert.equal(finalTimelineState.cards.length, 1);
+assert.equal(finalTimelineState.commentary.length, 4);
+assert.equal(finalTimelineState.phase, "complete");
+assert.equal(finalTimelineState.completed, true);
+assert.equal(finalTimelineState.pitch.possession, "opponent");
+const shootoutTimeline = createCanonicalMatchTimeline({
+  ...timelineResult,
+  shootout: [1, 0],
+  penaltyEvents: [{
+    round: 1,
+    userTaker: "Home Forward",
+    opponentTaker: "Away Forward",
+    userScored: true,
+    opponentScored: false,
+  }],
+});
+const shootoutState = reduceMatchTimeline(shootoutTimeline, shootoutTimeline.durationMs);
+assert.equal(shootoutState.penaltyUserGoals, 1);
+assert.equal(shootoutState.penaltyRivalGoals, 0);
+assert.equal(shootoutState.penalties.length, 1);
+assert.equal(estimateServerClockOffset([
+  { sentAt: 1_000, serverNow: 1_150, receivedAt: 1_200 },
+  { sentAt: 2_000, serverNow: 2_145, receivedAt: 2_190 },
+  { sentAt: 3_000, serverNow: 3_400, receivedAt: 2_900 },
+]), 50);
+let playbackNow = 10_000;
+let renderedPlaybackState = null;
+const playbackController = createMatchPlaybackController({
+  timeline: canonicalTimeline,
+  now: () => playbackNow,
+  schedule: () => 1,
+  cancel: () => {},
+  onState: (state) => {
+    renderedPlaybackState = state;
+  },
+});
+void playbackController.start({ startAt: playbackNow });
+assert.equal(renderedPlaybackState.matchSecond, 0);
+playbackNow += canonicalMatchEvents[0].atMs;
+playbackController.resync();
+assert.equal(renderedPlaybackState.userGoals, 1);
+playbackController.seek(canonicalTimeline.durationMs);
+assert.equal(renderedPlaybackState.completed, true);
+playbackController.stop();
 
 const shareTeam = {
   teamName: "Seeded XI",
@@ -656,6 +809,28 @@ const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url
       fallbackPair.some((database) => database.startsWith("used-gk-")),
       "Final-position coverage must take priority over database rotation",
     );
+
+    state.mode = "Titan Fight";
+    state.offeredPlayerIds.clear();
+    state.databasesUsedForCurrentPick.clear();
+    const singleSeasonElitePool = Array.from({ length: 5 }, (_, index) => ({
+      database_slug: "elite-gk-season",
+      source_person_id: "elite-keeper-" + index,
+      canonical_player_public_id: "elite-keeper-" + index,
+      current_ability: 165 + index,
+      position_text: "GK",
+      position_ratings: [],
+    }));
+    globalThis.assert.deepEqual(
+      selectRollDatabases(singleSeasonElitePool, 1776),
+      ["elite-gk-season"],
+      "Titan Fight must not require five different seasons",
+    );
+    globalThis.assert.equal(
+      chooseSuggestions(singleSeasonElitePool, 1776).length,
+      5,
+      "Titan Fight must allow five elite choices from a sparse season pool",
+    );
   `);
 
 vm.runInNewContext(setupSource, {
@@ -664,22 +839,66 @@ vm.runInNewContext(setupSource, {
   Map,
   Set,
   console,
+  sessionStorage: {
+    getItem() { return ""; },
+    setItem() {},
+  },
+  URLSearchParams,
+  window: { location: { hash: "" } },
 });
 const setupSourceText = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8");
 const setupHtml = fs.readFileSync(new URL("../draft-setup.html", import.meta.url), "utf8");
 const setupStyles = fs.readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+const draftEntryHtml = fs.readFileSync(new URL("../draft.html", import.meta.url), "utf8");
+const draftEntrySource = fs.readFileSync(new URL("../draft.js", import.meta.url), "utf8");
 const retroballApiSource = fs.readFileSync(new URL("../src/lib/retroballApi.js", import.meta.url), "utf8");
 const localApiSource = fs.readFileSync(new URL("../tools/identity/localApi.js", import.meta.url), "utf8");
 assert.ok(
   !setupSourceText.includes("if (!fit.slot || fit.score <= 0)"),
   "Zero-rated suggestions must remain selectable as emergency cover",
 );
+assert.ok(draftEntryHtml.includes('id="draftHallList"'));
+assert.ok(draftEntryHtml.includes('id="draftFriendsModal"'));
+assert.ok(draftEntryHtml.includes('id="draftFriendsReady"'));
+assert.ok(draftEntryHtml.includes('id="draftFriendsCopy" type="button" disabled'));
+assert.ok(draftEntryHtml.includes('content="https://retroball-api.umutnaderi.workers.dev"'));
+assert.ok(draftEntryHtml.indexOf('draft-play-friends') < draftEntryHtml.indexOf('draft-entry-hall'));
+assert.ok(draftEntrySource.includes("await getDraftRecords()"));
+assert.ok(draftEntrySource.includes("records.slice(0, 8)"));
+assert.ok(draftEntrySource.includes("createFriendRoom(name)"));
+assert.ok(draftEntrySource.includes("if (!invitation) return;"));
+assert.ok(draftEntrySource.includes('document.execCommand?.("copy")'));
+assert.ok(draftEntrySource.includes("estimateServerClockOffset(clockSamples)"));
+assert.ok(draftEntrySource.includes("enterFriendDraft()"));
+assert.ok(draftEntrySource.includes("draft-setup.html#"));
+assert.ok(draftEntrySource.includes('? "Titan Fight" : "Classic"'));
+assert.ok(setupStyles.includes(".draft-entry-hall"));
+assert.ok(setupStyles.includes(".draft-friends-room[hidden]"));
+assert.ok(setupStyles.includes(".draft-entry-hall {\n    position: static;"));
 assert.ok(setupSourceText.includes('"is-emergency-target", "fit-none"'));
+assert.ok(setupSourceText.includes("const friendSession = friendSessionFromPage()"));
+assert.ok(setupSourceText.includes("Submit squad"));
 assert.ok(setupHtml.includes('data-scenario="ucl0203"'));
 assert.ok(setupHtml.includes('data-scenario="ucl0304"'));
+assert.ok(setupHtml.includes('data-scenario="titan" hidden'));
+assert.ok(setupHtml.includes('data-value="Titan Fight"'));
+assert.ok(
+  setupHtml.indexOf('data-value="Classic"') < setupHtml.indexOf('data-value="Titan Fight"')
+  && setupHtml.indexOf('data-value="Titan Fight"') < setupHtml.indexOf('data-value="From memory"'),
+  "Titan Fight must sit between Classic and From memory",
+);
 assert.ok(setupHtml.includes('id="draftMobileRollButton"'));
 assert.equal((setupHtml.match(/<small>Group Stages<\/small>/g) || []).length, 2);
 assert.ok(setupSourceText.includes("scenario: state.scenario"));
+assert.ok(setupSourceText.includes("mode: state.mode"));
+assert.ok(setupSourceText.includes('scenarioLegend.textContent = titanSelected'));
+assert.ok(setupSourceText.includes('Start the Titan Fight <span'));
+assert.ok(setupSourceText.includes('if (titanSelected) state.scenario = "titan"'));
+assert.ok(setupSourceText.includes('state.mode === "Titan Fight" ? 165 : 100'));
+assert.ok(setupSourceText.includes("minAbility: minimumDraftAbility()"));
+assert.ok(setupSourceText.includes('if (state.mode === "Titan Fight") return allDatabases;'));
+assert.ok(setupSourceText.includes("const accumulatedPool = new Map()"));
+assert.ok(setupSourceText.includes('state.mode === "Titan Fight"\n    ? SUGGESTIONS_PER_ROLL'));
 assert.ok(setupSourceText.includes("state.rollNumber > 0"));
 assert.ok(setupSourceText.includes("selectedDraftSlotId"));
 assert.ok(setupSourceText.includes("state.captainSlotId = slotId"));
@@ -691,6 +910,9 @@ assert.ok(setupSourceText.includes("playerMainPositionSummary(candidate)"));
 assert.ok(setupSourceText.includes('class="draft-dice-loader"'));
 assert.ok(setupSourceText.includes('renderSuggestions("", true)'));
 assert.ok(retroballApiSource.includes('searchParams.set("positions"'));
+assert.ok(retroballApiSource.includes('minAbility: String(minAbility)'));
+assert.ok(setupHtml.includes('<meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">'));
+assert.ok(setupSourceText.includes("minAbility: minimumDraftAbility()"));
 assert.ok(localApiSource.includes("ps.current_ability BETWEEN 100 AND 200"));
 assert.ok(localApiSource.includes("LIMIT 4"));
 assert.ok(localApiSource.includes("ps.current_ability BETWEEN 140 AND 200"));
@@ -715,6 +937,7 @@ assert.ok(emptyPositionRules.every((match) => !match[0].includes("border: 2px da
 
 const runHtml = fs.readFileSync(new URL("../draft-run.html", import.meta.url), "utf8");
 const runSourceText = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8");
+assert.ok(!/[âÃÂ]/.test(runSourceText), "Draft match UI must not contain mojibake characters");
 assert.ok(!runHtml.includes('id="runClock"'), "The match clock must not remain in the sidebar");
 assert.ok(runSourceText.includes("data-match-clock"), "Every active match must render its own clock");
 assert.ok(
@@ -730,10 +953,33 @@ assert.ok(runSourceText.includes("zoneFrom"));
 assert.ok(runSourceText.includes("zoneTo"));
 assert.ok(runSourceText.includes("data-share-squad"), "Finished runs must offer squad sharing");
 assert.ok(runSourceText.includes("squadSeed: sharedSquad.seed"), "Records must carry the squad seed");
+assert.ok(runSourceText.includes("const TITAN_OPPONENTS = ["));
+assert.equal((runSourceText.match(/key: "titan-/g) || []).length, 8);
+assert.ok(runSourceText.includes('legacyCanonicalId: "23678"'));
+assert.ok(runSourceText.includes('legacyCanonicalId: "81217"'));
+assert.ok(runSourceText.includes('canonicalPublicId: "player_kleberson_brazil_1979"'));
+assert.ok(runSourceText.includes('canonicalPublicId: "player_juan_sebastian_veron_argentina_1975"'));
+assert.ok(runSourceText.includes("returnedCanonicalPublicId === canonicalPublicId"));
+assert.ok(runSourceText.includes('mode: isTitanFight ? "Titan Fight" : team.mode || "Classic"'));
+assert.ok(runSourceText.includes('? "Titan Fight"\n      : "Classic"'));
+assert.ok(runSourceText.includes('label: `${state.userRecord.played}/${TITAN_OPPONENTS.length}`'));
+assert.ok(runHtml.includes('id="runRecordsPanel" role="dialog"'));
+assert.ok(runHtml.includes('id="runRecordsClose"'));
+assert.ok(runSourceText.includes('recordFormSlot.append(elements.recordForm)'));
+assert.ok(!runSourceText.includes("renderRecordOpportunity"));
+assert.ok(runSourceText.includes("titan-order"), "Titan opponents must be shuffled by the run seed");
 assert.ok(runSourceText.includes("group-draw"), "The run must seed a random group draw");
 assert.ok(runSourceText.includes("scenario.database"), "Opponent searches must use the selected season");
 assert.ok(runSourceText.includes("ZONE_TRANSITION_MATRIX"));
 assert.ok(runSourceText.includes("buildTransitionTimeline"));
+assert.ok(runSourceText.includes("renderCanonicalMatchSnapshot"));
+assert.ok(runSourceText.includes("createMatchPlaybackController"));
+const animateMatchSource = runSourceText.slice(
+  runSourceText.indexOf("async function animateMatch("),
+  runSourceText.indexOf("function currentFixture("),
+);
+assert.ok(!animateMatchSource.includes("await animatePeriod("));
+assert.ok(animateMatchSource.includes('document.addEventListener("visibilitychange"'));
 const playedMatchSource = runSourceText.slice(
   runSourceText.indexOf("function matchSimulation("),
   runSourceText.indexOf("function attributeValue("),
@@ -743,15 +989,38 @@ assert.ok(!playedMatchSource.includes("poisson("), "Played match scores must eme
 const sharedSquadHtml = fs.readFileSync(new URL("../draft-squad.html", import.meta.url), "utf8");
 const sharedSquadSource = fs.readFileSync(new URL("../draft-squad.js", import.meta.url), "utf8");
 const workerSource = fs.readFileSync(new URL("../worker/src/index.ts", import.meta.url), "utf8");
+const friendRoomSource = fs.readFileSync(new URL("../worker/src/friend-room.ts", import.meta.url), "utf8");
+const workerConfig = fs.readFileSync(new URL("../worker/wrangler.jsonc", import.meta.url), "utf8");
 assert.ok(sharedSquadHtml.includes('id="sharedSquadList"'));
 assert.ok(sharedSquadSource.includes("getDraftSquad(seed)"));
 assert.ok(workerSource.includes("ps.current_ability BETWEEN 100 AND 200"));
 assert.ok(workerSource.includes("ps.current_ability BETWEEN 140 AND 200"));
 assert.ok(workerSource.includes("qualityQueries"));
 assert.ok(workerSource.includes("draftPositionPatterns"));
+assert.ok(workerSource.includes('url.searchParams.get("minAbility")'));
+assert.ok(workerSource.includes("mode = excluded.mode"));
 assert.ok(workerSource.includes("LIMIT 4"));
 assert.ok(workerSource.includes('url.pathname === "/api/draft-squads"'));
 assert.ok(workerSource.includes("squad_seed = excluded.squad_seed"));
+assert.ok(workerSource.includes('url.pathname === "/api/friend-rooms"'));
+assert.ok(workerSource.includes("FRIEND_MATCH_ROOMS.getByName(code)"));
+assert.ok(friendRoomSource.includes("this.ctx.acceptWebSocket(server)"));
+assert.ok(friendRoomSource.includes('payload.type === "ping"'));
+assert.ok(friendRoomSource.includes("Date.now() + 5_000"));
+assert.ok(friendRoomSource.includes('payload.type === "submit-squad"'));
+assert.ok(friendRoomSource.includes("Date.now() + 12_000"));
+assert.ok(friendRoomSource.includes("host_squad_json"));
+assert.ok(runSourceText.includes("startFriendlyRoom()"));
+assert.ok(runSourceText.includes('type: "submit-squad", squad: draftedTeam'));
+assert.ok(runSourceText.includes("lockPace: true"));
+assert.ok(runSourceText.includes("renderSquad(draftedTeam)"));
+assert.ok(runSourceText.includes('friendSession.role === "host" ? result.userWon : !result.userWon'));
+assert.ok(runSourceText.includes("annotatePressureWaves"));
+assert.ok(runSourceText.includes("signatureMoment"));
+assert.ok(runSourceText.includes("tacticalMultiplier"));
+assert.ok(runSourceText.includes('data-match-possession'));
+assert.ok(runSourceText.includes('data-match-suspense'));
+assert.ok(workerConfig.includes('"new_sqlite_classes": ["FriendMatchRoom"]'));
 
 const player = (name, role, line, currentAbility, id) => ({
   canonical_player_name: name,
@@ -808,11 +1077,31 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
       let redCards = 0;
       let throughBallCount = 0;
       let simulatedGoals = 0;
+      let signatureMoments = 0;
+      let pressureWaves = 0;
+      let allInGoals = 0;
       const organicGoalTypes = new Set();
       for (let index = 0; index < 180; index += 1) {
         state.matchNumber = index;
         const result = matchSimulation("milan", opponentRoster, index % 2 ? "Group stage" : "Round of 16");
+        finalizeMatchResult(result);
         const allEvents = [...result.events, ...result.extraTimeEvents];
+        signatureMoments += allEvents.filter((event) => event.signatureMoment).length;
+        pressureWaves += allEvents.filter((event) => event.pressureWave).length;
+        allInGoals += allEvents.filter((event) => event.goal && event.allIn).length;
+        globalThis.assert.equal(
+          result.timeline.events.filter((entry) => entry.type === "match-event").length,
+          allEvents.length,
+        );
+        if (index === 0) {
+          const reconstructed = globalThis.reduceMatchTimeline(
+            result.timeline,
+            result.timeline.durationMs,
+          );
+          globalThis.assert.equal(reconstructed.userGoals, result.userGoals);
+          globalThis.assert.equal(reconstructed.rivalGoals, result.rivalGoals);
+          globalThis.assert.equal(reconstructed.completed, true);
+        }
         globalThis.assert.ok(result.manOfMatch?.name);
         globalThis.assert.ok(result.minuteDelay >= 110 && result.minuteDelay <= 235);
         globalThis.assert.ok(result.regulationStoppageSeconds >= 0);
@@ -859,6 +1148,9 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
       }
       globalThis.assert.ok(redCards <= 12, "Red cards are too frequent: " + redCards);
       globalThis.assert.ok(throughBallCount > 0, "The timeline should generate zonal bypass attempts");
+      globalThis.assert.ok(signatureMoments > 0, "Elite players should generate signature moments");
+      globalThis.assert.ok(pressureWaves > 0, "Sustained attacks should generate pressure waves");
+      globalThis.assert.ok(allInGoals > 0, "Late trailing teams should create all-in goal events");
       globalThis.assert.ok(
         simulatedGoals >= 180 && simulatedGoals <= 900,
         "Organic scoring rate is outside the expected range: " + simulatedGoals + " goals in 180 matches",
@@ -1142,6 +1434,7 @@ await vm.runInNewContext(runSource, {
   Promise,
   Set,
   clearInterval,
+  createCanonicalMatchTimeline,
   createDraftSquad,
   document: { createElement: fakeElement, querySelector: fakeElement },
   formatDraftSquadText,
@@ -1151,11 +1444,22 @@ await vm.runInNewContext(runSource, {
     },
     setItem() {},
   },
+  sessionStorage: {
+    getItem() { return ""; },
+    setItem() {},
+  },
+  reduceMatchTimeline,
   testOpponentRoster: opponentRoster,
+  URLSearchParams,
   setInterval,
   setTimeout,
   saveDraftSquad: async () => ({ ok: true }),
-  window: { clearInterval, setInterval, setTimeout },
+  window: {
+    clearInterval,
+    location: { hash: "" },
+    setInterval,
+    setTimeout,
+  },
 });
 
 console.log("Draft formation and simulation checks passed.");

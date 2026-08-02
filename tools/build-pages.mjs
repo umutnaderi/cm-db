@@ -8,6 +8,7 @@ const frontendFiles = [
   "index.html",
   "database.html",
   "draft.html",
+  "draft.js",
   "draft-setup.html",
   "draft-setup.js",
   "draft-run.html",
@@ -41,15 +42,17 @@ for (const file of frontendFiles) {
 await cp(join(root, "img"), join(output, "img"), { recursive: true });
 await cp(join(root, "src"), join(output, "src"), { recursive: true });
 
-const pagesDatabaseHtml = join(output, "database.html");
-const databaseHtml = await readFile(pagesDatabaseHtml, "utf8");
-await writeFile(
-  pagesDatabaseHtml,
-  databaseHtml.replace(
-    '<meta name="retroball-api-url" content="/local-api">',
-    '<meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">',
-  ),
-);
+for (const htmlFile of ["database.html", "draft-setup.html"]) {
+  const pagesHtmlPath = join(output, htmlFile);
+  const html = await readFile(pagesHtmlPath, "utf8");
+  await writeFile(
+    pagesHtmlPath,
+    html.replace(
+      '<meta name="retroball-api-url" content="/local-api">',
+      '<meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">',
+    ),
+  );
+}
 
 await writeFile(join(output, ".nojekyll"), "");
 

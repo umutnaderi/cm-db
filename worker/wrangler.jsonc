@@ -1,13 +1,27 @@
 {
   "name": "retroball-api",
   "main": "src/index.ts",
-  "compatibility_date": "2026-07-26",
+  "compatibility_date": "2026-07-07",
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "retroball-db",
       "database_id": "86c89ae2-8efc-4a87-b364-6331a7fa984f"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FRIEND_MATCH_ROOMS",
+        "class_name": "FriendMatchRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "friend-match-room-v1",
+      "new_sqlite_classes": ["FriendMatchRoom"]
     }
   ],
   "observability": {

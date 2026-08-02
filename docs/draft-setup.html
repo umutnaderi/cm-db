@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Draft Setup · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260731-60">
+    <link rel="stylesheet" href="styles.css?v=20260802-01">
   </head>
   <body class="draft-setup-page">
     <main class="draft-setup-shell">
@@ -34,6 +34,7 @@
             <legend>Mode</legend>
             <div class="draft-choice-grid mode-choices" id="modeChoices">
               <button class="is-selected" type="button" data-value="Classic">Classic</button>
+              <button type="button" data-value="Titan Fight">Titan Fight</button>
               <button type="button" data-value="From memory">From memory</button>
             </div>
           </fieldset>
@@ -60,7 +61,7 @@
                 </button>
                 <div class="draft-suggestions-head">
                   <div>
-                    <span class="draft-panel-kicker">Classic roll</span>
+                    <span class="draft-panel-kicker" id="draftModeKicker">Classic roll</span>
                     <h2>Player choices</h2>
                   </div>
                   <span id="draftProgress">0 / 11</span>
@@ -99,8 +100,8 @@
                   <li>No players selected.</li>
                 </ol>
                 <p class="draft-overall-note">OVR = CA ÷ 2. The captain boost stays hidden and does not alter displayed ratings.</p>
-                <fieldset class="draft-scenario-picker">
-                  <legend>Championship scenario</legend>
+                <fieldset class="draft-scenario-picker" id="draftScenarioPicker">
+                  <legend id="draftScenarioLegend">Championship scenario</legend>
                   <div class="draft-scenario-choices" id="draftScenarioChoices">
                     <button type="button" data-scenario="ucl0304" class="is-selected">
                       <strong>Champions League 03–04</strong>
@@ -110,8 +111,12 @@
                       <strong>Champions League 02–03</strong>
                       <small>Group Stages</small>
                     </button>
+                    <button type="button" data-scenario="titan" hidden>
+                      <strong>Titan Fight</strong>
+                      <small>Eight legendary opponents</small>
+                    </button>
                   </div>
-                  <p>Your group will be drawn when the run begins.</p>
+                  <p id="draftScenarioDescription">Your group will be drawn when the run begins.</p>
                 </fieldset>
                 <button class="draft-simulate-button" id="draftSimulateButton" type="button" disabled>
                   Simulate the Championship <span aria-hidden="true">→</span>
@@ -127,6 +132,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="draft-setup.js?v=20260731-63" type="module"></script>
+    <script src="draft-setup.js?v=20260802-01" type="module"></script>
   </body>
 </html>

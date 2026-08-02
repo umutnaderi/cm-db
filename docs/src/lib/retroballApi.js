@@ -194,12 +194,14 @@ export async function getDraftCandidates({
   seed = Date.now(),
   perDatabase = 18,
   positions = [],
+  minAbility = 100,
   signal,
 } = {}) {
   const searchParams = new URLSearchParams({
     seed: String(seed),
     perDatabase: String(perDatabase),
     poolVersion: "2",
+    minAbility: String(minAbility),
   });
   const requestedPositions = [...new Set(
     (Array.isArray(positions) ? positions : [])
@@ -318,6 +320,23 @@ export async function saveDraftRecord(record, options = {}) {
     signal: options.signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(record),
+  });
+}
+
+export async function createFriendRoom(hostName, options = {}) {
+  return requestJson("/api/friend-rooms", {
+    method: "POST",
+    signal: options.signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hostName }),
+  });
+}
+
+export async function getFriendRoom(code, options = {}) {
+  const normalizedCode = String(code || "").trim().toUpperCase();
+  if (!normalizedCode) throw new Error("A room code is required.");
+  return requestJson(`/api/friend-rooms/${encodeURIComponent(normalizedCode)}`, {
+    signal: options.signal,
   });
 }
 

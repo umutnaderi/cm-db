@@ -1,19 +1,28 @@
 import {
+  API_BASE,
   getDraftRecords,
   getPlayer,
   getPlayerMetrics,
   saveDraftRecord,
   saveDraftSquad,
   searchPlayers,
-} from "./src/lib/retroballApi.js?v=20260730-47";
+} from "./src/lib/retroballApi.js?v=20260801-65";
 import {
   createDraftSquad,
   formatDraftSquadText,
 } from "./src/lib/draftSquad.js?v=20260730-47";
+import {
+  createCanonicalMatchTimeline,
+} from "./src/lib/matchTimeline.js?v=20260802-02";
+import {
+  createMatchPlaybackController,
+  estimateServerClockOffset,
+} from "./src/lib/matchPlayback.js?v=20260801-01";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
 const MATCH_PACE_KEY = "retroball-match-commentary-pace-v1";
+const FRIEND_SESSION_KEY = "retroball-friend-session-v1";
 const MATCH_PACES = {
   fast: { label: "Fast", multiplier: 0.58 },
   normal: { label: "Normal", multiplier: 1 },
@@ -134,6 +143,180 @@ const SCENARIOS = {
   },
 };
 
+const TITAN_OPPONENTS = [
+  {
+    key: "titan-brazil-2002",
+    name: "2002 Brazil NT",
+    shortName: "Brazil 2002",
+    database: "cm0102_vanilla_original",
+    filter: { nation: "Brazil" },
+    players: [
+      ["marcos"],
+      ["lucio"],
+      ["edmilson"],
+      ["roque junior"],
+      ["cafu"],
+      ["gilberto silva", "gilberto"],
+      {
+        legacyCanonicalId: "23678",
+        canonicalPublicId: "player_kleberson_brazil_1979",
+        aliases: ["Kléberson", "kleberson"],
+      },
+      ["roberto carlos"],
+      ["ronaldinho"],
+      ["rivaldo"],
+      ["ronaldo"],
+    ],
+  },
+  {
+    key: "titan-france-2000",
+    name: "2000 France NT",
+    shortName: "France 2000",
+    database: "cm0001_vanilla_original",
+    filter: { nation: "France" },
+    players: [
+      ["fabien barthez", "barthez"],
+      ["lilian thuram", "thuram"],
+      ["marcel desailly", "desailly"],
+      ["laurent blanc", "blanc"],
+      ["bixente lizarazu", "lizarazu"],
+      ["patrick vieira", "vieira"],
+      ["didier deschamps", "deschamps"],
+      ["youri djorkaeff", "djorkaeff"],
+      ["zinedine zidane", "zidane"],
+      ["thierry henry", "henry"],
+      ["christophe dugarry", "dugarry"],
+    ],
+  },
+  {
+    key: "titan-real-2000",
+    name: "2000 Real Madrid",
+    shortName: "Real Madrid 2000",
+    database: "cm9900_vanilla_original",
+    filter: { club: "Real Madrid C.F." },
+    players: [
+      ["iker casillas", "casillas"],
+      ["michel salgado", "salgado"],
+      ["aitor karanka", "karanka"],
+      ["ivan helguera", "helguera"],
+      ["roberto carlos"],
+      ["steve mcmanaman", "mcmanaman"],
+      ["fernando redondo", "redondo"],
+      ["ivan campo", "campo"],
+      ["raul"],
+      ["fernando morientes", "morientes"],
+      ["nicolas anelka", "anelka"],
+    ],
+  },
+  {
+    key: "titan-united-1999",
+    name: "1999 Manchester United",
+    shortName: "Manchester United 1999",
+    database: "cm9899_vanilla_original",
+    filter: { club: "Manchester United" },
+    players: [
+      ["peter schmeichel", "schmeichel"],
+      ["gary neville"],
+      ["ronny johnsen"],
+      ["jaap stam", "stam"],
+      ["denis irwin", "irwin"],
+      ["ryan giggs", "giggs"],
+      ["david beckham", "beckham"],
+      ["nicky butt", "butt"],
+      ["jesper blomqvist", "blomqvist"],
+      ["dwight yorke", "yorke"],
+      ["andy cole"],
+    ],
+  },
+  {
+    key: "titan-real-2002",
+    name: "2002 Real Madrid",
+    shortName: "Real Madrid 2002",
+    database: "cm0102_vanilla_original",
+    filter: { club: "Real Madrid C.F." },
+    players: [
+      ["cesar"],
+      ["michel salgado", "salgado"],
+      ["fernando hierro", "hierro"],
+      ["ivan helguera", "helguera"],
+      ["roberto carlos"],
+      ["claude makelele", "makelele"],
+      ["luis figo", "figo"],
+      ["santiago solari", "solari"],
+      ["zinedine zidane", "zidane"],
+      ["raul"],
+      ["fernando morientes", "morientes"],
+    ],
+  },
+  {
+    key: "titan-portugal-2004",
+    name: "2004 Portugal NT",
+    shortName: "Portugal 2004",
+    database: "cm0304_vanilla_original",
+    filter: { nation: "Portugal" },
+    players: [
+      ["ricardo"],
+      ["miguel"],
+      ["jorge andrade"],
+      ["ricardo carvalho"],
+      ["nuno valente"],
+      ["maniche"],
+      ["costinha"],
+      ["cristiano ronaldo"],
+      ["deco"],
+      ["luis figo", "figo"],
+      ["pauleta"],
+    ],
+  },
+  {
+    key: "titan-liverpool-2001",
+    name: "2001 Liverpool",
+    shortName: "Liverpool 2001",
+    database: "cm0102_vanilla_original",
+    filter: { club: "Liverpool" },
+    players: [
+      ["sander westerveld", "westerveld"],
+      ["markus babbel", "babbel"],
+      ["sami hyypia", "hyypia"],
+      ["stephane henchoz", "henchoz"],
+      ["jamie carragher", "carragher"],
+      ["gary mcallister", "mcallister"],
+      ["steven gerrard", "gerrard"],
+      ["dietmar hamann", "hamann"],
+      ["john arne riise", "riise"],
+      ["emile heskey", "heskey"],
+      ["michael owen", "owen"],
+    ],
+  },
+  {
+    key: "titan-lazio-1999",
+    name: "1999 Lazio",
+    shortName: "Lazio 1999",
+    database: "cm9900_vanilla_original",
+    filter: { club: "Lazio" },
+    players: [
+      ["luca marchegiani", "marchegiani"],
+      ["paolo negro", "negro"],
+      ["alessandro nesta", "nesta"],
+      ["sinisa mihajlovic", "mihajlovic"],
+      ["giuseppe pancaro", "pancaro"],
+      ["dejan stankovic", "stankovic"],
+      {
+        legacyCanonicalId: "81217",
+        canonicalPublicId: "player_juan_sebastian_veron_argentina_1975",
+        aliases: ["Juan Sebastián Verón", "veron"],
+      },
+      ["matias almeyda", "almeyda"],
+      ["pavel nedved", "nedved"],
+      ["roberto mancini", "mancini"],
+      ["simone inzaghi", "inzaghi"],
+    ],
+  },
+];
+const TITAN_BY_KEY = new Map(
+  TITAN_OPPONENTS.map((opponent) => [opponent.key, opponent]),
+);
+
 const elements = {
   seed: document.querySelector("#runSeed"),
   teamName: document.querySelector("#runTeamName"),
@@ -149,8 +332,10 @@ const elements = {
   squadList: document.querySelector("#runSquadList"),
   bracketPanel: document.querySelector("#runBracketPanel"),
   bracket: document.querySelector("#runBracket"),
+  tablePanel: document.querySelector("#runTablePanel"),
   resultCard: document.querySelector("#runResultCard"),
   recordsPanel: document.querySelector("#runRecordsPanel"),
+  recordsClose: document.querySelector("#runRecordsClose"),
   recordForm: document.querySelector("#runRecordForm"),
   recordUsername: document.querySelector("#runRecordUsername"),
   recordStatus: document.querySelector("#runRecordStatus"),
@@ -162,6 +347,27 @@ function readJsonStorage(key, fallback) {
     return JSON.parse(localStorage.getItem(key) || "") || fallback;
   } catch {
     return fallback;
+  }
+}
+
+function friendSessionFromPage() {
+  const read = (params) => {
+    const session = {
+      code: String(params?.get("room") || "").toUpperCase(),
+      token: params?.get("token") || "",
+      role: params?.get("role") === "host" ? "host" : "guest",
+      name: sessionStorage.getItem("retroball-friend-name") || "Manager",
+    };
+    return /^[A-HJ-NP-Z2-9]{6}$/.test(session.code) &&
+      /^[A-Za-z0-9_-]{32}$/.test(session.token) ? session : null;
+  };
+  const fromHash = read(new URLSearchParams(window.location.hash.replace(/^#/, "")));
+  if (fromHash) return fromHash;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(FRIEND_SESSION_KEY) || "null");
+    return stored ? read(new URLSearchParams(stored)) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -200,6 +406,16 @@ function seededRandom(seed) {
     result ^= result + Math.imul(result ^ result >>> 7, result | 61);
     return ((result ^ result >>> 14) >>> 0) / 4294967296;
   };
+}
+
+function seededShuffle(items, seed) {
+  const random = seededRandom(seed);
+  const shuffled = items.slice();
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled;
 }
 
 function clamp(minimum, maximum, value) {
@@ -409,10 +625,21 @@ function normalizedEngineRatings(player) {
   };
 }
 
-const team = readJsonStorage(TEAM_STORAGE_KEY, null);
-const sharedSquad = createDraftSquad(team);
-const runSeed = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
+const friendSession = friendSessionFromPage();
+const isFriendMatch = Boolean(friendSession);
+const draftedTeam = readJsonStorage(TEAM_STORAGE_KEY, null);
+let team = draftedTeam;
+let sharedSquad = createDraftSquad(team);
+let runSeed = `${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
+const isTitanFight = !isFriendMatch && team?.mode === "Titan Fight";
+let friendOpponentName = "Opponent XI";
 const scenario = SCENARIOS[team?.scenario] || SCENARIOS.ucl0304;
+const titanOrder = isTitanFight
+  ? seededShuffle(
+      TITAN_OPPONENTS.map((opponent) => opponent.key),
+      hashString(`${runSeed}:titan-order`),
+    )
+  : [];
 const groupKeys = Object.keys(scenario.groups);
 const groupRandom = seededRandom(hashString(`${runSeed}:${scenario.key}:group-draw`));
 const groupName = groupKeys[Math.floor(groupRandom() * groupKeys.length)];
@@ -428,7 +655,8 @@ const rosterMemory = new Map();
 const penaltyRatingCache = new Map();
 const playerMetricCache = new Map();
 const state = {
-  phase: "group",
+  phase: isTitanFight ? "titan" : "group",
+  titanIndex: 0,
   groupRound: 0,
   groupPlace: 0,
   groupCompanion: groupOpponents[0],
@@ -471,7 +699,11 @@ function emptyStanding(key) {
 for (const key of groupTeams) state.table.set(key, emptyStanding(key));
 
 function teamLabel(key) {
-  return key === "user" ? team.teamName : CLUBS[key]?.name || key;
+  return key === "user"
+    ? team.teamName
+    : key === "friend-guest"
+      ? friendOpponentName
+      : TITAN_BY_KEY.get(key)?.name || CLUBS[key]?.name || key;
 }
 
 function validRoster(players) {
@@ -487,12 +719,108 @@ function validRoster(players) {
 }
 
 async function opponentRoster(key) {
-  const cacheKey = `${scenario.database}:${key}`;
+  const titan = TITAN_BY_KEY.get(key);
+  const database = titan?.database || scenario.database;
+  const cacheKey = `${database}:${key}`;
   if (rosterMemory.has(cacheKey)) return rosterMemory.get(cacheKey);
   if (Array.isArray(opponentCache[cacheKey]) && opponentCache[cacheKey].length) {
     const cached = validRoster(opponentCache[cacheKey]);
     rosterMemory.set(cacheKey, cached);
     return cached;
+  }
+
+  if (titan) {
+    const response = await searchPlayers({
+      database,
+      q: "",
+      ...titan.filter,
+      pageSize: 100,
+    });
+    const available = response.items.slice();
+    const selected = [];
+    const normalize = (value) =>
+      String(value || "")
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLocaleLowerCase("en-US")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+    const matchesPlayerSpec = (player, playerSpec) => {
+      const aliases = Array.isArray(playerSpec)
+        ? playerSpec
+        : playerSpec.aliases;
+      const canonicalPublicId = Array.isArray(playerSpec)
+        ? ""
+        : String(playerSpec.canonicalPublicId || "");
+      const returnedCanonicalPublicId = String(
+        player.canonical_player_public_id || "",
+      );
+      if (canonicalPublicId && returnedCanonicalPublicId) {
+        return returnedCanonicalPublicId === canonicalPublicId;
+      }
+      const normalizedAliases = aliases.map(normalize);
+      const names = [
+        playerName(player),
+        player.display_name,
+        player.full_name,
+        player.common_name,
+        player.canonical_player_name,
+      ]
+        .map(normalize)
+        .filter(Boolean);
+      return normalizedAliases.some((alias) =>
+        names.some((name) => name === alias || name.endsWith(` ${alias}`)),
+      );
+    };
+    for (const playerSpec of titan.players) {
+      const aliases = Array.isArray(playerSpec)
+        ? playerSpec
+        : playerSpec.aliases;
+      let index = available.findIndex((player) =>
+        matchesPlayerSpec(player, playerSpec),
+      );
+      if (index >= 0) {
+        selected.push(available.splice(index, 1)[0]);
+        continue;
+      }
+      const used = new Set(selected.map(playerIdentity));
+      const fallbackDatabases = [
+        database,
+        "cm0304_vanilla_original",
+        "cm0203_vanilla_original",
+        "cm0102_vanilla_original",
+        "cm0001_vanilla_original",
+        "cm9900_vanilla_original",
+        "cm9899_vanilla_original",
+      ].filter(
+        (item, databaseIndex, items) => items.indexOf(item) === databaseIndex,
+      );
+      let player = null;
+      for (const fallbackDatabase of fallbackDatabases) {
+        const fallback = await searchPlayers({
+          database: fallbackDatabase,
+          q: aliases[0],
+          pageSize: 12,
+        });
+        player = fallback.items.find(
+          (item) =>
+            matchesPlayerSpec(item, playerSpec) &&
+            !used.has(playerIdentity(item)),
+        );
+        if (player) break;
+      }
+      if (!player) {
+        throw new Error(
+          `Could not load ${titan.shortName}: ${aliases[0]} is missing from the database set.`,
+        );
+      }
+      selected.push(player);
+    }
+    const roster = validRoster(selected);
+    rosterMemory.set(cacheKey, roster);
+    opponentCache[cacheKey] = roster;
+    writeJsonStorage(OPPONENT_CACHE_KEY, opponentCache);
+    return roster;
   }
 
   const club = CLUBS[key];
@@ -542,8 +870,8 @@ function opponentOverall(roster) {
   return Math.round(teamModel(roster).overall);
 }
 
-function userPlayers() {
-  return team.players.map((entry) => {
+function playersForTeam(sourceTeam) {
+  return sourceTeam.players.map((entry) => {
     const metric = playerMetricCache.get(playerIdentity(entry.player)) || {};
     return {
       ...entry.player,
@@ -567,8 +895,12 @@ function userPlayers() {
   });
 }
 
-function visibleSquadRatings() {
-  const entries = team.players.map((entry) => ({
+function userPlayers() {
+  return playersForTeam(team);
+}
+
+function visibleSquadRatings(sourceTeam = team) {
+  const entries = sourceTeam.players.map((entry) => ({
     line: entry.line,
     overall: clamp(0, 99, Math.round(
       (Number(entry.player?.current_ability) || Number(entry.overall) * 2 || 0) / 2,
@@ -837,8 +1169,15 @@ function duelAttribute(player, labels, zone, random) {
 function localizedDuel(attacker, defender, attackLabels, defenceLabels, minute, random, zone = -1) {
   const attackerCondition = conditionMultiplier(attacker, minute);
   const defenderCondition = conditionMultiplier(defender, minute);
-  const attackPower = duelAttribute(attacker, attackLabels, zone, random) * attackerCondition;
-  const defencePower = duelAttribute(defender, defenceLabels, zone, random) * defenderCondition;
+  const auraMultiplier = (player) => clamp(
+    1,
+    1.14,
+    1 + Math.max(0, Number(player?.current_ability || 0) - 180) / 90,
+  );
+  const attackPower = duelAttribute(attacker, attackLabels, zone, random)
+    * attackerCondition * auraMultiplier(attacker);
+  const defencePower = duelAttribute(defender, defenceLabels, zone, random)
+    * defenderCondition * auraMultiplier(defender);
   const probability = attackPower + defencePower > 0
     ? attackPower / (attackPower + defencePower)
     : 0.5;
@@ -1012,8 +1351,22 @@ function presentationWeight(kind) {
 
 function withSpatialMetadata(event, actor, random) {
   const spatial = spatialAction(event.kind, actor, random, event.goalType);
+  const ability = Number(actor?.current_ability || 0);
+  const signatureEligible = ability >= 180 && (
+    event.goal || event.duelWon === true || ["chance", "through-ball", "counter"].includes(event.kind)
+  );
+  const signatureMoment = signatureEligible &&
+    hashString(`${playerIdentity(actor)}:${event.matchSecond}:${event.kind}`) % 100 < 72;
+  const signatureText = signatureMoment
+    ? event.goal
+      ? `${event.text} ${playerName(actor)} turns elite ability into an inevitable finish.`
+      : `${event.text} ${playerName(actor)} bends the match to elite technique.`
+    : event.text;
   return {
     ...event,
+    text: signatureText,
+    signatureMoment,
+    starAbility: signatureMoment ? ability : null,
     zoneFrom: event.zoneFrom ?? spatial.from,
     zoneTo: event.zoneTo ?? spatial.to,
     action: event.action || spatial.action,
@@ -1021,7 +1374,7 @@ function withSpatialMetadata(event, actor, random) {
       ? event.side === "user" ? "opponent" : "user"
       : event.side),
     actionSeconds: Math.round(4 + random() * 8 * presentationWeight(event.kind)),
-    presentationWeight: presentationWeight(event.kind),
+    presentationWeight: presentationWeight(event.kind) + (signatureMoment ? 0.35 : 0),
   };
 }
 
@@ -1120,7 +1473,7 @@ function goalEvent(spec, players, opponents, random, forcedGoalType = "", contex
     scorer = context.defender || weightedPlayer(opponentPool, random, "defence", defenderScore);
     actorSide = spec.side === "user" ? "opponent" : "user";
     goalCredit = false;
-    text = `Absolute chaos in the six-yard boxâ€”${playerName(scorer)} inadvertently deflects the set piece past ${playerName(keeper)} under immense pressure.`;
+    text = `Absolute chaos in the six-yard box—${playerName(scorer)} inadvertently deflects the set piece past ${playerName(keeper)} under immense pressure.`;
   } else if (goalType === "own-goal") {
     scorer = weightedPlayer(opponentPool, random, "defence", defenderScore);
     actorSide = spec.side === "user" ? "opponent" : "user";
@@ -1365,6 +1718,9 @@ function buildTransitionTimeline({
   let side = random() < 0.5 ? "user" : "opponent";
   let zone = 6 + Math.floor(random() * 3);
   let counterSteps = 0;
+  let allInSide = "";
+  let pressureSide = side;
+  let pressureTicks = 0;
 
   const opposite = (value) => value === "user" ? "opponent" : "user";
   const active = (activeSide) => {
@@ -1385,14 +1741,26 @@ function buildTransitionTimeline({
     counterSteps = 0;
   };
   const addGoal = (goalType, players, opponents, context = {}) => {
-    events.push(goalEvent(
+    const goal = goalEvent(
       { ...moment(), kind: "goal" },
       players,
       opponents,
       random,
       goalType,
       context,
-    ));
+    );
+    if (allInSide) {
+      goal.allIn = true;
+      goal.tacticalRiskSide = allInSide;
+      goal.text += side === allInSide
+        ? " The trailing side's all-out attack finally breaks through."
+        : " The all-out attack is punished by a ruthless counter.";
+    }
+    if (pressureTicks >= 3) {
+      goal.pressureWave = true;
+      goal.momentumLevel = Math.min(5, pressureTicks);
+    }
+    events.push(goal);
     resetFromKickoff(opposite(side));
   };
   const addDuelEvent = ({
@@ -1407,7 +1775,7 @@ function buildTransitionTimeline({
     possession,
     bypassedZone = null,
   }) => {
-    events.push(withSpatialMetadata({
+    const event = withSpatialMetadata({
       ...moment(),
       kind,
       goal: false,
@@ -1425,18 +1793,42 @@ function buildTransitionTimeline({
       scorer: playerName(actor),
       scorerPlayer: playerReference(actor),
       text,
-    }, actor, random));
+    }, actor, random);
+    if (pressureTicks >= 3) {
+      event.pressureWave = true;
+      event.momentumLevel = Math.min(5, pressureTicks);
+    }
+    events.push(event);
     highlightCount += 1;
   };
 
   for (let tick = 0; tick < maxTicks && matchSecond < lastSecond; tick += 1) {
     matchSecond = Math.min(lastSecond, matchSecond + 28 + Math.floor(random() * 58));
+    const minute = matchSecond / 60;
+    if (minute >= 85) {
+      const userGoals = events.filter((event) => event.goal && event.side === "user").length;
+      const opponentGoals = events.filter((event) => event.goal && event.side === "opponent").length;
+      allInSide = userGoals === opponentGoals
+        ? ""
+        : userGoals < opponentGoals ? "user" : "opponent";
+      if (allInSide && side !== allInSide && random() < 0.42) {
+        side = allInSide;
+        zone = 3 + Math.floor(random() * 3);
+        counterSteps = 0;
+      }
+    } else {
+      allInSide = "";
+    }
+    if (side === pressureSide) pressureTicks += 1;
+    else {
+      pressureSide = side;
+      pressureTicks = 1;
+    }
     const players = active(side);
     const opponents = active(opposite(side));
     if (!players.length || !opponents.length) break;
     const attackingPool = outfield(players).length ? outfield(players) : players;
     const defendingPool = outfield(opponents).length ? outfield(opponents) : opponents;
-    const minute = matchSecond / 60;
     const row = Math.floor(zone / 3);
     const column = zone % 3;
     const preferredLine = row >= 3 ? "defence" : row === 2 ? "midfield" : "attack";
@@ -1449,6 +1841,20 @@ function buildTransitionTimeline({
       conditionedScore(player, transitionScore, minute));
     const defender = defenderForColumn(defendingPool, column, minute, random);
     const keeper = goalkeeper(opponents);
+    const shotChance = (shooter, targetKeeper, atMinute, baseChance, score = attackerScore) => {
+      const tacticalMultiplier = !allInSide
+        ? 1
+        : side === allInSide ? 1.4 : 1.28;
+      const momentumMultiplier = pressureTicks >= 3
+        ? 1 + Math.min(0.2, (pressureTicks - 2) * 0.045)
+        : 1;
+      return clamp(
+        0.008,
+        0.46,
+        transitionShotChance(shooter, targetKeeper, atMinute, baseChance, score)
+          * tacticalMultiplier * momentumMultiplier,
+      );
+    };
 
     if (random() < 0.014) {
       const identity = `${opposite(side)}:${playerIdentity(defender)}`;
@@ -1480,7 +1886,7 @@ function buildTransitionTimeline({
         const taker = setPieceTaker(players, "free-kick");
         const direct = column === 1 && random() < 0.58;
         if (direct) {
-          const freeKickChance = transitionShotChance(
+          const freeKickChance = shotChance(
             taker,
             keeper,
             minute,
@@ -1505,7 +1911,7 @@ function buildTransitionTimeline({
             1,
           );
           if (freeKickDuel.won
-            && random() < transitionShotChance(target, keeper, minute, 0.14, headerScore)) {
+            && random() < shotChance(target, keeper, minute, 0.14, headerScore)) {
             addGoal("free-kick-cross", players, opponents, { provider: taker, scorer: target });
             continue;
           }
@@ -1532,7 +1938,7 @@ function buildTransitionTimeline({
         if (bylineDuel.won) {
           const receiver = weightedPlayer(attackingPool, random, "attack", (player) =>
             conditionedScore(player, firstTouchFinishScore, minute));
-          if (random() < transitionShotChance(receiver, keeper, minute, 0.3, firstTouchFinishScore)) {
+          if (random() < shotChance(receiver, keeper, minute, 0.3, firstTouchFinishScore)) {
             addGoal("cut-back", players, opponents, { provider: actor, scorer: receiver });
             continue;
           }
@@ -1553,7 +1959,7 @@ function buildTransitionTimeline({
       const shooter = weightedPlayer(attackingPool, random, longRange ? "midfield" : "attack", (player) =>
         conditionedScore(player, longRange ? longRangeScore : attackerScore, minute));
       const baseChance = longRange ? 0.075 : column === 1 ? 0.19 : 0.11;
-      if (random() < transitionShotChance(
+      if (random() < shotChance(
         shooter,
         keeper,
         minute,
@@ -1585,7 +1991,7 @@ function buildTransitionTimeline({
           1,
         );
         if (reboundDuel.won
-          && random() < transitionShotChance(poacher, keeper, minute, 0.36, poacherScore)) {
+          && random() < shotChance(poacher, keeper, minute, 0.36, poacherScore)) {
           addGoal("rebound", players, opponents, { scorer: poacher });
           continue;
         }
@@ -1619,7 +2025,7 @@ function buildTransitionTimeline({
           continue;
         }
         if (aerialDuel.won
-          && random() < transitionShotChance(target, keeper, minute, volley ? 0.12 : 0.15, finishScore)) {
+          && random() < shotChance(target, keeper, minute, volley ? 0.12 : 0.15, finishScore)) {
           addGoal(volley ? "corner-volley" : "corner-header", players, opponents, { provider: taker, scorer: target });
           continue;
         }
@@ -1708,7 +2114,7 @@ function buildTransitionTimeline({
         zone,
       );
       if (pressDuel.won
-        && random() < transitionShotChance(presser, keeper, minute, 0.29, pressingScore)) {
+        && random() < shotChance(presser, keeper, minute, 0.29, pressingScore)) {
         addGoal("high-press", players, opponents, { scorer: presser });
         continue;
       }
@@ -1733,6 +2139,29 @@ function buildTransitionTimeline({
     rivalGoals: events.filter((event) => event.goal && event.side === "opponent").length,
     ticks: maxTicks,
   };
+}
+
+function annotatePressureWaves(events) {
+  let streakSide = "";
+  let streakCount = 0;
+  let previousSecond = -Infinity;
+  for (const event of events.slice().sort((left, right) => left.matchSecond - right.matchSecond)) {
+    if (event.card) continue;
+    const controlSide = event.side;
+    const continuesWave = controlSide === streakSide &&
+      Number(event.matchSecond) - previousSecond <= 8 * 60;
+    streakCount = continuesWave ? streakCount + 1 : 1;
+    streakSide = controlSide;
+    previousSecond = Number(event.matchSecond);
+    if (streakCount < 3) continue;
+    event.pressureWave = true;
+    event.momentumLevel = Math.min(5, streakCount);
+    event.presentationWeight = Number(event.presentationWeight || 1) + 0.22;
+    if (streakCount === 3) {
+      event.text = `Pressure wave! ${event.text}`;
+    }
+  }
+  return events;
 }
 
 function manOfTheMatch(events, userModel, rivalModel, random, winnerSide) {
@@ -1808,6 +2237,7 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
     start: 3,
     end: 89,
   });
+  annotatePressureWaves(regularTimeline.events);
   const events = regularTimeline.events;
   let userGoals = regularTimeline.userGoals;
   let rivalGoals = regularTimeline.rivalGoals;
@@ -1825,6 +2255,7 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
       intensity: 1.08,
       disciplinary: regularTimeline.disciplinary,
     });
+    annotatePressureWaves(extraTimeline.events);
     userGoals += extraTimeline.userGoals;
     rivalGoals += extraTimeline.rivalGoals;
     extraTimeEvents = extraTimeline.events;
@@ -1840,7 +2271,7 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
 
   return {
     opponentKey,
-    opponentName: CLUBS[opponentKey].name,
+    opponentName: teamLabel(opponentKey),
     stage,
     userGoals,
     rivalGoals,
@@ -1873,6 +2304,11 @@ function matchSimulation(opponentKey, roster, stage, hidden = false) {
       rivalLateCondition: rivalLateCondition.toFixed(2),
     },
   };
+}
+
+function finalizeMatchResult(result) {
+  result.timeline = createCanonicalMatchTimeline(result);
+  return result;
 }
 
 function attributeValue(profile, label) {
@@ -2046,7 +2482,20 @@ function dominatorSummary() {
 }
 
 function currentRecordStage() {
-  if (state.champion) return { label: "Champion", rank: scenario.stages.length + 4 };
+  if (state.champion) {
+    return {
+      label: "Champion",
+      rank: isTitanFight
+        ? TITAN_OPPONENTS.length + 1
+        : scenario.stages.length + 4,
+    };
+  }
+  if (isTitanFight) {
+    return {
+      label: `${state.userRecord.played}/${TITAN_OPPONENTS.length}`,
+      rank: state.userRecord.played,
+    };
+  }
   if (state.outcomeStage) {
     const rank = Math.max(1, scenario.stages.indexOf(state.outcomeStage) + 4);
     return { label: state.outcomeStage, rank };
@@ -2065,9 +2514,10 @@ function recordPayload(username) {
   const dominator = dominatorSummary();
   const stage = currentRecordStage();
   return {
-    runId: `${scenario.key}:${groupName}:${runSeed}:${team.teamName}`,
+    runId: `${isTitanFight ? "titan" : scenario.key}:${groupName}:${runSeed}:${team.teamName}`,
     squadSeed: sharedSquad.seed,
     username,
+    mode: isTitanFight ? "Titan Fight" : team.mode || "Classic",
     teamName: team.teamName,
     stage: stage.label,
     stageRank: stage.rank,
@@ -2103,20 +2553,30 @@ function linkedRecordPlayer(name, database, sourcePersonId, suffix = "") {
 function renderRecordRows(items = []) {
   elements.recordRows.replaceChildren();
   if (!items.length) {
-    elements.recordRows.innerHTML = '<tr><td colspan="6">No saved runs yet.</td></tr>';
+    elements.recordRows.innerHTML =
+      '<tr><td colspan="7">No saved runs yet.</td></tr>';
     return;
   }
   items.forEach((item) => {
+    const storedStage = String(item.stage || "");
+    const titanStage = storedStage.match(/(?:Titan\s*)?(\d+\/8)/i)?.[1] || "";
+    const mode = item.mode === "Titan Fight" || titanStage
+      ? "Titan Fight"
+      : "Classic";
+    const stage = item.champion ? "Champion" : titanStage || storedStage;
     const row = document.createElement("tr");
     row.innerHTML = `
       <th>${escapeHtml(item.username)}</th>
-      <td>${escapeHtml(item.champion ? "Champion" : item.stage)}</td>
+      <td>${escapeHtml(mode)}</td>
+      <td>${escapeHtml(stage)}</td>
       <td>${linkedRecordPlayer(item.captain_name, item.captain_database, item.captain_source_person_id)}</td>
       <td>${linkedRecordPlayer(item.top_scorer_name, item.top_scorer_database, item.top_scorer_source_person_id, ` · ${item.top_scorer_goals}`)}</td>
       <td>${linkedRecordPlayer(item.dominator_name, item.dominator_database, item.dominator_source_person_id, ` · ${item.dominator_awards}`)}</td>
-      <td>${item.squad_seed
-        ? `<a href="draft-squad.html?seed=${encodeURIComponent(item.squad_seed)}">View XI</a>`
-        : "—"}</td>
+      <td>${
+        item.squad_seed
+          ? `<a href="draft-squad.html?seed=${encodeURIComponent(item.squad_seed)}">View XI</a>`
+          : "—"
+      }</td>
     `;
     elements.recordRows.append(row);
   });
@@ -2183,13 +2643,17 @@ async function loadRecordTable() {
   }
 }
 
-function renderRecordOpportunity() {
-  if (!state.userRecord.played) return;
+function openHallOfFame() {
   void persistSharedSquad().catch(() => {});
   elements.recordsPanel.hidden = false;
-  const stage = currentRecordStage();
-  elements.recordStatus.textContent = `Save your current ${stage.label.toLowerCase()} record.`;
+  document.body.classList.add("is-hall-of-fame-open");
   void loadRecordTable();
+  elements.recordsClose.focus();
+}
+
+function closeHallOfFame() {
+  elements.recordsPanel.hidden = true;
+  document.body.classList.remove("is-hall-of-fame-open");
 }
 
 async function saveCurrentRecord(event) {
@@ -2207,6 +2671,7 @@ async function saveCurrentRecord(event) {
     state.savedUsername = username;
     elements.recordStatus.textContent = "Record saved. Saving again updates this run.";
     await loadRecordTable();
+    openHallOfFame();
   } catch (error) {
     elements.recordStatus.textContent = error.message || "Could not save this record.";
   } finally {
@@ -2252,7 +2717,6 @@ function updateUserRecord(result) {
     shootout: result.shootout || null,
     manOfMatch: result.manOfMatch || null,
   });
-  renderRecordOpportunity();
 }
 
 function sortedTable() {
@@ -2284,9 +2748,9 @@ function renderTable() {
   });
 }
 
-function renderSquad() {
-  const ratings = visibleSquadRatings();
-  elements.teamName.textContent = team.teamName;
+function renderSquad(sourceTeam = team) {
+  const ratings = visibleSquadRatings(sourceTeam);
+  elements.teamName.textContent = sourceTeam.teamName;
   elements.teamOverall.textContent = `${ratings.team} OVR`;
   elements.lineRatings.innerHTML = `
     <span><small>Attack</small><strong>${ratings.attack}</strong></span>
@@ -2294,7 +2758,7 @@ function renderSquad() {
     <span><small>Defence</small><strong>${ratings.defence}</strong></span>
   `;
   elements.squadList.replaceChildren();
-  team.players.forEach((entry) => {
+  sourceTeam.players.forEach((entry) => {
     const visibleOverall = clamp(0, 99, Math.round(
       (Number(entry.player?.current_ability) || Number(entry.overall) * 2 || 0) / 2,
     ));
@@ -2317,10 +2781,15 @@ function eventMarkup(event) {
         ? "● "
         : "";
   const actor = `<strong>${marker}${escapeHtml(event.scorer)}</strong>`;
+  const badges = [
+    event.signatureMoment ? '<b class="run-event-badge is-signature">Titan moment</b>' : "",
+    event.pressureWave ? '<b class="run-event-badge is-pressure">Pressure wave</b>' : "",
+    event.allIn ? '<b class="run-event-badge is-all-in">All in</b>' : "",
+  ].join("");
   return `
-    <li class="${event.goal ? "is-goal" : ""} ${event.card ? `is-${event.card}-card` : ""} ${event.side === "opponent" ? "is-opponent" : ""}">
+    <li class="${event.goal ? "is-goal" : ""} ${event.card ? `is-${event.card}-card` : ""} ${event.side === "opponent" ? "is-opponent" : ""} ${event.signatureMoment ? "is-signature" : ""} ${event.pressureWave ? "is-pressure-wave" : ""}">
       <span class="run-event-team run-event-team-user">${event.side === "user" ? actor : ""}</span>
-      <span class="run-event-commentary"><time>${event.minute}'</time><span>${escapeHtml(event.text)}</span></span>
+      <span class="run-event-commentary"><time>${event.minute}'</time><span>${badges}${escapeHtml(event.text)}</span></span>
       <span class="run-event-team run-event-team-opponent">${event.side === "opponent" ? actor : ""}</span>
     </li>
   `;
@@ -2389,6 +2858,8 @@ function setMiniPitchZone(pitch, event, endpoint = "to", opponentName = "Opponen
     : event.side;
   pitch.dataset.possession = possession;
   pitch.dataset.action = event.action || event.kind || "pass";
+  pitch.dataset.signature = event.signatureMoment ? "true" : "false";
+  pitch.dataset.pressure = event.pressureWave ? event.side : "";
   pitch.querySelectorAll("[data-zone]").forEach((cell) => {
     cell.classList.toggle("is-active", Number(cell.dataset.zone) === zone);
   });
@@ -2523,7 +2994,87 @@ async function animatePenaltyShootout(result, article, scoreDisplay, clockDispla
   scoreDisplay.textContent = `${result.userGoals} – ${result.rivalGoals} (${ours}–${theirs} pens)`;
 }
 
-async function animateMatch(result) {
+function renderEventSnapshot(list, events) {
+  if (!list || Number(list.dataset.renderedCount || -1) === events.length) return;
+  list.innerHTML = events.map(eventMarkup).join("");
+  list.dataset.renderedCount = String(events.length);
+  list.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderPenaltySnapshot(section, snapshot) {
+  if (!section) return;
+  const attempts = snapshot.penalties;
+  section.hidden = attempts.length === 0 && snapshot.phase !== "penalties" && !snapshot.completed;
+  const list = section.querySelector("[data-penalty-events]");
+  if (Number(list.dataset.renderedCount || -1) !== attempts.length) {
+    list.innerHTML = attempts.map((attempt) => `
+      <li>
+        <span class="${attempt.userScored ? "is-scored" : "is-missed"}">${escapeHtml(attempt.userTaker)} <b aria-label="${attempt.userScored ? "scored" : "missed"}">${attempt.userScored ? "○" : "×"}</b></span>
+        <span class="${attempt.opponentScored ? "is-scored" : "is-missed"}"><b aria-label="${attempt.opponentScored ? "scored" : "missed"}">${attempt.opponentScored ? "○" : "×"}</b> ${escapeHtml(attempt.opponentTaker)}</span>
+      </li>
+    `).join("");
+    list.dataset.renderedCount = String(attempts.length);
+  }
+  section.querySelector("[data-penalty-score]").textContent =
+    `${snapshot.penaltyUserGoals} – ${snapshot.penaltyRivalGoals}`;
+}
+
+function renderCanonicalMatchSnapshot(view, snapshot) {
+  const regulationEvents = snapshot.commentary.filter((event) =>
+    event.timelinePhase === "regulation");
+  const extraTimeEvents = snapshot.commentary.filter((event) =>
+    event.timelinePhase === "extra-time");
+  renderEventSnapshot(view.eventList, regulationEvents);
+  renderEventSnapshot(view.extraEventList, extraTimeEvents);
+  if (view.extraSection) {
+    view.extraSection.hidden = extraTimeEvents.length === 0 &&
+      !["extra-time", "penalties", "complete"].includes(snapshot.phase);
+  }
+  renderPenaltySnapshot(view.penaltySection, snapshot);
+
+  const possession = snapshot.possession || { user: 50, opponent: 50, windowMinutes: 10 };
+  view.possessionBar.style.setProperty("--home-possession", `${possession.user}%`);
+  view.possessionBar.setAttribute(
+    "aria-label",
+    `${view.homeName} ${possession.user}% possession, ${view.opponentName} ${possession.opponent}% over the last ${possession.windowMinutes} minutes`,
+  );
+  view.possessionHome.textContent = `${possession.user}%`;
+  view.possessionAway.textContent = `${possession.opponent}%`;
+  view.possessionWrap.dataset.dominant = possession.dominantSide || "";
+  view.suspense.hidden = !snapshot.suspense;
+  view.suspense.querySelector("strong").textContent = snapshot.suspense?.label || "CHANCE!";
+  view.article.classList.toggle("is-suspense", Boolean(snapshot.suspense));
+
+  view.clockDisplay.textContent = snapshot.phase === "penalties"
+    ? "PEN"
+    : formatMatchClock(snapshot.matchSecond, snapshot.stoppageBase);
+  view.scoreDisplay.textContent = snapshot.penalties.length
+    ? `${snapshot.userGoals} – ${snapshot.rivalGoals} (${snapshot.penaltyUserGoals}–${snapshot.penaltyRivalGoals} pens)`
+    : `${snapshot.userGoals} – ${snapshot.rivalGoals}`;
+
+  const latest = snapshot.latestEvent;
+  if (latest && latest.timelineId !== view.latestTimelineId) {
+    view.latestTimelineId = latest.timelineId;
+    const isLiveArrival = snapshot.elapsedMs - latest.timelineAtMs < 350;
+    if (isLiveArrival) {
+      setMiniPitchZone(view.pitch, latest, "from", view.opponentName);
+      window.requestAnimationFrame(() => {
+        if (view.latestTimelineId === latest.timelineId) {
+          setMiniPitchZone(view.pitch, latest, "to", view.opponentName);
+        }
+      });
+    } else {
+      setMiniPitchZone(view.pitch, latest, "to", view.opponentName);
+    }
+  }
+}
+
+async function animateMatch(result, {
+  startAt = Date.now() + 150,
+  offsetMs = 0,
+  lockPace = false,
+} = {}) {
+  const timeline = result.timeline || createCanonicalMatchTimeline(result);
   elements.matches.querySelector(".run-empty")?.remove();
   elements.matches.querySelector(".run-pending-shell")?.remove();
   const shell = document.createElement("details");
@@ -2559,6 +3110,16 @@ async function animateMatch(result) {
         <strong>${escapeHtml(result.opponentName)}</strong>
       </div>
     </header>
+    <section class="run-possession" data-match-possession>
+      <div class="run-possession-heading">
+        <span>${escapeHtml(team.teamName)} <b data-possession-home>50%</b></span>
+        <small>Possession · last 10 minutes</small>
+        <span><b data-possession-away>50%</b> ${escapeHtml(result.opponentName)}</span>
+      </div>
+      <div class="run-possession-bar" data-possession-bar role="img" aria-label="Possession is even at 50 percent">
+        <i class="run-possession-home"></i><i class="run-possession-away"></i>
+      </div>
+    </section>
     <div class="run-formula">
       <span>Team OVR <b>${result.formula.userOvr}</b></span>
       <span>Opponent OVR <b>${result.formula.rivalOvr}</b></span>
@@ -2571,6 +3132,7 @@ async function animateMatch(result) {
       ${miniPitchMarkup()}
       <ol class="run-event-list" data-live-events></ol>
     </div>
+    <div class="run-match-suspense" data-match-suspense hidden><span>Danger</span><strong>CHANCE!</strong></div>
   `;
   shell.append(article);
   elements.matches.append(shell);
@@ -2580,47 +3142,71 @@ async function animateMatch(result) {
   const paceSelect = article.querySelector("[data-match-pace]");
   const pitch = article.querySelector("[data-mini-pitch]");
   const summaryScore = shell.querySelector("[data-summary-score]");
-  const score = { user: 0, opponent: 0 };
-  paceSelect.addEventListener("change", () => {
-    writeJsonStorage(MATCH_PACE_KEY, paceSelect.value);
-  });
-
-  await animatePeriod({
-    startSecond: 0,
-    endSecond: result.regulationEndSecond || 90 * 60,
-    events: result.events,
-    eventList,
-    score,
-    scoreDisplay,
-    clockDisplay,
-    paceSelect,
-    pitch,
-    opponentName: result.opponentName,
-    stoppageBase: 90 * 60,
-  });
-
-  if (result.hasExtraTime) {
-    const extra = document.createElement("section");
-    extra.className = "run-extra-time-section";
-    extra.innerHTML = '<h3>Extra time</h3><ol class="run-event-list" data-extra-events></ol>';
-    article.append(extra);
-    await animatePeriod({
-      startSecond: 90 * 60,
-      endSecond: result.extraTimeEndSecond || 120 * 60,
-      events: result.extraTimeEvents,
-      eventList: extra.querySelector("[data-extra-events]"),
-      score,
-      scoreDisplay,
-      clockDisplay,
-      paceSelect,
-      pitch,
-      opponentName: result.opponentName,
-      stoppageBase: 120 * 60,
-    });
+  const possessionWrap = article.querySelector("[data-match-possession]");
+  const possessionBar = article.querySelector("[data-possession-bar]");
+  const possessionHome = article.querySelector("[data-possession-home]");
+  const possessionAway = article.querySelector("[data-possession-away]");
+  const suspense = article.querySelector("[data-match-suspense]");
+  const extraSection = result.hasExtraTime ? document.createElement("section") : null;
+  if (extraSection) {
+    extraSection.className = "run-extra-time-section";
+    extraSection.hidden = true;
+    extraSection.innerHTML = '<h3>Extra time</h3><ol class="run-event-list" data-extra-events></ol>';
+    article.append(extraSection);
+  }
+  const penaltySection = result.shootout ? document.createElement("section") : null;
+  if (penaltySection) {
+    penaltySection.className = "run-penalty-section";
+    penaltySection.hidden = true;
+    penaltySection.innerHTML = `
+      <h3>Penalty shootout</h3>
+      <div class="run-penalty-score"><span>${escapeHtml(team.teamName)}</span><b data-penalty-score>0 – 0</b><span>${escapeHtml(result.opponentName)}</span></div>
+      <ol class="run-penalty-list" data-penalty-events></ol>
+    `;
+    article.append(penaltySection);
   }
 
-  if (result.shootout) {
-    await animatePenaltyShootout(result, article, scoreDisplay, clockDisplay);
+  const view = {
+    article,
+    scoreDisplay,
+    clockDisplay,
+    eventList,
+    extraSection,
+    extraEventList: extraSection?.querySelector("[data-extra-events]") || null,
+    penaltySection,
+    pitch,
+    possessionWrap,
+    possessionBar,
+    possessionHome,
+    possessionAway,
+    suspense,
+    homeName: team.teamName,
+    opponentName: result.opponentName,
+    latestTimelineId: "",
+  };
+  if (lockPace) {
+    paceSelect.value = "normal";
+    paceSelect.disabled = true;
+    paceSelect.closest("label").hidden = true;
+  }
+  const playback = createMatchPlaybackController({
+    timeline,
+    rate: lockPace ? 1 : 1 / matchPaceMultiplier(paceSelect),
+    onState: (snapshot) => renderCanonicalMatchSnapshot(view, snapshot),
+  });
+  paceSelect.addEventListener("change", () => {
+    writeJsonStorage(MATCH_PACE_KEY, paceSelect.value);
+    playback.setRate(1 / matchPaceMultiplier(paceSelect));
+  });
+  const resyncVisibleMatch = () => {
+    if (!document.hidden) playback.resync();
+  };
+  document.addEventListener("visibilitychange", resyncVisibleMatch);
+  try {
+    await playback.start({ startAt, offsetMs });
+  } finally {
+    document.removeEventListener("visibilitychange", resyncVisibleMatch);
+    playback.stop();
   }
   if (result.manOfMatch) {
     const href = playerHref(result.manOfMatch);
@@ -2657,6 +3243,12 @@ async function animateMatch(result) {
 }
 
 function currentFixture() {
+  if (state.phase === "titan") {
+    const opponentKey = titanOrder[state.titanIndex];
+    return opponentKey
+      ? { stage: `Titan Fight · Battle ${state.titanIndex + 1}/8`, opponentKey }
+      : null;
+  }
   if (state.phase === "group") {
     const round = groupRounds[state.groupRound];
     return round
@@ -2681,7 +3273,7 @@ function renderPendingFixture() {
   shell.innerHTML = `
     <summary>
       <span>${escapeHtml(fixture.stage)}</span>
-      <strong>${escapeHtml(team.teamName)} vs ${escapeHtml(CLUBS[fixture.opponentKey].name)}</strong>
+      <strong>${escapeHtml(team.teamName)} vs ${escapeHtml(teamLabel(fixture.opponentKey))}</strong>
       <b>Ready</b>
     </summary>
     <div class="run-pending-body"><p>Squads are ready. Start this match when you are ready to watch it.</p></div>
@@ -2784,6 +3376,12 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
   const captainLink = playerHref(captain?.player);
   const topScorerLink = playerHref(top.player);
   const dominatorLink = playerHref(dominator.player);
+  const championKicker = isTitanFight
+    ? "Titans conquered"
+    : "Champions of Europe";
+  const championSummary = isTitanFight
+    ? `The drafted XI defeated all ${TITAN_OPPONENTS.length} legendary teams and won Titan Fight.`
+    : `The drafted XI complete the ${escapeHtml(scenario.label)} route and lift the trophy in ${escapeHtml(scenario.finalVenue)}.`;
   const matchSummary = champion
     ? `<div class="run-result-matches">
         <h3>Road to the trophy</h3>
@@ -2806,20 +3404,22 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
   elements.resultCard.hidden = false;
   elements.resultCard.className = `run-result-card ${champion ? "is-champion" : "is-eliminated"}`;
   elements.resultCard.innerHTML = `
-    <span class="draft-panel-kicker">${champion ? "Champions of Europe" : "Run complete"}</span>
-    <h2>${champion ? `${escapeHtml(team.teamName)} win the cup!` : `${escapeHtml(team.teamName)} are eliminated`}</h2>
-    <p>${champion
-      ? `The drafted XI complete the ${escapeHtml(scenario.label)} route and lift the trophy in ${escapeHtml(scenario.finalVenue)}.`
-      : eliminatedBy
-        ? `Eliminated in the ${escapeHtml(eliminatedStage)} by ${escapeHtml(eliminatedBy)}.`
-        : `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group ${escapeHtml(groupName)}.`}</p>
+    <span class="draft-panel-kicker">${champion ? championKicker : "Run complete"}</span>
+    <h2>${champion ? `${escapeHtml(team.teamName)} ${isTitanFight ? "conquer the Titans!" : "win the cup!"}` : `${escapeHtml(team.teamName)} are eliminated`}</h2>
+    <p>${
+      champion
+        ? championSummary
+        : eliminatedBy
+          ? `Eliminated in the ${escapeHtml(eliminatedStage)} by ${escapeHtml(eliminatedBy)}.`
+          : `Finished ${state.groupPlace}${state.groupPlace === 3 ? "rd" : "th"} in Group ${escapeHtml(groupName)}.`
+    }</p>
     <div class="run-result-stats">
       <span><strong>${record.gf}</strong><small>Goals for</small></span>
       <span><strong>${record.ga}</strong><small>Against</small></span>
       <span><strong>${record.wins}</strong><small>Wins</small></span>
       <span><strong>${record.draws}</strong><small>Draws</small></span>
       <span><strong>${record.losses}</strong><small>Losses</small></span>
-      <span><strong>${state.groupPlace || "—"}</strong><small>Group place</small></span>
+      <span><strong>${isTitanFight ? state.userRecord.played : state.groupPlace || "—"}</strong><small>${isTitanFight ? "Titans faced" : "Group place"}</small></span>
     </div>
     <div class="run-result-honours">
       <span><small>Captain</small><strong>${captainLink ? `<a href="${escapeHtml(captainLink)}">${escapeHtml(playerName(captain?.player))}</a>` : escapeHtml(playerName(captain?.player))}</strong></span>
@@ -2838,6 +3438,7 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
       <div class="run-result-share">
         <button type="button" data-share-squad>Share squad</button>
         <small data-share-status>Your exact XI will open as a public list.</small>
+        <div data-record-form-slot></div>
       </div>
     </div>
     <div class="run-result-actions">
@@ -2845,8 +3446,11 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
       <a href="draft-setup.html">Edit team</a>
     </div>
   `;
+  const recordFormSlot = elements.resultCard.querySelector("[data-record-form-slot]");
+  recordFormSlot.append(elements.recordForm);
+  elements.recordForm.hidden = false;
+  elements.recordStatus.textContent = "Save this finished run to the Hall of Fame.";
   void persistSharedSquad().catch(() => {});
-  renderRecordOpportunity();
   if (state.savedUsername) {
     void saveDraftRecord(recordPayload(state.savedUsername)).then(loadRecordTable).catch(() => {});
   }
@@ -2855,6 +3459,7 @@ function showResult({ champion = false, eliminatedBy = "", eliminatedStage = "" 
   const shareStatus = elements.resultCard.querySelector("[data-share-status]");
   shareButton.addEventListener("click", () => shareFinishedSquad(shareButton, shareStatus));
   elements.resultCard.scrollIntoView({ behavior: "smooth", block: "center" });
+  openHallOfFame();
 }
 
 async function playGroupRound() {
@@ -2879,6 +3484,7 @@ async function playGroupRound() {
     hiddenRight,
     state.groupRound,
   );
+  finalizeMatchResult(result);
   await animateMatch(result);
   applyStanding("user", round.userOpponent, result.userGoals, result.rivalGoals);
   applyStanding(hidden.leftKey, hidden.rightKey, hidden.leftGoals, hidden.rightGoals);
@@ -2938,6 +3544,7 @@ async function playKnockoutRound() {
     elements.stageDescription.textContent = "The tie may require penalties. Selecting the strongest available takers…";
     await preparePenaltyShootout(result, roster);
   }
+  finalizeMatchResult(result);
   await animateMatch(result);
   updateUserRecord(result);
 
@@ -2964,11 +3571,59 @@ async function playKnockoutRound() {
   renderPendingFixture();
 }
 
+async function playTitanRound() {
+  const opponentKey = titanOrder[state.titanIndex];
+  const opponent = TITAN_BY_KEY.get(opponentKey);
+  const stage = `Titan Fight · Battle ${state.titanIndex + 1}/8`;
+  elements.nextButton.disabled = true;
+  elements.stageTitle.textContent = `${stage} · ${team.teamName} vs ${opponent.name}`;
+  elements.stageDescription.textContent = `Loading the ${opponent.shortName} starting XI and calculating the battle…`;
+  const rosterBase = await opponentRoster(opponentKey);
+  const [roster] = await Promise.all([
+    hydratePlayers(rosterBase),
+    hydratePlayers(userPlayers()),
+  ]);
+  state.matchNumber += 1;
+  const result = matchSimulation(opponentKey, roster, stage);
+  if (result.needsPenalties) {
+    elements.stageDescription.textContent =
+      "The battle requires penalties. Selecting the strongest available takers…";
+    await preparePenaltyShootout(result, roster);
+  }
+  finalizeMatchResult(result);
+  await animateMatch(result);
+  updateUserRecord(result);
+
+  if (!result.userWon) {
+    elements.stageDescription.textContent = `${opponent.shortName} end the Titan Fight run.`;
+    showResult({ eliminatedBy: opponent.name, eliminatedStage: stage });
+    return;
+  }
+
+  state.titanIndex += 1;
+  if (state.titanIndex >= titanOrder.length) {
+    elements.stageTitle.textContent = "Titan Fight conquered";
+    elements.stageDescription.textContent =
+      "All eight legendary teams have fallen.";
+    showResult({ champion: true });
+    return;
+  }
+
+  const next = TITAN_BY_KEY.get(titanOrder[state.titanIndex]);
+  elements.stageKicker.textContent = `Titan ${state.titanIndex + 1} of 8`;
+  elements.stageTitle.textContent = `${opponent.shortName} defeated`;
+  elements.stageDescription.textContent = `Next: ${next.name}.`;
+  elements.nextButton.textContent = `Face ${next.shortName} →`;
+  elements.nextButton.disabled = false;
+  renderPendingFixture();
+}
+
 async function playNext() {
   if (state.busy || state.completed) return;
   state.busy = true;
   try {
-    if (state.phase === "group") await playGroupRound();
+    if (state.phase === "titan") await playTitanRound();
+    else if (state.phase === "group") await playGroupRound();
     else await playKnockoutRound();
   } catch (error) {
     elements.stageDescription.textContent = error.message || "The match could not be simulated.";
@@ -2987,19 +3642,185 @@ function showMissingTeam() {
   elements.matches.innerHTML = '<a class="run-return-button" href="draft-setup.html">Build your team →</a>';
 }
 
+function friendWebSocketUrl(session) {
+  const url = new URL(API_BASE);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `/api/friend-rooms/${encodeURIComponent(session.code)}/websocket`;
+  url.search = new URLSearchParams({ token: session.token, name: session.name });
+  return url.href;
+}
+
+function showFriendlyResult(result) {
+  const viewerWon = result.userGoals === result.rivalGoals
+    ? null
+    : friendSession.role === "host" ? result.userWon : !result.userWon;
+  const verdict = result.userGoals === result.rivalGoals
+    ? "Draw"
+    : result.userWon ? `${team.teamName} win` : `${result.opponentName} win`;
+  elements.stageKicker.textContent = "Full time";
+  elements.stageTitle.textContent = `${team.teamName} ${result.userGoals}–${result.rivalGoals} ${result.opponentName}`;
+  elements.stageDescription.textContent = "Both managers watched the same authoritative match timeline.";
+  elements.resultCard.hidden = false;
+  elements.resultCard.className = `run-result-card ${viewerWon === false ? "is-eliminated" : "is-champion"}`;
+  elements.resultCard.innerHTML = `
+    <span class="draft-panel-kicker">Friendly match complete</span>
+    <h2>${escapeHtml(verdict)}</h2>
+    <p>${escapeHtml(team.teamName)} ${result.userGoals}–${result.rivalGoals} ${escapeHtml(result.opponentName)}</p>
+    <div class="run-result-actions">
+      <a href="draft.html">Create another room</a>
+      <a href="draft-setup.html">Draft another XI</a>
+    </div>
+  `;
+  elements.resultCard.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function playFriendlyMatch(match, offsetMs) {
+  if (!match?.hostTeam?.players || !match?.guestTeam?.players) {
+    throw new Error("The room did not provide both completed squads.");
+  }
+  runSeed = String(match.seed || friendSession.code);
+  team = match.hostTeam;
+  sharedSquad = createDraftSquad(team);
+  friendOpponentName = String(match.guestTeam.teamName || "Guest XI");
+  elements.tablePanel.hidden = true;
+  elements.bracketPanel.hidden = true;
+  elements.nextButton.hidden = true;
+  elements.seed.textContent = `Live room ${friendSession.code} · Seed #${runSeed}`;
+  elements.stageKicker.textContent = "Play with Friends";
+  elements.stageTitle.textContent = `${team.teamName} vs ${friendOpponentName}`;
+  elements.stageDescription.textContent = "Both squads are locked. Preparing the shared match timeline…";
+  renderSquad(draftedTeam);
+
+  await hydratePlayers(playersForTeam(team));
+  const rivalRoster = await hydratePlayers(playersForTeam(match.guestTeam));
+  state.matchNumber = 1;
+  const result = matchSimulation("friend-guest", rivalRoster, "Friendly match");
+  result.opponentName = friendOpponentName;
+  if (result.needsPenalties) await preparePenaltyShootout(result, rivalRoster);
+  finalizeMatchResult(result);
+  await animateMatch(result, {
+    startAt: Number(match.startAt) || Date.now() + 150,
+    offsetMs,
+    lockPace: true,
+  });
+  showFriendlyResult(result);
+}
+
+function startFriendlyRoom() {
+  elements.tablePanel.hidden = true;
+  elements.bracketPanel.hidden = true;
+  elements.nextButton.hidden = true;
+  elements.seed.textContent = `Live room ${friendSession.code}`;
+  elements.stageKicker.textContent = "Squad submitted";
+  elements.stageTitle.textContent = "Waiting for your opponent";
+  elements.stageDescription.textContent = "This match starts automatically when both completed XIs arrive.";
+  elements.matches.innerHTML = '<div class="run-empty">Connecting to the private room…</div>';
+  renderSquad(draftedTeam);
+
+  const socket = new WebSocket(friendWebSocketUrl(friendSession));
+  const clockSamples = [];
+  let serverOffsetMs = 0;
+  let pendingMatch = null;
+  let matchStarted = false;
+  let fallbackTimer = null;
+  const begin = () => {
+    if (matchStarted || !pendingMatch) return;
+    if (clockSamples.length < 3 && !fallbackTimer) {
+      fallbackTimer = window.setTimeout(begin, 900);
+      return;
+    }
+    matchStarted = true;
+    clearTimeout(fallbackTimer);
+    void playFriendlyMatch(pendingMatch, serverOffsetMs).catch((error) => {
+      elements.stageDescription.textContent = error.message || "The friendly match could not be simulated.";
+    });
+  };
+  socket.addEventListener("open", () => {
+    elements.matches.innerHTML = '<div class="run-empty">Your XI is locked. Waiting for the other manager…</div>';
+    [0, 140, 280, 420, 560].forEach((delayMs) => {
+      window.setTimeout(() => socket.send(JSON.stringify({ type: "ping", sentAt: Date.now() })), delayMs);
+    });
+    socket.send(JSON.stringify({ type: "submit-squad", squad: draftedTeam }));
+  });
+  socket.addEventListener("message", (event) => {
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (message.type === "pong") {
+      clockSamples.push({
+        sentAt: Number(message.sentAt),
+        serverNow: Number(message.serverNow),
+        receivedAt: Date.now(),
+      });
+      serverOffsetMs = estimateServerClockOffset(clockSamples);
+      if (clockSamples.length >= 3) begin();
+      return;
+    }
+    if (message.type === "room-error") {
+      elements.stageDescription.textContent = message.message || "The room rejected this squad.";
+      return;
+    }
+    if (message.type !== "room-state") return;
+    const hostReady = Boolean(message.players?.host?.squadReady);
+    const guestReady = Boolean(message.players?.guest?.squadReady);
+    elements.stageDescription.textContent = hostReady && guestReady
+      ? "Both squads are locked. Synchronizing kickoff…"
+      : `Waiting for ${hostReady ? "the guest" : guestReady ? "the host" : "both squads"}…`;
+    if (message.match) {
+      pendingMatch = message.match;
+      begin();
+    }
+  });
+  socket.addEventListener("close", () => {
+    if (!matchStarted) elements.stageDescription.textContent = "Room connection lost. Return to the invitation and reconnect.";
+  });
+  socket.addEventListener("error", () => {
+    if (!matchStarted) elements.stageDescription.textContent = "Could not connect to the private match room.";
+  });
+}
+
 elements.nextButton.addEventListener("click", playNext);
 elements.recordForm.addEventListener("submit", saveCurrentRecord);
-elements.seed.textContent = `Offline ${scenario.shortLabel} · Seed #${runSeed}`;
-elements.groupHeading.textContent = `Group ${groupName}`;
-elements.stageTitle.textContent = `Group ${groupName} · Matchday 1`;
-elements.stageDescription.textContent =
-  `The group draw replaces ${scenario.replacementLabel[groupName]} with ${team?.teamName || "your XI"}.`;
-elements.nextButton.textContent = "Play Matchday 1 →";
+elements.recordsClose.addEventListener("click", closeHallOfFame);
+elements.recordsPanel.addEventListener("click", (event) => {
+  if (event.target === elements.recordsPanel) closeHallOfFame();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.recordsPanel.hidden) closeHallOfFame();
+});
+if (isFriendMatch) {
+  elements.seed.textContent = `Live room ${friendSession.code}`;
+  elements.tablePanel.hidden = true;
+  elements.bracketPanel.hidden = true;
+  elements.stageKicker.textContent = "Play with Friends";
+  elements.stageTitle.textContent = "Submitting your XI";
+  elements.stageDescription.textContent = "Connecting to the authoritative private room.";
+} else if (isTitanFight) {
+  const firstTitan = TITAN_BY_KEY.get(titanOrder[0]);
+  elements.seed.textContent = `Titan Fight · Seed #${runSeed}`;
+  elements.tablePanel.hidden = true;
+  elements.stageKicker.textContent = "Titan 1 of 8";
+  elements.stageTitle.textContent = `First battle · ${firstTitan.name}`;
+  elements.stageDescription.textContent =
+    "The eight legendary opponents have been shuffled. Win to reveal the next Titan.";
+  elements.nextButton.textContent = `Face ${firstTitan.shortName} →`;
+} else {
+  elements.seed.textContent = `Offline ${scenario.shortLabel} · Seed #${runSeed}`;
+  elements.groupHeading.textContent = `Group ${groupName}`;
+  elements.stageTitle.textContent = `Group ${groupName} · Matchday 1`;
+  elements.stageDescription.textContent = `The group draw replaces ${scenario.replacementLabel[groupName]} with ${team?.teamName || "your XI"}.`;
+  elements.nextButton.textContent = "Play Matchday 1 →";
+}
 
 if (!team?.players || team.players.length !== 11 || !team.captainSlotId) {
   showMissingTeam();
+} else if (isFriendMatch) {
+  startFriendlyRoom();
 } else {
   renderSquad();
-  renderTable();
+  if (!isTitanFight) renderTable();
   renderPendingFixture();
 }

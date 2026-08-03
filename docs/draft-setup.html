@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Draft Setup · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260802-01">
+    <link rel="stylesheet" href="styles.css?v=20260802-03">
   </head>
   <body class="draft-setup-page">
     <main class="draft-setup-shell">
@@ -48,6 +48,10 @@
           </button>
         </aside>
 
+        <button class="draft-roll-button draft-roll-button-mobile" id="draftMobileRollButton" type="button">
+          Roll the Dice <span aria-hidden="true">🎲</span>
+        </button>
+
         <section class="formation-preview" aria-label="Formation preview">
           <div class="draft-stage">
             <div class="draft-pitch-column">
@@ -56,9 +60,6 @@
             </div>
             <div class="draft-side-column">
               <aside class="draft-suggestions-panel" aria-live="polite">
-                <button class="draft-roll-button draft-roll-button-mobile" id="draftMobileRollButton" type="button">
-                  Roll the Dice <span aria-hidden="true">🎲</span>
-                </button>
                 <div class="draft-suggestions-head">
                   <div>
                     <span class="draft-panel-kicker" id="draftModeKicker">Classic roll</span>
@@ -132,6 +133,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="draft-setup.js?v=20260802-01" type="module"></script>
+    <script src="draft-setup.js?v=20260802-02" type="module"></script>
   </body>
 </html>

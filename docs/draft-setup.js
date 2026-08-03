@@ -308,6 +308,14 @@ const scenarioPicker = document.querySelector("#draftScenarioPicker");
 const scenarioLegend = document.querySelector("#draftScenarioLegend");
 const scenarioDescription = document.querySelector("#draftScenarioDescription");
 const DRAFT_TEAM_STORAGE_KEY = "retroball-draft-team-v1";
+const MOBILE_DRAFT_MEDIA = "(max-width: 760px)";
+
+function scrollMobileDraftTo(target, block = "start") {
+  if (!target || !window.matchMedia(MOBILE_DRAFT_MEDIA).matches) return;
+  window.requestAnimationFrame(() => {
+    target.scrollIntoView({ behavior: "smooth", block });
+  });
+}
 
 function isDatabaseDraftMode() {
   return state.mode === "Classic" || state.mode === "Titan Fight";
@@ -1602,10 +1610,16 @@ function renderPitch() {
     !isDatabaseDraftMode() ||
     state.drafted.size >= 11 ||
     (isReroll && state.rerollsRemaining <= 0);
-  for (const button of [rollButton, mobileRollButton]) {
-    button.innerHTML = rollButtonContent;
-    button.disabled = rollDisabled;
-  }
+  rollButton.innerHTML = rollButtonContent;
+  rollButton.disabled = rollDisabled;
+  mobileRollButton.innerHTML = lineupComplete
+    ? state.captainSlotId
+      ? 'Captain Selected <span aria-hidden="true">✓</span>'
+      : 'Select Captain <span aria-hidden="true">↓</span>'
+    : rollButtonContent;
+  mobileRollButton.disabled = lineupComplete
+    ? Boolean(state.captainSlotId)
+    : rollDisabled;
   renderSquadSummary();
 }
 
@@ -1802,6 +1816,7 @@ async function rollPlayers() {
   } finally {
     state.rolling = false;
     renderPitch();
+    scrollMobileDraftTo(suggestionsPanel);
   }
 }
 
@@ -1870,6 +1885,7 @@ suggestions.addEventListener("click", (event) => {
     : "This player has no recognised fit in the current formation.";
   renderSuggestions();
   renderPitch();
+  scrollMobileDraftTo(pitch, "center");
 });
 
 pitch.addEventListener("click", (event) => {
@@ -1887,6 +1903,7 @@ pitch.addEventListener("click", (event) => {
         suggestionHelp.textContent =
           "Select a player, then another player, to swap their positions.";
         renderPitch();
+        scrollMobileDraftTo(scenarioPicker);
         return;
       }
       if (!state.selectedDraftSlotId) {
@@ -1939,17 +1956,24 @@ pitch.addEventListener("click", (event) => {
   suggestionHelp.textContent =
     state.drafted.size >= 11
       ? "Starting XI complete. Select one of the eleven players as your captain."
-      : "Signing complete for this roll. Roll again for six fresh choices.";
+      : "Signing complete for this roll. Roll again for five fresh choices.";
   renderSuggestions(
     state.drafted.size >= 11
       ? "Choose your captain on the pitch."
       : "Roll again to sign the next player.",
   );
   renderPitch();
+  scrollMobileDraftTo(mobileRollButton, "center");
 });
 
 rollButton.addEventListener("click", rollPlayers);
-mobileRollButton.addEventListener("click", rollPlayers);
+mobileRollButton.addEventListener("click", () => {
+  if (state.drafted.size >= 11 && !state.captainSlotId) {
+    scrollMobileDraftTo(pitch, "center");
+    return;
+  }
+  rollPlayers();
+});
 teamNameInput.addEventListener("input", persistSquad);
 scenarioChoices.addEventListener("click", (event) => {
   const button = event.target.closest("[data-scenario]");

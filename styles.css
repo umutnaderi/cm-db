@@ -3986,12 +3986,14 @@ select:focus {
     position: static;
   }
 
-  .draft-options > .draft-roll-button {
-    display: none;
+  .draft-roll-button-mobile {
+    display: inline-flex;
+    width: 100%;
+    margin: 0;
   }
 
-  .draft-roll-button-mobile {
-    display: block;
+  .draft-options > .draft-roll-button {
+    display: none;
   }
 
   .draft-stage,
@@ -5831,17 +5833,30 @@ body.is-hall-of-fame-open {
   }
 
   .run-event-list li {
-    grid-template-columns: 1fr;
-    gap: 3px;
+    grid-template-columns: minmax(54px, 0.72fr) minmax(0, 2.8fr) minmax(54px, 0.72fr);
+    align-items: center;
+    gap: 5px;
+    padding: 5px 0;
   }
 
   .run-event-team-user,
   .run-event-team-opponent {
-    text-align: left;
+    overflow: hidden;
+    font-size: 0.62rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .run-event-commentary {
-    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .run-event-commentary > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .run-bracket-fixtures {

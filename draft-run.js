@@ -2994,11 +2994,21 @@ async function animatePenaltyShootout(result, article, scoreDisplay, clockDispla
   scoreDisplay.textContent = `${result.userGoals} – ${result.rivalGoals} (${ours}–${theirs} pens)`;
 }
 
-function renderEventSnapshot(list, events) {
-  if (!list || Number(list.dataset.renderedCount || -1) === events.length) return;
-  list.innerHTML = events.map(eventMarkup).join("");
-  list.dataset.renderedCount = String(events.length);
-  list.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+function renderEventSnapshot(list, events, latestTimelineId = "") {
+  if (!list) return;
+  const mobile = window.matchMedia("(max-width: 720px)").matches;
+  const visibleEvents = mobile
+    ? events.filter((event) => event.goal || event.timelineId === latestTimelineId)
+    : events;
+  const signature = `${mobile ? "mobile" : "desktop"}:${visibleEvents
+    .map((event) => event.timelineId || `${event.minute}:${event.text}`)
+    .join("|")}`;
+  if (list.dataset.renderSignature === signature) return;
+  list.innerHTML = visibleEvents.map(eventMarkup).join("");
+  list.dataset.renderSignature = signature;
+  if (!mobile) {
+    list.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
 }
 
 function renderPenaltySnapshot(section, snapshot) {
@@ -3024,8 +3034,8 @@ function renderCanonicalMatchSnapshot(view, snapshot) {
     event.timelinePhase === "regulation");
   const extraTimeEvents = snapshot.commentary.filter((event) =>
     event.timelinePhase === "extra-time");
-  renderEventSnapshot(view.eventList, regulationEvents);
-  renderEventSnapshot(view.extraEventList, extraTimeEvents);
+  renderEventSnapshot(view.eventList, regulationEvents, snapshot.latestEvent?.timelineId);
+  renderEventSnapshot(view.extraEventList, extraTimeEvents, snapshot.latestEvent?.timelineId);
   if (view.extraSection) {
     view.extraSection.hidden = extraTimeEvents.length === 0 &&
       !["extra-time", "penalties", "complete"].includes(snapshot.phase);

@@ -723,11 +723,11 @@ function pitchRatingLevel(value) {
 }
 
 function usesLegacyPositionScale() {
-  return /^cm(?:9697|9798)_/i.test(state.selectedDatabase);
+  return /^cm(?:9596|9697|9798)_/i.test(state.selectedDatabase);
 }
 
 function inheritsWingBacksFromFullBacks() {
-  return /^cm(?:9697|9798)_/i.test(state.selectedDatabase);
+  return /^cm(?:9596|9697|9798)_/i.test(state.selectedDatabase);
 }
 
 function buildPitchRoles(ratings) {

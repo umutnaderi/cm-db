@@ -1603,9 +1603,48 @@ select:focus {
 }
 
 .profile-banner.has-club-colours {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   background: var(--club-banner-bg);
-  border-bottom-color: color-mix(in srgb, var(--club-banner-fg) 35%, transparent);
+  border-bottom-width: 2px;
+  border-bottom-color: var(--club-banner-third, color-mix(in srgb, var(--club-banner-fg) 35%, transparent));
   color: var(--club-banner-fg);
+}
+
+.profile-banner.has-club-colours::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    112deg,
+    transparent 0%,
+    transparent 43%,
+    rgba(255, 255, 255, 0.04) 47%,
+    rgba(255, 255, 255, 0.18) 50%,
+    rgba(255, 255, 255, 0.04) 53%,
+    transparent 57%,
+    transparent 100%
+  );
+  background-size: 240% 100%;
+  background-repeat: no-repeat;
+  animation: profile-banner-shine 5.5s ease-in-out infinite;
+}
+
+.profile-banner.has-club-colours > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes profile-banner-shine {
+  0%, 12% {
+    background-position: 170% 0;
+  }
+  88%, 100% {
+    background-position: -70% 0;
+  }
 }
 
 .profile-banner.has-club-colours h2 {
@@ -1619,7 +1658,7 @@ select:focus {
 .profile-banner.has-club-colours .profile-full-name,
 .profile-banner.has-club-colours .profile-summary,
 .profile-banner.has-club-colours .profile-summary .inline-filter {
-  color: var(--club-banner-fg);
+  color: var(--club-banner-third, var(--club-banner-fg));
   text-shadow:
     0.3px 0.35px 0.3px rgba(0, 0, 0, 0.65),
     -0.25px -0.15px 0.1px rgba(255, 255, 255, 0.45);
@@ -1654,35 +1693,48 @@ select:focus {
   inset: 0;
   pointer-events: none;
   color: transparent;
-  background-image: linear-gradient(
+  text-shadow: none;
+  -webkit-text-stroke: 0.8px rgba(255, 255, 255, 0.9);
+  -webkit-mask-image: linear-gradient(
     120deg,
     transparent 0%,
     transparent 44%,
-    rgba(255, 255, 255, 0.9) 49%,
-    rgba(255, 255, 255, 0.9) 51%,
+    #000 49%,
+    #000 51%,
     transparent 56%,
     transparent 100%
   );
-  background-size: 220% 100%;
-  background-repeat: no-repeat;
-  background-clip: text;
-  -webkit-background-clip: text;
+  mask-image: linear-gradient(
+    120deg,
+    transparent 0%,
+    transparent 44%,
+    #000 49%,
+    #000 51%,
+    transparent 56%,
+    transparent 100%
+  );
+  -webkit-mask-size: 220% 100%;
+  mask-size: 220% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
   animation: profile-name-shine 4s linear infinite;
 }
 
 @keyframes profile-name-shine {
   0% {
-    background-position: 160% 0;
+    -webkit-mask-position: 160% 0;
+    mask-position: 160% 0;
   }
   100% {
-    background-position: -60% 0;
+    -webkit-mask-position: -60% 0;
+    mask-position: -60% 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .profile-banner.has-club-colours::before,
   .profile-player-name::after {
-    animation: none;
-    background-image: none;
+    content: none;
   }
 }
 

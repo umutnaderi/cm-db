@@ -1211,9 +1211,12 @@ function profileBannerTheme(player, profile) {
 
   if (!background || !foreground) return { className: "", style: "" };
 
+  const third = clubColour(colours.third_colour);
+  const thirdDeclaration = third ? `;--club-banner-third:${third}` : "";
+
   return {
     className: " has-club-colours",
-    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground}"`,
+    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground}${thirdDeclaration}"`,
   };
 }
 

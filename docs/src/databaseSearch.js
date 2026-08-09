@@ -931,7 +931,7 @@ function renderPositionPanel(profile) {
                   `<div class="position-marker ghost" style="--x:${slot.x}%;--y:${slot.y}%" title="${escapeHtml(PITCH_ROLE_NAMES[slot.label])}"></div>`,
               )
               .join("")}
-            ${roles.map((role, index) => `<div class="position-marker position-tooltip ${role.level}${role.sideUnspecified ? " side-unspecified" : ""}${index === 0 ? " is-primary" : ""}${role.x <= 20 ? " tooltip-align-left" : ""}${role.x >= 80 ? " tooltip-align-right" : ""}${role.y >= 68 ? " tooltip-above" : ""}" style="--x:${role.x}%;--y:${role.y}%" data-info="${escapeHtml(`${role.longLabel} · ${role.levelLabel} · ${role.displayValue}`)}" aria-label="${escapeHtml(`${role.longLabel}: ${role.levelLabel} (${role.displayValue})`)}" tabindex="0"></div>`).join("")}
+            ${roles.map((role, index) => `<div class="position-marker position-tooltip ${role.level}${role.sideUnspecified ? " side-unspecified" : ""}${index === 0 ? " is-primary" : ""}${role.x <= 20 ? " tooltip-align-left" : ""}${role.x >= 80 ? " tooltip-align-right" : ""}${role.y >= 68 ? " tooltip-above" : ""}" style="--x:${role.x}%;--y:${role.y}%" data-info="${escapeHtml(`${role.longLabel} · ${role.levelLabel} · ${role.displayValue}`)}" aria-label="${escapeHtml(`${role.longLabel}: ${role.levelLabel} (${role.displayValue})`)}" tabindex="0">${index === 0 ? '<span class="marker-halo" aria-hidden="true"></span>' : ""}</div>`).join("")}
           </div>
           <div class="pitch-caption"><strong>${escapeHtml(primary?.longLabel || "No recognised position")}</strong></div>
           <div class="position-legend">${
@@ -1233,7 +1233,7 @@ function renderProfile() {
     <div class="profile-banner${bannerTheme.className}"${bannerTheme.style}>
       <button type="button" class="mobile-profile-back" data-mobile-back>Back to results</button>
       <div class="profile-title">
-        <h2 class="profile-player-name">${escapeHtml(playerName(player))}</h2>
+        <h2 class="profile-player-name" data-text="${escapeHtml(playerName(player))}">${escapeHtml(playerName(player))}</h2>
       </div>
       ${fullName ? `<p class="profile-full-name">${escapeHtml(fullName)}</p>` : ""}
       <p class="profile-summary">

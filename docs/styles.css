@@ -42,7 +42,7 @@
   src: url("TitilliumWeb-Regular.ttf") format("truetype");
   font-display: swap;
   font-style: normal;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 @font-face {
@@ -1608,12 +1608,21 @@ select:focus {
   color: var(--club-banner-fg);
 }
 
-.profile-banner.has-club-colours h2,
+.profile-banner.has-club-colours h2 {
+  color: var(--club-banner-fg);
+  text-shadow:
+    0.6px 0.7px 0.6px rgba(0, 0, 0, 0.65),
+    -0.5px -0.3px 0.2px rgba(255, 255, 255, 0.45);
+}
+
 .profile-banner.has-club-colours .profile-club-name.inline-filter,
 .profile-banner.has-club-colours .profile-full-name,
 .profile-banner.has-club-colours .profile-summary,
 .profile-banner.has-club-colours .profile-summary .inline-filter {
   color: var(--club-banner-fg);
+  text-shadow:
+    0.3px 0.35px 0.3px rgba(0, 0, 0, 0.65),
+    -0.25px -0.15px 0.1px rgba(255, 255, 255, 0.45);
 }
 
 .profile-banner.has-club-colours .profile-club-name.inline-filter,
@@ -1628,11 +1637,53 @@ select:focus {
 }
 
 .profile-player-name {
+  position: relative;
   color: var(--text);
     font-family: "Titillium Web", sans-serif;
     font-size: clamp(1.8rem, 4vw, 2.7rem);
     font-weight: 700;
+    text-shadow:
+      0.6px 0.7px 0.6px rgba(0, 0, 0, 0.65),
+      -0.5px -0.3px 0.2px rgba(255, 255, 255, 0.45);
   line-height: 1;
+}
+
+.profile-player-name::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: transparent;
+  background-image: linear-gradient(
+    120deg,
+    transparent 0%,
+    transparent 44%,
+    rgba(255, 255, 255, 0.9) 49%,
+    rgba(255, 255, 255, 0.9) 51%,
+    transparent 56%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: profile-name-shine 4s linear infinite;
+}
+
+@keyframes profile-name-shine {
+  0% {
+    background-position: 160% 0;
+  }
+  100% {
+    background-position: -60% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-player-name::after {
+    animation: none;
+    background-image: none;
+  }
 }
 
 .profile-club-name {
@@ -1679,6 +1730,9 @@ select:focus {
   font-family: "Bai Jamjuree", Arial, Helvetica, sans-serif;
   font-size: 0.82rem;
     font-weight: 600;
+    text-shadow:
+      0.3px 0.35px 0.3px rgba(0, 0, 0, 0.65),
+      -0.25px -0.15px 0.1px rgba(255, 255, 255, 0.45);
 }
 
 .profile-summary {
@@ -1690,7 +1744,10 @@ select:focus {
   color: var(--muted);
   font-family: "Titillium Web", Arial, Helvetica, sans-serif;
   font-size: 0.9rem;
-  font-weight: 600;
+  font-weight: 700;
+  text-shadow:
+    0.3px 0.35px 0.3px rgba(0, 0, 0, 0.65),
+    -0.25px -0.15px 0.1px rgba(255, 255, 255, 0.45);
 }
 
 .tabs {
@@ -1771,6 +1828,9 @@ select:focus {
   margin-top: 5px;
   overflow-wrap: anywhere;
   color: var(--text);
+  font-family: "Titillium Web", Arial, Helvetica, sans-serif;
+  font-weight: 700;
+  text-shadow: 0.5px 0.5px 0 rgba(0, 0, 0, 0.8);
 }
 
 .fact-filter {
@@ -1783,8 +1843,9 @@ select:focus {
   border: 0;
   color: var(--text);
   cursor: pointer;
-  font: inherit;
+  font-family: "Titillium Web", Arial, Helvetica, sans-serif;
   font-weight: 700;
+  text-shadow: 0.5px 0.5px 0 rgba(0, 0, 0, 0.8);
   text-align: left;
 }
 
@@ -2464,6 +2525,49 @@ select:focus {
     0 2px 8px rgba(0, 0, 0, 0.55);
 }
 
+@property --marker-halo-angle {
+  syntax: "<angle>";
+  initial-value: 45deg;
+  inherits: false;
+}
+
+.marker-halo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(100% + 13px);
+  height: calc(100% + 13px);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: -1;
+  filter: blur(2px);
+  background: conic-gradient(from var(--marker-halo-angle),
+      #07a03d,
+      #0ff166,
+      #e9fff1,
+      #0ff166,
+      #6bff9f);
+  animation: marker-halo-spin 0.8s linear infinite;
+  -webkit-mask: radial-gradient(circle closest-side, transparent 0 74%, rgba(0, 0, 0, 0.9) 86% 92%, transparent 100%);
+  mask: radial-gradient(circle closest-side, transparent 0 74%, rgba(0, 0, 0, 0.9) 86% 92%, transparent 100%);
+}
+
+@keyframes marker-halo-spin {
+  0% {
+    --marker-halo-angle: 0deg;
+  }
+
+  100% {
+    --marker-halo-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marker-halo {
+    animation: none;
+  }
+}
 .position-tooltip::before,
 .position-tooltip::after {
   position: absolute;

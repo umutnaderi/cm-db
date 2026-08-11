@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "test:draft": "node tools/test-draft-game.mjs",
+    "match:telemetry": "node tools/scenario_telemetry.mjs",
+    "match:audit": "node tools/scenario_telemetry.mjs 8000",
     "cm4:cache": "node tools/cm4-cache.mjs",
     "pages:build": "node tools/build-pages.mjs",
     "d1:build": "python tools/build_d1_serving_database.py",

@@ -100,10 +100,16 @@ assert.deepEqual(canonicalTimeline.periods.map((period) => period.phase), [
 const canonicalMatchEvents = canonicalTimeline.events.filter((event) => event.type === "match-event");
 assert.equal(canonicalMatchEvents.length, 4);
 const suspenseEvents = canonicalTimeline.events.filter((event) => event.type === "suspense");
-assert.equal(suspenseEvents.length, 3);
+assert.equal(suspenseEvents.length, 6);
 assert.equal(suspenseEvents[0].endAtMs - suspenseEvents[0].atMs, 1_500);
 const suspenseState = reduceMatchTimeline(canonicalTimeline, suspenseEvents[0].atMs + 500);
 assert.equal(suspenseState.suspense.label, "CHANCE!");
+assert.equal(suspenseEvents[1].kind, "goal");
+assert.equal(suspenseEvents[1].label, "GOAL!");
+assert.equal(suspenseEvents[1].endAtMs - suspenseEvents[1].atMs, 1_250);
+const goalEmphasisState = reduceMatchTimeline(canonicalTimeline, suspenseEvents[1].atMs + 500);
+assert.equal(goalEmphasisState.suspense.label, "GOAL!");
+assert.equal(goalEmphasisState.userGoals, 1);
 const beforeFirstGoal = reduceMatchTimeline(canonicalTimeline, canonicalMatchEvents[0].atMs - 1);
 assert.equal(beforeFirstGoal.userGoals, 0);
 const afterFirstGoal = reduceMatchTimeline(canonicalTimeline, canonicalMatchEvents[0].atMs);
@@ -185,7 +191,7 @@ assert.equal(createDraftSquad(shareTeam).seed, sharedSquad.seed);
 assert.match(formatDraftSquadText(sharedSquad), /MC · Player 7 \(C\)/);
 
 const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8")
-  .replace(/^import[\s\S]*?;\r?\n/, "")
+  .replace(/^(?:import[\s\S]*?;\r?\n)+/, "")
   .split("Object.keys(formations).forEach")[0]
   .concat(`
     const expected = {
@@ -880,6 +886,7 @@ assert.ok(setupSourceText.includes("const friendSession = friendSessionFromPage(
 assert.ok(setupSourceText.includes("Submit squad"));
 assert.ok(setupHtml.includes('data-scenario="ucl0203"'));
 assert.ok(setupHtml.includes('data-scenario="ucl0304"'));
+assert.ok(setupHtml.includes('data-scenario="wc2002"'));
 assert.ok(setupHtml.includes('data-scenario="titan" hidden'));
 assert.ok(setupHtml.includes('data-value="Titan Fight"'));
 assert.ok(
@@ -888,7 +895,7 @@ assert.ok(
   "Titan Fight must sit between Classic and From memory",
 );
 assert.ok(setupHtml.includes('id="draftMobileRollButton"'));
-assert.equal((setupHtml.match(/<small>Group Stages<\/small>/g) || []).length, 2);
+assert.equal((setupHtml.match(/<small>Group Stages<\/small>/g) || []).length, 3);
 assert.ok(setupSourceText.includes("scenario: state.scenario"));
 assert.ok(setupSourceText.includes("mode: state.mode"));
 assert.ok(setupSourceText.includes('scenarioLegend.textContent = titanSelected'));
@@ -1020,6 +1027,8 @@ assert.ok(runSourceText.includes("signatureMoment"));
 assert.ok(runSourceText.includes("tacticalMultiplier"));
 assert.ok(runSourceText.includes('data-match-possession'));
 assert.ok(runSourceText.includes('data-match-suspense'));
+assert.ok(runSourceText.includes('classList.toggle("is-goal", goalEmphasis)'));
+assert.ok(runSourceText.includes('goalEmphasis ? "Scored" : "Danger"'));
 assert.ok(workerConfig.includes('"new_sqlite_classes": ["FriendMatchRoom"]'));
 
 const player = (name, role, line, currentAbility, id) => ({
@@ -1081,6 +1090,13 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
       let pressureWaves = 0;
       let allInGoals = 0;
       const organicGoalTypes = new Set();
+      // Reachability audit (see MATCH_ENGINE_SCENARIOS.md, "Observed
+      // Scenario Graph") -- reuses these same 180 match runs rather than a
+      // separate pass, tallying every scenarioType/kind that actually fired
+      // so dead or structurally-starved branches (like the corner and
+      // free-kick bugs) show up as a failing assertion instead of needing
+      // to be found by manually tracing a live match.
+      const scenarioTally = new Map();
       for (let index = 0; index < 180; index += 1) {
         state.matchNumber = index;
         const result = matchSimulation("milan", opponentRoster, index % 2 ? "Group stage" : "Round of 16");
@@ -1118,6 +1134,10 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         globalThis.assert.equal(userGoals, result.userGoals);
         globalThis.assert.equal(rivalGoals, result.rivalGoals);
         for (const event of allEvents) {
+          const scenarioKey = event.card
+            ? "CARD." + String(event.card).toUpperCase()
+            : (event.scenarioType || event.kind);
+          scenarioTally.set(scenarioKey, (scenarioTally.get(scenarioKey) || 0) + 1);
           globalThis.assert.ok(event.matchSecond >= 0);
           globalThis.assert.ok(event.zoneFrom >= 0 && event.zoneFrom <= 11);
           globalThis.assert.ok(event.zoneTo >= 0 && event.zoneTo <= 11);
@@ -1159,6 +1179,50 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
         organicGoalTypes.size >= 5,
         "Transition play should produce varied causal goals: " + [...organicGoalTypes].join(", "),
       );
+      // Reachability audit (see MATCH_ENGINE_SCENARIOS.md, "Observed Scenario
+      // Graph") -- required/rare-but-required scenario codes must actually
+      // fire across these same 180 match runs, not just exist in the source.
+      // This is the tier of test that would have caught the corner and
+      // free-kick reachability bugs automatically instead of needing a
+      // manually-patched trace to find them.
+      const tally = (key) => scenarioTally.get(key) || 0;
+      globalThis.assert.ok(
+        tally("K.ONEONONE.1") > 30,
+        "Breakaway goals should be common: " + tally("K.ONEONONE.1"),
+      );
+      globalThis.assert.ok(
+        tally("K.SAVE.0") + tally("K.SAVE.1") + tally("K.SAVE.3") + tally("K.SAVE.4") > 80,
+        "Keeper saves should be common",
+      );
+      globalThis.assert.ok(tally("D.BLOCK") > 10, "Shot-blocking should be reachable: " + tally("D.BLOCK"));
+      // Note: foul-D.SLIDE/foul-D.STAND/foul-D.DUEL scenarioType values only
+      // ever ride along on card events (applyFoulOutcome only pushes an
+      // event when foul.card !== "none"), so the tally key computed above
+      // (event.card overrides scenarioType) resolves those to CARD.* -- the
+      // card tally is therefore the correct proxy for "tackle-engagement
+      // fouls are reachable", not the raw foul-D.* scenario codes.
+      globalThis.assert.ok(
+        tally("CARD.YELLOW") + tally("CARD.RED") > 15,
+        "Fouls from tackle engagements should be reachable",
+      );
+      globalThis.assert.ok(
+        tally("corner-header") > 0,
+        "Corners should produce header chances -- this is the exact bug that went unreachable before",
+      );
+      globalThis.assert.ok(
+        tally("DELIVERY.CLEARED") + tally("F.HEADER.OFF") + tally("corner-header") + tally("set-piece-scramble") > 20,
+        "Delivery/corner outcomes should be reachable",
+      );
+      globalThis.assert.ok(tally("K.SAVE.7") > 0, "Post-and-out saves should occur");
+      // FK.WALL.HIT is thin even at 400 matches (see MATCH_ENGINE_SCENARIOS.md
+      // baseline: ~9/400) -- thin enough that adding P.RECEIVE's extra
+      // random() calls upstream shifted this exact 180-match deterministic
+      // run to zero occurrences, even though the mechanism itself stayed
+      // fully reachable (confirmed via scenario_telemetry.mjs). That's the
+      // "RNG call order can shift outcomes" risk the engine-hygiene review
+      // warned about -- the fix isn't to chase the count back up, it's to
+      // stop depending on this specific match sequence for a rare-tier
+      // check. See the constructed-state FK.WALL test below instead.
       globalThis.assert.equal(displayZone(0, "user"), 0);
       globalThis.assert.equal(displayZone(0, "opponent"), 11);
       globalThis.assert.equal(displayZone(5, "opponent"), 6);
@@ -1247,9 +1311,139 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
           attributes: eliteAttributes({ Heading: 20, Jumping: 20, "Off the Ball": 19, Strength: 19, Anticipation: 18 }),
         },
       ];
+      // Constructed-state coverage for the free-kick-gate fix: resolveFoul's
+      // own restart logic (penalty only in the box, free-kick everywhere
+      // else) must hold at every zone row, independent of whether the tick
+      // loop's gate around it happens to reach that row in a given match.
+      // isLastMan=true skips the RNG-driven "advantage" branch so the
+      // restart type is deterministic here.
+      const foulDefender = {
+        current_ability: 140,
+        position_text: "DC",
+        attributes: eliteAttributes({ Aggression: 12, Bravery: 11, Composure: 10 }),
+      };
+      const foulRandom = seededRandom(777);
+      const restartByZone = [1, 4, 7, 10].map(
+        (zone) => resolveFoul(foulDefender, "D.STAND", zone, true, 10, foulRandom).restart,
+      );
+      globalThis.assert.deepEqual(
+        restartByZone,
+        ["penalty", "free-kick", "free-kick", "free-kick"],
+        "Fouls should award a penalty only in the box (row 0) and a free-kick elsewhere",
+      );
+      // Constructed-state coverage for FK.WALL.HIT -- deliberately isolated
+      // from the live 180-match loop (see the comment above where that
+      // assertion used to live) so this can't be broken by unrelated RNG
+      // consumption shifting elsewhere in the tick.
+      const wallTaker = {
+        current_ability: 150,
+        position_text: "MC",
+        attributes: eliteAttributes({ "Free Kick Taking": 12, Technique: 12 }),
+      };
+      const wallDefenders = [
+        foulDefender, { ...foulDefender, source_person_id: "wall-2" }, { ...foulDefender, source_person_id: "wall-3" },
+      ];
+      const wallRandom = seededRandom(4242);
+      let wallHits = 0;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (resolveWall(wallTaker, wallDefenders, wallRandom).code === "FK.WALL.HIT") wallHits += 1;
+      }
+      globalThis.assert.ok(wallHits > 0, "FK.WALL.HIT should be reachable in isolation");
+      // Constructed-state coverage for P.RECEIVE (see MATCH_ENGINE_SCENARIOS.md,
+      // "Promoted: P.RECEIVE") -- confirms all five outcomes are reachable
+      // and that a clearly-mismatched pairing (elite receiver, low pressure,
+      // high pass quality vs. a poor one, high pressure, low pass quality)
+      // actually shifts the distribution the direction it should, rather
+      // than relying on a live match to happen to exercise both ends.
+      const sharpReceiver = {
+        current_ability: 180,
+        attributes: eliteAttributes({
+          "First Touch": 18, Technique: 17, Composure: 17, Anticipation: 17, Balance: 16, Strength: 13,
+        }),
+      };
+      const clumsyReceiver = {
+        current_ability: 120,
+        attributes: eliteAttributes({
+          "First Touch": 6, Technique: 7, Composure: 7, Anticipation: 7, Balance: 7, Strength: 8,
+        }),
+      };
+      const receiveDefender = {
+        current_ability: 150,
+        attributes: eliteAttributes({ Tackling: 14, Aggression: 13, Anticipation: 13 }),
+      };
+      const tallyReceiveCodes = (receiver, passQuality, pressureValue, bypassValue, seed) => {
+        const receiveRandom = seededRandom(seed);
+        const counts = {};
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          const result = resolveReceive(receiver, receiveDefender, passQuality, pressureValue, bypassValue, 4, 10, receiveRandom);
+          counts[result.context.code] = (counts[result.context.code] || 0) + 1;
+          globalThis.assert.ok(["advance", "hold", "turnover"].includes(result.status));
+          globalThis.assert.equal(result.nextScenario, "P.SELECT");
+          globalThis.assert.ok(["retained", "opponent"].includes(result.possession));
+        }
+        return counts;
+      };
+      const favorable = tallyReceiveCodes(sharpReceiver, 0.85, 0.1, false, 111);
+      const hostile = tallyReceiveCodes(clumsyReceiver, 0.2, 0.85, true, 222);
+      globalThis.assert.ok(
+        (favorable["P.RECEIVE.CLEAN"] || 0) > (hostile["P.RECEIVE.CLEAN"] || 0),
+        "A sharp receiver under low pressure with a good pass should control it cleanly far more often",
+      );
+      globalThis.assert.ok(
+        (hostile["P.RECEIVE.LOSE"] || 0) + (hostile["P.RECEIVE.HEAVY"] || 0)
+          > (favorable["P.RECEIVE.LOSE"] || 0) + (favorable["P.RECEIVE.HEAVY"] || 0),
+        "A clumsy receiver under heavy pressure with a poor pass should lose or mishit it far more often",
+      );
       globalThis.assert.equal(playerName(setPieceTaker(specialistRoster, "corner")), "Corner Expert");
       globalThis.assert.equal(playerName(setPieceTaker(specialistRoster, "free-kick")), "Free Kick Expert");
       globalThis.assert.ok(headerScore(specialistRoster[2]) > headerScore(ordinaryForward));
+      const intelligentAttacker = {
+        ...eliteForward,
+        canonical_player_name: "Intelligent Runner",
+        attributes: eliteAttributes({
+          "Off the Ball": 19, Anticipation: 18, Acceleration: 17,
+          "First Touch": 17, Finishing: 18,
+        }),
+      };
+      const eliteCreator = {
+        ...ordinaryForward,
+        canonical_player_name: "Elite Creator",
+        role: "MC",
+        line: "midfield",
+        attributes: eliteAttributes({
+          Passing: 19, Vision: 19, Creativity: 18, Technique: 18, Decisions: 17,
+        }),
+      };
+      const finesseSpecialist = {
+        ...eliteForward,
+        canonical_player_name: "Finesse Specialist",
+        attributes: eliteAttributes({
+          Technique: 19, "Long Shots": 19, Shooting: 18, Finishing: 18, Composure: 17,
+        }),
+      };
+      const keeperDribbler = {
+        ...eliteForward,
+        canonical_player_name: "Keeper Dribbler",
+        attributes: eliteAttributes({
+          Dribbling: 20, Technique: 19, Flair: 18, Composure: 18, Acceleration: 18,
+        }),
+      };
+      globalThis.assert.ok(finesseLongShotScore(finesseSpecialist) > finesseLongShotScore(ordinaryForward));
+      globalThis.assert.ok(deliveryScore(eliteCreator) > deliveryScore(ordinaryForward));
+      globalThis.assert.ok(offBallRunScore(intelligentAttacker) > offBallRunScore(ordinaryForward));
+      globalThis.assert.ok(keeperDribbleScore(keeperDribbler) > keeperDribbleScore(ordinaryForward));
+      globalThis.assert.ok(switchPlayScore(eliteCreator) > switchPlayScore(ordinaryForward));
+      globalThis.assert.ok(lateBoxRunScore(intelligentAttacker) > lateBoxRunScore(ordinaryForward));
+      const finesseGoal = goalEvent(
+        { minute: 24, matchSecond: 1440, side: "user", kind: "goal" },
+        [finesseSpecialist],
+        opponentRoster,
+        seededRandom(812),
+        "finesse-long-range",
+        { scorer: finesseSpecialist, zoneFrom: 3, zoneTo: 1, action: "shot" },
+      );
+      globalThis.assert.equal(finesseGoal.zoneFrom, 3);
+      globalThis.assert.equal(finesseGoal.zoneTo, 1);
       globalThis.assert.ok(
         counterRunnerScore({ ...eliteForward, role: "FR" })
           > counterRunnerScore({ ...eliteForward, role: "FC" }),
@@ -1258,7 +1452,8 @@ const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "
       const forcedGoalTypes = [
         "open-play", "corner-header", "corner-volley", "direct-free-kick",
         "free-kick-cross", "long-range", "counter", "own-goal", "high-press",
-        "rebound", "cut-back", "set-piece-scramble",
+        "rebound", "cut-back", "set-piece-scramble", "finesse-long-range",
+        "off-ball-run", "offside-break", "round-keeper", "late-run",
       ];
       for (const [index, goalType] of forcedGoalTypes.entries()) {
         const event = goalEvent(

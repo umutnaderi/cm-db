@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Match Lab · Old-School-Football</title>
+    <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
+    <link rel="stylesheet" href="styles.css?v=20260811-01">
+  </head>
+  <body class="match-lab-page">
+    <main class="match-lab-shell">
+      <header class="match-lab-header">
+        <div>
+          <a class="eyebrow home-link" href="draft-setup.html">Old-School-Football</a>
+          <h1>Match Lab</h1>
+          <p class="match-lab-subtitle">
+            Place real players on the pitch and ask the match engine what it decides —
+            the same resolver functions the live match uses, called directly.
+          </p>
+        </div>
+        <div class="match-lab-seed">
+          <span>Seed</span>
+          <strong id="labSeed">—</strong>
+        </div>
+      </header>
+
+      <section class="match-lab-grid">
+        <div class="match-lab-column">
+          <h2 class="match-lab-panel-title">Find a player</h2>
+          <div class="match-lab-search-controls">
+            <select id="labDatabaseSelect" aria-label="Database edition"></select>
+            <input
+              id="labSearchInput"
+              type="search"
+              placeholder="Search by name…"
+              autocomplete="off"
+            >
+          </div>
+          <p class="match-lab-hint" id="labSearchStatus">Type at least 2 characters.</p>
+          <ul class="match-lab-search-results" id="labSearchResults"></ul>
+        </div>
+
+        <div class="match-lab-column">
+          <h2 class="match-lab-panel-title">Pitch</h2>
+          <p class="match-lab-hint">
+            Drag a placed marker to reposition it. The engine only reasons in
+            12 zones, so the exact drop point is bucketed into one — both are
+            shown together, nothing here overstates precision the engine doesn't have.
+          </p>
+          <div class="match-lab-pitch" id="labPitch">
+            <span class="pitch-halfway" aria-hidden="true"></span>
+            <span class="pitch-box pitch-box-top" aria-hidden="true"></span>
+            <span class="pitch-box pitch-box-bottom" aria-hidden="true"></span>
+            <span class="pitch-circle" aria-hidden="true"></span>
+          </div>
+          <ol class="match-lab-roster" id="labRoster"></ol>
+        </div>
+
+        <div class="match-lab-column">
+          <h2 class="match-lab-panel-title">Scenario Probe</h2>
+          <p class="match-lab-hint">
+            Each probe resolves the <em>outcome</em> of an action you've
+            already picked below — a cross that's already been delivered, a
+            pass that's already arrived. It doesn't yet ask the engine to
+            choose the action itself (would it even cross here at all?) —
+            that's a separate, larger piece, tracked in MATCH_LAB_PLAN.md.
+          </p>
+          <select id="labScenarioSelect" aria-label="Scenario"></select>
+          <p class="match-lab-hint" id="labScenarioDescription"></p>
+          <div class="match-lab-role-requirements" id="labRoleRequirements"></div>
+
+          <div class="match-lab-context" id="labContextControls"></div>
+
+          <div class="match-lab-controls">
+            <button type="button" id="labPlayButton" class="match-lab-primary-button">▶ Roll</button>
+            <button type="button" id="labReplayButton">↻ Replay</button>
+            <button type="button" id="labRerollButton">🎲 Reroll</button>
+            <button type="button" id="labStepButton">›| Step</button>
+            <button type="button" id="labResetButton">■ Reset</button>
+          </div>
+          <div class="match-lab-run-n">
+            <label>
+              Run
+              <input id="labRunCountInput" type="number" min="2" max="2000" value="200">
+              times
+            </label>
+            <button type="button" id="labRunNButton">Run N</button>
+          </div>
+
+          <div class="match-lab-inspector" id="labInspector" hidden>
+            <h3>Live signals</h3>
+            <dl id="labInspectorList"></dl>
+          </div>
+
+          <div class="match-lab-trace" id="labTrace" hidden>
+            <h3>Event trace</h3>
+            <ol id="labTraceList"></ol>
+          </div>
+
+          <div class="match-lab-distribution" id="labDistribution" hidden>
+            <h3>Distribution (<span id="labDistributionCount"></span> runs)</h3>
+            <ol id="labDistributionList"></ol>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="match-lab.js?v=20260811-01" type="module"></script>
+  </body>
+</html>

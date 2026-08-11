@@ -195,16 +195,139 @@ for what was kept, changed, or rejected and why.
    K.ONEONONE.6                   1   0.003/match (conditional tier)
    penalty                        1   0.003/match (conditional tier)
    ```
-2. **Phase 2 — build `match-lab.html`/`match-lab.js`.**
-   - Player search via the existing `searchPlayers()`/`getPlayerMetrics()`
-     (`src/lib/retroballApi.js`) — no new backend work.
-   - Drag-and-bucket pitch (reusing existing pitch-marking CSS, new
-     interactive layer).
-   - Scenario Probe mode: scenario picker, attacker/receiver/defender/
-     keeper role slots, Roll/Replay/Reroll/Reset/Step/Run N, live pressure
-     number (real `computePressure()`) and receiver-weight breakdown (real
-     `selectReceiver()`), full event trace.
-   - Free Play mode toggle present but disabled ("coming next").
-3. **Deferred, not scheduled:** `runConstructedPossession()` (Free Play's
-   engine entry point — needs the tick-loop body factored into a callable
-   single-possession unit first), sound trigger wiring.
+2. ~~**Phase 2 — build `match-lab.html`/`match-lab.js`.**~~ v1 done (Scenario
+   Probe mode only; Free Play deferred as planned).
+
+   - Genuinely standalone page (`match-lab.html`/`match-lab.js`), styled on
+     its own (`.match-lab-*`), no dependency on `draft-run.html`'s DOM.
+     Imports `matchEngineCore.js` and `retroballApi.js` directly — nothing
+     re-derived or duplicated.
+   - Player search via the real `getDatabases()`/`searchPlayers()`/
+     `getPlayerMetrics()` — same production API every other page hits
+     (confirmed: `API_BASE` resolves from the same `<meta
+     name="retroball-api-url">` tag as `draft-run.html`/`database.html`,
+     so this isn't a new backend integration, it's the existing one).
+   - A large standalone pitch, freely draggable markers (pointer-based,
+     not HTML5 drag/drop), each showing its raw `x%/y%` position and its
+     bucketed engine zone together — the "don't overstate precision"
+     framing from the review, made concrete: the marker label always
+     reads `Name · Z<n>`.
+   - Six roster roles (attacker/receiver/defender/keeper/wall/candidate);
+     a "candidate" role (2+ players) drives a live receiver-weight panel
+     independent of the selected scenario — matches the review's own
+     Beckham/Ruud/Scholes worked example. Deliberately **not** implemented
+     by re-deriving `selectReceiver`'s internal weight formula (an earlier
+     draft did exactly that and was caught in review before verification —
+     see "One correction made during review" below) — it samples the real
+     `selectReceiver()` 300 times per update and reports the empirical
+     pick share instead.
+   - Five Scenario Probes, each a thin sequence of real, unmodified
+     `matchEngineCore` calls in the same order the real tick loop calls
+     them (verified against the actual `draft-run.js` call sites, not
+     assumed — e.g. the free-kick shot-type-to-finish-type mapping
+     `{regular:"calm", hard:"blast", curl:"finesse"}` was copied from
+     `draft-run.js`'s own FK.SHOT chain, not guessed):
+     - **Cross & Header** — `resolveDelivery()`
+     - **Pass Reception** — `resolveReceive()` — what it costs the
+       receiver to control a pass that's already arrived, *not* whether
+       the passer chooses/finds them in the first place (that's
+       `selectReceiver`, a different function, currently only exercised
+       by the live receiver-weight panel below, not by its own probe)
+     - **Tackle Engagement & Foul** — `selectEngagement()` →
+       `resolveEngagement()` → `resolveFoul()` if it goes to ground
+     - **Shot Resolution** — `selectFinishType()` → `resolveFinishAttempt()`
+       → `resolveKeeperSave()`, or `resolveOneOnOne()` on a breakaway toggle
+     - **Free Kick** — `resolveWall()`, then the shot chain if it clears
+   - Roll/Replay/Reroll/Reset/Step/Run N, matching the agreed semantics
+     exactly: Replay never calls the engine (redraws the stored trace);
+     Reroll increments the seed and calls it again; Step reveals the
+     already-computed trace one entry at a time rather than pausing live
+     computation; Run N repeats the same constructed roster across N
+     seeds and reports an outcome distribution.
+   - Live pressure panel: real `computePressure()` against whichever
+     player is tagged "defender."
+   - No sound, no `runConstructedPossession`/Free Play, no new 2D
+     animation system — all explicitly out of v1 scope, as planned.
+
+   **One correction made during review, before it shipped:** an early
+   draft of the receiver-weight panel reimplemented `selectReceiver`'s
+   internal suitability formula by hand instead of calling the function —
+   exactly the "duplicate the engine" mistake this whole design was meant
+   to avoid. Caught and fixed before verification by switching to
+   empirical sampling of the real function (above).
+
+   **Verification, and its limit:** `node --check` on both new files; a
+   real `import()` confirming every one of the 17 `matchEngineCore` names
+   and 3 `retroballApi` names this page imports actually resolves; a
+   cross-check confirming every DOM id referenced in `match-lab.js` exists
+   in `match-lab.html` and vice versa; a cross-check confirming every
+   `match-lab-*` CSS class referenced in the JS/HTML exists in
+   `styles.css` (caught and removed three dead classes and one
+   never-rendered `.match-lab-zone-cell` overlay this way); a local
+   server smoke test confirming `/match-lab.html`, `/match-lab.js`, and
+   its two module imports all serve 200. Full `tools/test-draft-game.mjs`
+   suite re-run clean, confirming this work didn't touch the engine at
+   all. **What this does not verify: actual browser behavior** — the
+   search flow, drag interaction, and live panels have not been exercised
+   in a real browser, since this environment has no browser to drive.
+   That's a real gap, not a formality — say so rather than claiming a
+   working UI. Needs a manual pass before relying on it.
+
+   **Two more real problems found on a second review pass, both fixed:**
+   - `scenarioIsReady()`/`renderRoleRequirements()`/the default-role
+     auto-assigner all wrapped a role's declared minimum in
+     `Math.max(1, role.count)` -- harmless for every role except Free
+     Kick's `wall` (deliberately declared `count: 0`, genuinely optional),
+     which this silently turned into a *required* wall defender, blocking
+     the "Roll" button on a scenario that should work with zero. Fixed by
+     using `role.count` directly everywhere (it's already the real
+     minimum, explicitly declared per role -- the `Math.max` was
+     unnecessary even before it was wrong).
+   - The original ask ("we put the ball, somewhere we desire") was never
+     actually implemented -- `state` had no ball object at all, only the
+     player roster. Added: a draggable ball marker (reusing the existing
+     drag logic, generalized to accept any `{x, y, zone}` entry rather
+     than only roster ones), reset alongside the roster on Reset. No
+     current scenario probe consumes `state.ball` yet (all five take
+     their zone from a placed player) -- it's there because it was asked
+     for and because `runConstructedPossession`/Free Play will need ball
+     position/ownership next regardless, not because any v1 probe needs
+     it today.
+
+   **Framing correction:** nothing above changed, but the write-up did
+   overstate the "Cross & Header" and "Pass Reception" probes as directly
+   answering "does Beckham choose to cross to Van Nistelrooy" -- they
+   don't. Both assume the action (a cross, a completed pass) has already
+   happened and resolve its outcome; *whether* the engine would choose to
+   attempt that cross in the first place is a `P.SELECT`-level decision
+   none of the five probes touch. Added an explicit note to this effect
+   in the Match Lab UI itself (above the scenario picker), not just here,
+   so the gap is visible to whoever uses the page next, not just whoever
+   reads this doc.
+
+   **Not committed yet.** The reviewer's own sequencing ties committing
+   "Match Lab v1: Scenario Probe" to a manual browser pass, which this
+   environment cannot perform -- that gate stands until a human checks it
+   in an actual browser.
+
+### Next up (per review, in this exact order -- no more scenario probes first)
+
+1. Ball -- done above.
+2. A real passer/crosser role, so the live receiver-weight panel (and,
+   later, Cross & Header) can use a placed player's actual Vision/
+   Crossing/Technique instead of the current hardcoded `passerVision = 14`
+   placeholder.
+3. `runConstructedPossession()` -- **one possession, not a full match** --
+   as the actual entry point for an `AUTO`/Free Play mode: given a
+   constructed roster + ball state, let `P.SELECT` (and whatever it
+   chooses -- pass, cross, dribble, shoot) decide the action itself,
+   instead of the user picking a Scenario Probe in advance. This is the
+   piece that turns "test this resolver" into "given this football
+   situation, what does the engine decide" -- the actual original ask.
+   Real, separate engineering work: the tick loop inside
+   `buildTransitionTimeline` is still one large inline block, not already
+   factored into a callable single-possession unit (unchanged from the
+   Phase 2 planning note above).
+4. Store the full run as `lastRun = { seed, setupSnapshot, result, trace }`
+   rather than only `lastTrace`, once Free Play exists -- cleaner grounds
+   for any future 2D playback than the current trace-only shape.

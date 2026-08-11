@@ -14,6 +14,34 @@ import {
   createMatchPlaybackController,
   estimateServerClockOffset,
 } from "../src/lib/matchPlayback.js";
+import * as matchEngineCore from "../src/lib/matchEngineCore.js";
+
+// The sandboxed draft-run.js tests below inline matchEngineCore.js's source
+// into the VM sandbox (see the comment at its runSource construction) so
+// cross-realm assert.deepEqual comparisons work -- but that means nothing
+// else in this file actually exercises matchEngineCore.js as an ordinary ES
+// module import. This does, because that's exactly how match-lab.js will
+// consume it (see MATCH_LAB_PLAN.md): a plain `import` in a real browser
+// module context, no VM sandbox involved.
+{
+  const attacker = {
+    current_ability: 150,
+    attributes: [
+      { label: "Composure", value: 14 },
+      { label: "Technique", value: 15 },
+      { label: "Finishing", value: 16 },
+      { label: "Flair", value: 12 },
+    ],
+  };
+  const random = matchEngineCore.seededRandom(matchEngineCore.hashString("module-import-sanity"));
+  assert.ok(
+    ["calm", "blast", "finesse"].includes(matchEngineCore.selectFinishType(attacker, random)),
+  );
+  const composureDetail = matchEngineCore.engineAttributeDetail(attacker, "Composure");
+  assert.equal(composureDetail.value, 14);
+  assert.equal(composureDetail.source, "direct");
+  assert.equal(matchEngineCore.MIRRORED_ZONE[0], 11);
+}
 
 const timelineResult = {
   userGoals: 2,
@@ -1077,7 +1105,21 @@ const savedTeam = {
   })),
 };
 
-const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8")
+// draft-run.js now imports its scenario resolvers/attribute system from
+// src/lib/matchEngineCore.js (see MATCH_LAB_PLAN.md). vm.runInNewContext
+// evaluates a plain string, not a real module graph, so that import gets
+// stripped by the regex below same as draft-run.js's other imports --
+// inlining matchEngineCore's source (with `export` stripped) ahead of it
+// keeps every function/constant in the *same* sandbox realm. Injecting the
+// real (outer-realm) functions into the context object instead would work
+// for calls, but any assert.deepEqual comparing their return value against
+// an object literal written in the sandboxed test code fails with "same
+// structure but not reference-equal" -- a cross-realm Object.prototype
+// mismatch, not an actual behavior difference.
+const matchEngineCoreSource = fs.readFileSync(new URL("../src/lib/matchEngineCore.js", import.meta.url), "utf8")
+  .replace(/^export (function|const)/gm, "$1");
+const runSource = matchEngineCoreSource + "\n"
+  + fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8")
   .replace(/^(?:import[\s\S]*?;\r?\n)+/, "")
   .split("elements.nextButton.addEventListener")[0]
   .concat(`

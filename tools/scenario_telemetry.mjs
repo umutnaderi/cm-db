@@ -82,7 +82,14 @@ const savedTeam = {
   })),
 };
 
-const runSource = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8")
+// See tools/test-draft-game.mjs for why matchEngineCore's source is inlined
+// (export-stripped) ahead of draft-run.js's, rather than injected into the
+// sandbox context object: same vm-sandbox realm as everything else,
+// avoiding cross-realm identity gotchas.
+const matchEngineCoreSource = fs.readFileSync(new URL("../src/lib/matchEngineCore.js", import.meta.url), "utf8")
+  .replace(/^export (function|const)/gm, "$1");
+const runSource = matchEngineCoreSource + "\n"
+  + fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8")
   .replace(/^(?:import[\s\S]*?;\r?\n)+/, "")
   .split("elements.nextButton.addEventListener")[0]
   .concat(`

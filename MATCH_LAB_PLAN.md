@@ -1,8 +1,7 @@
 # Match Lab — Playground Page Plan
 
-Status: planned, not started. Captures the design synthesis before any code
-changes, so the sequencing survives even if work is picked up in a later
-session.
+Status: Phase 1 (shared match-engine core extraction) done. Phase 2
+(`match-lab.html`/`.js`) not started.
 
 ## Goal
 
@@ -117,20 +116,85 @@ for what was kept, changed, or rejected and why.
 
 ## Build sequence
 
-1. **Phase 1 — extract `src/lib/matchEngineCore.js`.**
-   - Move the pure resolver/heuristic functions, zone constants, RNG
-     helpers, and attribute-resolution logic out of `draft-run.js`,
-     `export` each.
-   - Update `draft-run.js` to import from it (matching the existing
-     versioned-query-string import convention already used for the other
-     `src/lib` imports).
-   - Update `tools/test-draft-game.mjs` and `tools/scenario_telemetry.mjs`
-     to real-import the new module and inject its exports into their
-     sandbox `context` objects.
-   - Verify: `node --check` on every touched file, full suite run 2-3x,
-     telemetry snapshot compared against the pre-refactor baseline in
-     `MATCH_ENGINE_SCENARIOS.md` — should be byte-identical, since nothing
-     about the logic itself is changing, only where it lives.
+1. ~~**Phase 1 — extract `src/lib/matchEngineCore.js`.**~~ Done. Moved 50
+   pure resolver/heuristic functions, zone constants, RNG helpers, and the
+   full attribute-resolution chain into `src/lib/matchEngineCore.js`,
+   `export`ed each; `draft-run.js` now imports them (matching the existing
+   versioned-query-string convention already used for the other `src/lib`
+   imports). Verified with a real Node `import()` that every name
+   `draft-run.js` imports actually resolves as a real export (`node --check`
+   alone can't catch a missing/misspelled export — real ESM import
+   resolution can).
+
+   **Two real problems found and fixed, not just code motion:**
+   - The planned fix ("real-import the module in both test harnesses and
+     inject its exports into their sandbox `context` objects") turned out
+     to be wrong. `vm.runInNewContext` creates a separate realm with its
+     own `Object.prototype`; a function injected from the *outer* realm
+     still builds its return objects using the *outer* `Object.prototype`,
+     while object literals written in the sandboxed test source use the
+     *sandbox's*. Any `assert.deepEqual`/`deepStrictEqual` comparing the
+     two then fails with "same structure but not reference-equal" — a
+     cross-realm identity mismatch, not an actual behavior difference.
+     Fixed by inlining `matchEngineCore.js`'s source (with `export`
+     stripped) directly into the sandboxed script ahead of `draft-run.js`'s
+     own stripped source in both `tools/test-draft-game.mjs` and
+     `tools/scenario_telemetry.mjs`, so every function/constant lives in
+     the *same* realm as the rest of the evaluated code — matching how it
+     actually behaved before the extraction.
+   - A raw Node script used to delete a large (587-line) block from
+     `draft-run.js` rewrote the *entire* file using `\r\n` line endings,
+     silently flipping it from LF to CRLF. This broke an unrelated,
+     pre-existing test that hardcoded a `\n`-based substring match against
+     the raw file text. Fixed by normalizing the file back to LF (matching
+     every other file in the repo) — worth remembering next time a
+     line-based script edit (rather than the `Edit` tool) touches a large
+     chunk of a file: it can silently renormalize line endings for the
+     *whole* file, not just the edited region.
+
+   Verified: `node --check` on every touched file, full suite run 3x clean,
+   `scenario_telemetry.mjs` output compared against the pre-refactor
+   snapshot in `MATCH_ENGINE_SCENARIOS.md` — same shape, same order of
+   magnitude per code (exact counts differ slightly, as expected, since the
+   pressure-widening/orientation work already shifted the RNG stream before
+   this refactor started; this refactor itself doesn't touch RNG order at
+   all, only where the code lives). Also added a standalone test
+   (`tools/test-draft-game.mjs`, top of file) that imports
+   `matchEngineCore.js` as an ordinary ES module — not through the VM
+   sandbox at all — and calls a couple of its functions directly, since
+   that's exactly how `match-lab.js` will consume it; the sandbox-inlining
+   route proves the sandbox realm works, not that the exported module
+   works normally on its own.
+
+   **Phase 1 baseline** (`node tools/scenario_telemetry.mjs 400`, frozen
+   here as the reference point for Phase 2 — if Match Lab's interactive
+   probes ever disagree with these orders of magnitude for the same
+   inputs, that's a signal to check the adapter, not the engine):
+
+   ```
+   K.ONEONONE.1              753   1.883/match
+   through-ball               662   1.655/match
+   chip                       441   1.103/match
+   F.CALM.WEAK                416   1.040/match
+   late-box-run               370   0.925/match
+   F.FINESSE.WIDE             368   0.920/match
+   diagonal-switch            297   0.743/match
+   F.BLAST.OVER               293   0.733/match
+   D.BLOCK                    273   0.682/match
+   K.SAVE.0/1/3                748   (0.640+0.627+0.603)/match combined
+   P.RECEIVE.PROTECT          252   0.630/match
+   K.ONEONONE.5               234   0.585/match
+   P.RECEIVE.HEAVY            232   0.580/match
+   keeper-dribble              146   0.365/match
+   DELIVERY.CLEARED           128   0.320/match
+   foul-D.SLIDE/STAND/DUEL/last-man  174 combined (~0.44/match)
+   corner-header                38   0.095/match
+   P.RECEIVE.KNOCK_FORWARD      92   0.230/match
+   P.RECEIVE.LOSE                15   0.037/match
+   FK.WALL.HIT                   11   0.028/match
+   K.ONEONONE.6                   1   0.003/match (conditional tier)
+   penalty                        1   0.003/match (conditional tier)
+   ```
 2. **Phase 2 — build `match-lab.html`/`match-lab.js`.**
    - Player search via the existing `searchPlayers()`/`getPlayerMetrics()`
      (`src/lib/retroballApi.js`) — no new backend work.

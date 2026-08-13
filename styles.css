@@ -122,6 +122,17 @@ body {
   font-family: "Madeleina Sans", Arial, Helvetica, sans-serif;
 }
 
+body.database-page {
+  background-color: #080c09;
+  background-image:
+    linear-gradient(rgba(5, 9, 7, 0.76), rgba(5, 9, 7, 0.9)),
+    var(--database-page-background, url("img/0_7.png"));
+  background-position: center, center top;
+  background-size: cover, cover;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
 .site-footer {
   display: flex;
   justify-content: center;
@@ -185,6 +196,41 @@ p {
   border: 1px solid var(--line-soft);
   border-radius: 8px;
   box-shadow: 0 12px 30px var(--shadow);
+}
+
+.database-topbar {
+  position: relative;
+  background:
+    linear-gradient(90deg, rgba(5, 9, 7, 0.04) 0%, rgba(5, 9, 7, 0.16) 40%, rgba(5, 9, 7, 0.72) 62%, rgba(5, 9, 7, 0.96) 100%),
+    url("img/0_6.png") center / cover no-repeat;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.database-banner-home {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 1;
+  width: 25%;
+  border-radius: inherit;
+}
+
+.database-banner-home:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.database-banner-home:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+}
+
+.database-topbar .database-tools {
+  grid-column: 2;
+  position: relative;
+  z-index: 2;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(7, 11, 9, 0.68);
+  backdrop-filter: blur(3px);
 }
 
 .eyebrow {
@@ -3171,6 +3217,19 @@ select:focus {
 
   .topbar {
     align-items: flex-start;
+  }
+
+  .database-topbar {
+    padding-top: 82px;
+  }
+
+  .database-topbar .database-tools {
+    grid-column: 1;
+  }
+
+  .database-banner-home {
+    height: 72px;
+    width: 40%;
   }
 
   .profile-title {

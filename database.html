@@ -5,14 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Ultimate Database - Old-School-Football</title>
     <meta name="retroball-api-url" content="/local-api">
-    <link rel="stylesheet" href="styles.css?v=20260730-35">
+    <script>
+      (() => {
+        const backgrounds = [7, 8, 9];
+        let previous = null;
+        try {
+          previous = sessionStorage.getItem("database-background");
+        } catch {}
+        const choices = backgrounds.filter((number) => String(number) !== previous);
+        const selected = choices[Math.floor(Math.random() * choices.length)];
+        try {
+          sessionStorage.setItem("database-background", String(selected));
+        } catch {}
+        document.documentElement.style.setProperty(
+          "--database-page-background",
+          `url("img/0_${selected}.png")`,
+        );
+      })();
+    </script>
+    <link rel="stylesheet" href="styles.css?v=20260813-03">
   </head>
-  <body>
+  <body class="database-page">
     <main class="shell">
-      <header class="topbar">
-        <div>
-          <a class="eyebrow home-link" href="index.html">Old-School-Football</a>
-        </div>
+      <header class="topbar database-topbar">
+        <a class="database-banner-home" href="index.html" aria-label="Back to Old-School-Football home" title="Back to home"></a>
         <div class="database-tools">
           <label class="database-picker">
             <span>Season</span>
@@ -74,6 +90,6 @@
       <a class="support-button" href="https://ko-fi.com/eidolast" target="_blank" rel="noopener noreferrer">Support on Ko-fi</a>
     </footer>
 
-    <script src="src/databaseSearch.js?v=20260730-35" type="module"></script>
+    <script src="src/databaseSearch.js?v=20260809-04" type="module"></script>
   </body>
 </html>

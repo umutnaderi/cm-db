@@ -33,6 +33,7 @@ class ColourPair:
     slot: int
     season_order: int
     origin: str
+    third: str | None = None
 
 
 def readonly_uri(path: Path) -> str:
@@ -235,6 +236,7 @@ def build_lookup(
             continue
         background = decode_colour(override.get("background"), palette)
         foreground = decode_colour(override.get("foreground"), palette)
+        third = decode_colour(override.get("third"), palette) if override.get("third") else None
         if not background or not foreground or background == foreground:
             raise RuntimeError(f"Invalid club colour override for {public_id}")
         exact_pairs[canonical_club_id] = ColourPair(
@@ -245,6 +247,7 @@ def build_lookup(
             slot=0,
             season_order=1_000_000,
             origin="canonical_override",
+            third=third,
         )
         applied_override_groups += 1
 
@@ -291,6 +294,7 @@ def build_lookup(
                 colour_canonical_id,
                 pair.background,
                 pair.foreground,
+                pair.third,
                 pair.source_database_slug,
                 pair.source_club_id,
                 str(pair.slot),
@@ -312,6 +316,7 @@ CREATE TABLE canonical_club_colours (
   colour_canonical_club_id TEXT NOT NULL,
   background_colour TEXT NOT NULL,
   foreground_colour TEXT NOT NULL,
+  third_colour TEXT,
   colour_source_database_slug TEXT NOT NULL,
   colour_source_club_id TEXT NOT NULL,
   colour_slot INTEGER NOT NULL,
@@ -322,11 +327,13 @@ CREATE TABLE canonical_club_colours (
         )
         for row in rows:
             # Keep the slot numeric while all identifiers remain lossless text.
-            prefix = ",".join(sql_text(value) for value in row[:8])
-            suffix = sql_text(row[9])
+            prefix = ",".join(sql_text(value) for value in row[:6])
+            third = "NULL" if row[6] is None else sql_text(row[6])
+            middle = ",".join(sql_text(value) for value in row[7:9])
+            suffix = sql_text(row[10])
             output.write(
                 "INSERT INTO canonical_club_colours VALUES("
-                f"{prefix},{int(row[8])},{suffix});\n"
+                f"{prefix},{third},{middle},{int(row[9])},{suffix});\n"
             )
         output.write(
             "CREATE INDEX canonical_club_colours_canonical_idx\n"

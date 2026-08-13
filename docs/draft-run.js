@@ -8,16 +8,79 @@ import {
   searchPlayers,
 } from "./src/lib/retroballApi.js?v=20260801-65";
 import {
+  average,
+  clamp,
+  computePressure,
+  conditionedScore,
+  conditionMultiplier,
+  CONGESTED_ZONES,
+  contestedRace,
+  displayZone,
+  ENGINE_ATTRIBUTE_ALIASES,
+  ENGINE_ATTRIBUTE_RULES,
+  engineAttribute,
+  engineAttributeDetail,
+  FINISH_TYPE_LABELS,
+  FREE_KICK_SHOT_LABELS,
+  goalkeeperScore,
+  hashString,
+  headerScore,
+  isAttacker,
+  isDefender,
+  isGoalkeeper,
+  isMidfielder,
+  KEEPER_DUEL_LABELS,
+  LEGACY_ATTRIBUTE_DATABASES,
+  localizedDuel,
+  MATCH_TRACE,
+  MIRRORED_ZONE,
+  normalizedAttributeLabel,
+  normalizedEngineRatings,
+  playerAbility,
+  playerAttribute,
+  playerName,
+  playerPreferredColumn,
+  poacherScore,
+  receiveOrientation,
+  resolveDelivery,
+  resolveEngagement,
+  resolveFinishAttempt,
+  resolveFoul,
+  resolveFreeKickAttempt,
+  resolveKeeperSave,
+  resolveOneOnOne,
+  resolvePenaltyKick,
+  resolveReceive,
+  resolveShotBlock,
+  resolveWall,
+  seededRandom,
+  selectDeliveryChoice,
+  selectEngagement,
+  selectFinishType,
+  selectFreeKickShotType,
+  selectReceiver,
+  traceScenario,
+  transitionShotChance,
+  weightedChoice,
+  weightedPlayer,
+  ZONE_CENTERS,
+  ZONE_TRANSITION_MATRIX,
+} from "./src/lib/matchEngineCore.js?v=20260811-01";
+import {
   createDraftSquad,
   formatDraftSquadText,
 } from "./src/lib/draftSquad.js?v=20260730-47";
 import {
   createCanonicalMatchTimeline,
-} from "./src/lib/matchTimeline.js?v=20260802-02";
+} from "./src/lib/matchTimeline.js?v=20260803-01";
 import {
   createMatchPlaybackController,
   estimateServerClockOffset,
 } from "./src/lib/matchPlayback.js?v=20260801-01";
+import {
+  boostAttributesTowardAbility,
+  fillZeroAttributes,
+} from "./src/lib/attributeGeneration.js?v=20260809-01";
 
 const TEAM_STORAGE_KEY = "retroball-draft-team-v1";
 const OPPONENT_CACHE_KEY = "retroball-ucl-opponents-v1";
@@ -28,24 +91,6 @@ const MATCH_PACES = {
   normal: { label: "Normal", multiplier: 1 },
   slow: { label: "Slow", multiplier: 1.65 },
 };
-const MIRRORED_ZONE = [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
-const ZONE_CENTERS = [
-  [16.667, 12.5], [50, 12.5], [83.333, 12.5],
-  [16.667, 37.5], [50, 37.5], [83.333, 37.5],
-  [16.667, 62.5], [50, 62.5], [83.333, 62.5],
-  [16.667, 87.5], [50, 87.5], [83.333, 87.5],
-];
-const ZONE_TRANSITION_MATRIX = Array.from({ length: 12 }, (_, zone) => {
-  const row = Math.floor(zone / 3);
-  const column = zone % 3;
-  const targetsInRow = (targetRow) => [column, column - 1, column + 1]
-    .filter((targetColumn) => targetColumn >= 0 && targetColumn <= 2)
-    .map((targetColumn) => targetRow * 3 + targetColumn);
-  return {
-    adjacent: row > 0 ? targetsInRow(row - 1) : [0, 1, 2],
-    bypass: row === 2 ? targetsInRow(0) : [],
-  };
-});
 const CLUBS = {
   aek: { name: "AEK Athens", club: "AEK Athens" },
   ajax: { name: "Ajax", club: "AFC Ajax" },
@@ -86,6 +131,43 @@ const CLUBS = {
   stuttgart: { name: "VfB Stuttgart", club: "VfB Stuttgart" },
   united: { name: "Manchester United", club: "Manchester United" },
   valencia: { name: "Valencia", club: "Valencia C.F. SAD" },
+};
+
+// Nation values match the `nation_name` field returned by the players API exactly
+// (verified against cm0102_vanilla_original) — a mismatch here silently empties a roster.
+const NATIONS = {
+  argentina: { name: "Argentina", nation: "Argentina" },
+  belgium: { name: "Belgium", nation: "Belgium" },
+  brazil: { name: "Brazil", nation: "Brazil" },
+  cameroon: { name: "Cameroon", nation: "Cameroon" },
+  china: { name: "China PR", nation: "China PR" },
+  costarica: { name: "Costa Rica", nation: "Costa Rica" },
+  croatia: { name: "Croatia", nation: "Croatia" },
+  denmark: { name: "Denmark", nation: "Denmark" },
+  ecuador: { name: "Ecuador", nation: "Ecuador" },
+  england: { name: "England", nation: "England" },
+  france: { name: "France", nation: "France" },
+  germany: { name: "Germany", nation: "Germany" },
+  ireland: { name: "Republic of Ireland", nation: "Republic of Ireland" },
+  italy: { name: "Italy", nation: "Italy" },
+  japan: { name: "Japan", nation: "Japan" },
+  mexico: { name: "Mexico", nation: "Mexico" },
+  nigeria: { name: "Nigeria", nation: "Nigeria" },
+  paraguay: { name: "Paraguay", nation: "Paraguay" },
+  poland: { name: "Poland", nation: "Poland" },
+  portugal: { name: "Portugal", nation: "Portugal" },
+  russia: { name: "Russia", nation: "Russia" },
+  saudiarabia: { name: "Saudi Arabia", nation: "Saudi Arabia" },
+  senegal: { name: "Senegal", nation: "Senegal" },
+  slovenia: { name: "Slovenia", nation: "Slovenia" },
+  southafrica: { name: "South Africa", nation: "South Africa" },
+  southkorea: { name: "South Korea", nation: "South Korea" },
+  spain: { name: "Spain", nation: "Spain" },
+  sweden: { name: "Sweden", nation: "Sweden" },
+  tunisia: { name: "Tunisia", nation: "Tunisia" },
+  turkey: { name: "Turkey", nation: "Turkey" },
+  unitedstates: { name: "United States", nation: "United States" },
+  uruguay: { name: "Uruguay", nation: "Uruguay" },
 };
 
 const SCENARIOS = {
@@ -140,6 +222,38 @@ const SCENARIOS = {
     ],
     stages: ["Round of 16", "Quarter-final", "Semi-final", "Final"],
     finalVenue: "Gelsenkirchen",
+  },
+  wc2002: {
+    key: "wc2002",
+    label: "2002 FIFA World Cup",
+    shortLabel: "World Cup 02",
+    database: "cm0102_vanilla_original",
+    replacementLabel: {
+      A: "France", B: "Slovenia", C: "China PR", D: "Poland",
+      E: "Saudi Arabia", F: "Nigeria", G: "Ecuador", H: "Tunisia",
+    },
+    groups: {
+      A: { replace: "france", teams: ["denmark", "senegal", "uruguay", "france"] },
+      B: { replace: "slovenia", teams: ["spain", "paraguay", "southafrica", "slovenia"] },
+      C: { replace: "china", teams: ["brazil", "turkey", "costarica", "china"] },
+      D: { replace: "poland", teams: ["southkorea", "unitedstates", "portugal", "poland"] },
+      E: { replace: "saudiarabia", teams: ["germany", "ireland", "cameroon", "saudiarabia"] },
+      F: { replace: "nigeria", teams: ["sweden", "england", "argentina", "nigeria"] },
+      G: { replace: "ecuador", teams: ["mexico", "italy", "croatia", "ecuador"] },
+      H: { replace: "tunisia", teams: ["japan", "belgium", "russia", "tunisia"] },
+    },
+    seeds: {
+      A1: "denmark", A2: "senegal", B1: "spain", B2: "paraguay",
+      C1: "brazil", C2: "turkey", D1: "southkorea", D2: "unitedstates",
+      E1: "germany", E2: "ireland", F1: "sweden", F2: "england",
+      G1: "mexico", G2: "italy", H1: "japan", H2: "belgium",
+    },
+    entryPairs: [
+      ["E1", "B2"], ["G1", "D2"], ["B1", "E2"], ["D1", "G2"],
+      ["A1", "F2"], ["C1", "H2"], ["F1", "A2"], ["H1", "C2"],
+    ],
+    stages: ["Round of 16", "Quarter-final", "Semi-final", "Final"],
+    finalVenue: "Yokohama",
   },
 };
 
@@ -388,26 +502,6 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function hashString(value) {
-  let hash = 2166136261;
-  for (const character of String(value)) {
-    hash ^= character.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function seededRandom(seed) {
-  let value = seed >>> 0;
-  return () => {
-    value += 0x6d2b79f5;
-    let result = value;
-    result = Math.imul(result ^ result >>> 15, result | 1);
-    result ^= result + Math.imul(result ^ result >>> 7, result | 61);
-    return ((result ^ result >>> 14) >>> 0) / 4294967296;
-  };
-}
-
 function seededShuffle(items, seed) {
   const random = seededRandom(seed);
   const shuffled = items.slice();
@@ -416,10 +510,6 @@ function seededShuffle(items, seed) {
     [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
   }
   return shuffled;
-}
-
-function clamp(minimum, maximum, value) {
-  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function poisson(lambda, random) {
@@ -431,198 +521,6 @@ function poisson(lambda, random) {
     product *= random();
   } while (product > limit && count < 9);
   return count - 1;
-}
-
-function average(values) {
-  return values.length
-    ? values.reduce((total, value) => total + value, 0) / values.length
-    : 0;
-}
-
-function playerName(player) {
-  return player?.canonical_player_name
-    || player?.display_name
-    || player?.full_name
-    || "Unknown player";
-}
-
-const LEGACY_ATTRIBUTE_DATABASES = new Set([
-  "cm9697",
-  "cm9697_vanilla_original",
-  "cm9798",
-  "cm9798_vanilla_original",
-]);
-
-const ENGINE_ATTRIBUTE_RULES = {
-  "acceleration": [["Pace", 1]],
-  "agility": [["Pace", 0.45], ["Technique", 0.35], ["Dribbling", 0.2]],
-  "anticipation": [["Positioning", 0.45], ["Consistency", 0.3], ["Creativity", 0.25]],
-  "balance": [["Strength", 0.45], ["Technique", 0.3], ["Pace", 0.25]],
-  "crossing": [["Passing", 0.5], ["Technique", 0.35], ["Set Pieces", 0.15]],
-  "decisions": [["Consistency", 0.4], ["Positioning", 0.3], ["Creativity", 0.3]],
-  "first touch": [["Technique", 0.55], ["Dribbling", 0.25], ["Passing", 0.2]],
-  "handling": [["Goalkeeper", 0.5], ["Consistency", 0.25], ["Positioning", 0.25]],
-  "jumping": [["Heading", 0.55], ["Strength", 0.45]],
-  "long shots": [["Shooting", 0.65], ["Finishing", 0.2], ["Technique", 0.15]],
-  "one on ones": [["Goalkeeper", 0.45], ["Positioning", 0.3], ["Anticipation", 0.25]],
-  "off the ball": [["Positioning", 0.4], ["Creativity", 0.25], ["Flair", 0.2], ["Consistency", 0.15]],
-  "reflexes": [["Goalkeeper", 0.5], ["Pace", 0.25], ["Consistency", 0.25]],
-  "strength": [["Heading", 0.4], ["Stamina", 0.35], ["Tackling", 0.25]],
-  "teamwork": [["Work Rate", 0.35], ["Consistency", 0.3], ["Character", 0.2], ["Determination", 0.15]],
-  "vision": [["Creativity", 0.45], ["Passing", 0.3], ["Technique", 0.15], ["Flair", 0.1]],
-  "work rate": [["Stamina", 0.35], ["Determination", 0.3], ["Consistency", 0.2], ["Character", 0.15]],
-};
-
-const ENGINE_ATTRIBUTE_ALIASES = {
-  "corners": ["Corner", "Set Pieces"],
-  "finishing": ["Shooting"],
-  "free kicks": ["Free Kick", "Set Pieces"],
-  "goalkeeper": ["Goalkeeping"],
-  "long shots": ["Shooting"],
-  "one on ones": ["One-on-Ones", "One On One"],
-  "set pieces": ["Set Pieces"],
-};
-
-const engineAttributeCache = new WeakMap();
-
-function normalizedAttributeLabel(label) {
-  return String(label || "")
-    .trim()
-    .toLowerCase()
-    .replaceAll("-", " ")
-    .replace(/\s+/g, " ");
-}
-
-function playerAttributeEntries(player) {
-  const lists = [
-    player?.attributes,
-    player?.hiddenAttributes,
-    player?.hidden_attributes,
-    player?.profile?.attributes,
-    player?.profile?.hiddenAttributes,
-    player?.profile?.hidden_attributes,
-  ];
-  return lists.flatMap((list) => Array.isArray(list) ? list : []);
-}
-
-function rawPlayerAttributeMap(player) {
-  const values = new Map();
-  for (const item of playerAttributeEntries(player)) {
-    const label = normalizedAttributeLabel(item?.label);
-    const value = Number(item?.value);
-    // CM attributes use 1-20. A stored zero represents an unset value.
-    if (label && value > 0 && value <= 20 && !values.has(label)) {
-      values.set(label, value);
-    }
-  }
-  return values;
-}
-
-function playerCaBaseline(player) {
-  return clamp(1, 20, (Number(player?.current_ability) || 100) / 10);
-}
-
-function positionalAttributeBaseline(player, label) {
-  const base = playerCaBaseline(player);
-  const key = normalizedAttributeLabel(label);
-  const goalkeeper = isGoalkeeper(player);
-  const defender = isDefender(player);
-  const midfielder = isMidfielder(player);
-  const attacker = isAttacker(player);
-  let adjustment = 0;
-
-  if (["handling", "reflexes", "one on ones"].includes(key)) {
-    adjustment = goalkeeper ? 1 : -8;
-  } else if (["marking", "tackling", "positioning", "anticipation"].includes(key)) {
-    adjustment = defender ? 1 : attacker ? -2 : 0;
-  } else if (["passing", "creativity", "vision", "technique", "teamwork"].includes(key)) {
-    adjustment = midfielder ? 1 : 0;
-  } else if (["finishing", "off the ball", "heading", "long shots"].includes(key)) {
-    adjustment = attacker ? 1 : defender ? -1 : 0;
-  } else if (key === "crossing") {
-    adjustment = /(?:L|R)/i.test(String(player?.position_text || player?.role || ""))
-      ? 1
-      : 0;
-  }
-  return clamp(1, 20, base + adjustment);
-}
-
-function directEngineAttribute(raw, label) {
-  const key = normalizedAttributeLabel(label);
-  if (raw.has(key)) return { value: raw.get(key), source: "direct", confidence: 1 };
-  for (const alias of ENGINE_ATTRIBUTE_ALIASES[key] || []) {
-    const aliasKey = normalizedAttributeLabel(alias);
-    if (raw.has(aliasKey)) {
-      return { value: raw.get(aliasKey), source: "alias", confidence: 0.82 };
-    }
-  }
-  return null;
-}
-
-function engineAttributeDetail(player, label) {
-  const key = normalizedAttributeLabel(label);
-  const cached = player && typeof player === "object"
-    ? engineAttributeCache.get(player)?.get(key)
-    : null;
-  if (cached) return cached;
-  const remember = (detail) => {
-    if (player && typeof player === "object") {
-      if (!engineAttributeCache.has(player)) engineAttributeCache.set(player, new Map());
-      engineAttributeCache.get(player).set(key, detail);
-    }
-    return detail;
-  };
-  const raw = rawPlayerAttributeMap(player);
-  const direct = directEngineAttribute(raw, label);
-  if (direct) return remember(direct);
-
-  const proxies = ENGINE_ATTRIBUTE_RULES[key] || [];
-  let weightedTotal = 0;
-  let availableWeight = 0;
-  for (const [proxyLabel, weight] of proxies) {
-    const proxy = directEngineAttribute(raw, proxyLabel);
-    if (!proxy) continue;
-    weightedTotal += proxy.value * weight;
-    availableWeight += weight;
-  }
-
-  const baseline = positionalAttributeBaseline(player, key);
-  if (!availableWeight) {
-    return remember({ value: baseline, source: "baseline", confidence: 0.35 });
-  }
-
-  const proxyAverage = weightedTotal / availableWeight;
-  const database = String(player?.database_slug || "");
-  const proxyShare = LEGACY_ATTRIBUTE_DATABASES.has(database) ? 0.62 : 0.72;
-  return remember({
-    value: clamp(1, 20, proxyAverage * proxyShare + baseline * (1 - proxyShare)),
-    source: "inferred",
-    confidence: LEGACY_ATTRIBUTE_DATABASES.has(database) ? 0.58 : 0.68,
-  });
-}
-
-function engineAttribute(player, label) {
-  return engineAttributeDetail(player, label).value;
-}
-
-function normalizedEngineRatings(player) {
-  const labels = [
-    "Passing", "Creativity", "Vision", "Technique", "First Touch",
-    "Dribbling", "Crossing", "Off the Ball", "Finishing", "Long Shots",
-    "Heading", "Marking", "Tackling", "Positioning", "Anticipation",
-    "Pace", "Acceleration", "Agility", "Balance", "Strength", "Stamina",
-    "Work Rate", "Teamwork", "Decisions", "Handling", "Reflexes",
-    "One On Ones", "Jumping", "Corners", "Free Kicks", "Set Pieces",
-  ];
-  const ratings = Object.fromEntries(labels.map((label) => [
-    label,
-    engineAttributeDetail(player, label),
-  ]));
-  return {
-    ratings,
-    confidence: average(Object.values(ratings).map((rating) => rating.confidence)),
-    legacy: LEGACY_ATTRIBUTE_DATABASES.has(String(player?.database_slug || "")),
-  };
 }
 
 const friendSession = friendSessionFromPage();
@@ -703,7 +601,7 @@ function teamLabel(key) {
     ? team.teamName
     : key === "friend-guest"
       ? friendOpponentName
-      : TITAN_BY_KEY.get(key)?.name || CLUBS[key]?.name || key;
+      : TITAN_BY_KEY.get(key)?.name || CLUBS[key]?.name || NATIONS[key]?.name || key;
 }
 
 function validRoster(players) {
@@ -824,19 +722,24 @@ async function opponentRoster(key) {
   }
 
   const club = CLUBS[key];
-  if (!club) throw new Error(`Unknown opponent: ${key}.`);
-  const clubName = scenario.key === "ucl0203" && club.club0203
-    ? club.club0203
-    : club.club;
-  const response = await searchPlayers({
-    database: scenario.database,
-    q: "",
-    club: clubName,
-    pageSize: 60,
-  });
+  const nation = NATIONS[key];
+  if (!club && !nation) throw new Error(`Unknown opponent: ${key}.`);
+  const response = club
+    ? await searchPlayers({
+        database: scenario.database,
+        q: "",
+        club: scenario.key === "ucl0203" && club.club0203 ? club.club0203 : club.club,
+        pageSize: 60,
+      })
+    : await searchPlayers({
+        database: scenario.database,
+        q: "",
+        nation: nation.nation,
+        pageSize: 50,
+      });
   const roster = validRoster(response.items);
   if (!roster.length) {
-    throw new Error(`No ${scenario.shortLabel} players found for ${club.name}.`);
+    throw new Error(`No ${scenario.shortLabel} players found for ${(club || nation).name}.`);
   }
   rosterMemory.set(cacheKey, roster);
   opponentCache[cacheKey] = roster;
@@ -856,14 +759,35 @@ async function hydratePlayers(players) {
       // CA-derived fallbacks keep the match playable if detailed metrics are unavailable.
     }
   }
-  return players.map((player) => ({
-    ...player,
-    ...(playerMetricCache.get(playerIdentity(player)) || {}),
-    role: player.role,
-    line: player.line,
-    overall: player.overall,
-    isCaptain: player.isCaptain,
-  }));
+  return players.map((player) => {
+    const merged = {
+      ...player,
+      ...(playerMetricCache.get(playerIdentity(player)) || {}),
+      role: player.role,
+      line: player.line,
+      overall: player.overall,
+      isCaptain: player.isCaptain,
+    };
+    const rng = seededRandom(hashString(`${runSeed}:attr-gen:${playerIdentity(player)}`));
+    merged.attributes = fillZeroAttributes(
+      merged.attributes,
+      merged.position_text,
+      merged.current_ability,
+      rng,
+    );
+    const targetAbility = Number(merged.generatedTargetAbility);
+    if (Number.isFinite(targetAbility) && targetAbility > Number(merged.current_ability)) {
+      merged.attributes = boostAttributesTowardAbility(
+        merged.attributes,
+        merged.position_text,
+        merged.current_ability,
+        targetAbility,
+        rng,
+      );
+      merged.current_ability = Math.round(targetAbility);
+    }
+    return merged;
+  });
 }
 
 function opponentOverall(roster) {
@@ -927,28 +851,6 @@ function boostedSquadOverall() {
   })));
 }
 
-function playerAttribute(player, ...labels) {
-  for (const label of labels) {
-    const detail = engineAttributeDetail(player, label);
-    if (detail.source !== "baseline") return detail.value;
-  }
-  return engineAttribute(player, labels[0]);
-}
-
-function playerAbility(player) {
-  return clamp(30, 99, (Number(player?.current_ability) || 100) / 2);
-}
-
-function isAttacker(player) {
-  return player?.line === "attack"
-    || /(^|\/|\s)(?:F|S|A)(?:\s|\/|$)/i.test(String(player?.position_text || ""));
-}
-
-function isMidfielder(player) {
-  return player?.line === "midfield"
-    || /(^|\/|\s)(?:M|DM|AM)(?:\s|\/|$)/i.test(String(player?.position_text || ""));
-}
-
 function attackerScore(player) {
   const technique = average([
     playerAttribute(player, "Finishing", "Shooting"),
@@ -987,18 +889,6 @@ function defenderScore(player) {
     playerAttribute(player, "Strength"),
   ]) * 5;
   return clamp(30, 99, playerAbility(player) * 0.44 + attributes * 0.56);
-}
-
-function goalkeeperScore(player) {
-  const attributes = average([
-    playerAttribute(player, "Handling"),
-    playerAttribute(player, "Reflexes"),
-    playerAttribute(player, "One On Ones"),
-    playerAttribute(player, "Positioning"),
-    playerAttribute(player, "Agility"),
-    playerAttribute(player, "Jumping"),
-  ]) * 5;
-  return clamp(25, 99, playerAbility(player) * 0.38 + attributes * 0.62);
 }
 
 function strongest(players, score, count) {
@@ -1056,27 +946,6 @@ function teamConditionAt(model, minute) {
     .map((player) => conditionMultiplier(player, minute)));
 }
 
-function weightedPlayer(players, random, preferredLine = "", score = attackerScore) {
-  if (!players.length) return null;
-  const weighted = players.flatMap((player) => {
-    const lineBoost = !preferredLine || player.line === preferredLine ? 3 : 1;
-    const weight = clamp(1, 18, Math.round((score(player) - 38) / 4)) * lineBoost;
-    return Array.from({ length: weight }, () => player);
-  });
-  return weighted[Math.floor(random() * weighted.length)] || players[0];
-}
-
-function weightedChoice(options, random) {
-  const total = options.reduce((sum, option) => sum + Math.max(0, option.weight), 0);
-  if (!total) return options[0]?.value;
-  let roll = random() * total;
-  for (const option of options) {
-    roll -= Math.max(0, option.weight);
-    if (roll < 0) return option.value;
-  }
-  return options.at(-1)?.value;
-}
-
 function setPieceScore(player, delivery = "corner") {
   const specialist = delivery === "corner"
     ? playerAttribute(player, "Corners", "Set Pieces")
@@ -1088,17 +957,6 @@ function setPieceTaker(players, delivery = "corner") {
   const outfield = players.filter((player) => !isGoalkeeper(player));
   return strongest(outfield.length ? outfield : players, (player) =>
     setPieceScore(player, delivery), 1)[0] || players[0];
-}
-
-function headerScore(player) {
-  const attributes = average([
-    playerAttribute(player, "Heading"),
-    playerAttribute(player, "Jumping"),
-    playerAttribute(player, "Off the Ball"),
-    playerAttribute(player, "Strength"),
-    playerAttribute(player, "Anticipation"),
-  ]) * 5;
-  return clamp(25, 99, attributes * 0.78 + playerAbility(player) * 0.22);
 }
 
 function volleyScore(player) {
@@ -1121,6 +979,81 @@ function longRangeScore(player) {
   return clamp(25, 99, attributes * 0.76 + playerAbility(player) * 0.24);
 }
 
+function finesseLongShotScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Long Shots", "Shooting"),
+    playerAttribute(player, "Finishing", "Shooting"),
+    playerAttribute(player, "Composure"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.82 + playerAbility(player) * 0.18);
+}
+
+function deliveryScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Passing"),
+    playerAttribute(player, "Vision"),
+    playerAttribute(player, "Creativity"),
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Decisions"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.82 + playerAbility(player) * 0.18);
+}
+
+function offBallRunScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Anticipation"),
+    playerAttribute(player, "Acceleration"),
+    playerAttribute(player, "First Touch"),
+    playerAttribute(player, "Finishing", "Shooting"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.84 + playerAbility(player) * 0.16);
+}
+
+function keeperDribbleScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Dribbling"),
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Flair"),
+    playerAttribute(player, "Composure"),
+    playerAttribute(player, "Acceleration"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.84 + playerAbility(player) * 0.16);
+}
+
+function chipScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Composure"),
+    playerAttribute(player, "Vision"),
+    playerAttribute(player, "First Touch"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.82 + playerAbility(player) * 0.18);
+}
+
+function switchPlayScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Passing"),
+    playerAttribute(player, "Vision"),
+    playerAttribute(player, "Technique"),
+    playerAttribute(player, "Creativity"),
+    playerAttribute(player, "Decisions"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.86 + playerAbility(player) * 0.14);
+}
+
+function lateBoxRunScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Anticipation"),
+    playerAttribute(player, "Finishing", "Shooting"),
+    playerAttribute(player, "Long Shots", "Shooting"),
+    playerAttribute(player, "Stamina"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.84 + playerAbility(player) * 0.16);
+}
+
 function isWidePlayer(player) {
   return /(?:^|\/|\s)(?:D|DM|M|AM|F|WB)[LR](?:$|\/|\s)/i
     .test(String(player?.role || player?.position_text || ""));
@@ -1136,57 +1069,6 @@ function counterRunnerScore(player) {
   ]) * 5;
   const wideBonus = isWidePlayer(player) ? 5 : 0;
   return clamp(25, 99, attributes * 0.74 + playerAbility(player) * 0.26 + wideBonus);
-}
-
-function conditionMultiplier(player, minute) {
-  const stamina = playerAttribute(player, "Stamina");
-  const workRate = playerAttribute(player, "Work Rate");
-  const endurance = clamp(0.05, 1, (stamina * 0.68 + workRate * 0.32) / 20);
-  const fatigueProgress = clamp(0, 1, (Number(minute) - 20) / 100);
-  const fatigueCost = (0.07 + (1 - endurance) * 0.34) * fatigueProgress ** 1.15;
-  return clamp(0.58, 1, 1 - fatigueCost);
-}
-
-function conditionedScore(player, score, minute) {
-  return score(player) * conditionMultiplier(player, minute);
-}
-
-const CONGESTED_ZONES = new Set([4, 5, 7, 8]);
-
-function zonalAttribute(player, label, zone, random) {
-  const detail = engineAttributeDetail(player, label);
-  if (!CONGESTED_ZONES.has(zone)) return detail.value;
-  const uncertainty = 1 - detail.confidence;
-  const reliabilityPenalty = uncertainty * 0.14;
-  const variance = (random() - 0.5) * uncertainty * 0.34;
-  return detail.value * clamp(0.68, 1.08, 1 - reliabilityPenalty + variance);
-}
-
-function duelAttribute(player, labels, zone, random) {
-  return average(labels.map((label) => zonalAttribute(player, label, zone, random))) / 20;
-}
-
-function localizedDuel(attacker, defender, attackLabels, defenceLabels, minute, random, zone = -1) {
-  const attackerCondition = conditionMultiplier(attacker, minute);
-  const defenderCondition = conditionMultiplier(defender, minute);
-  const auraMultiplier = (player) => clamp(
-    1,
-    1.14,
-    1 + Math.max(0, Number(player?.current_ability || 0) - 180) / 90,
-  );
-  const attackPower = duelAttribute(attacker, attackLabels, zone, random)
-    * attackerCondition * auraMultiplier(attacker);
-  const defencePower = duelAttribute(defender, defenceLabels, zone, random)
-    * defenderCondition * auraMultiplier(defender);
-  const probability = attackPower + defencePower > 0
-    ? attackPower / (attackPower + defencePower)
-    : 0.5;
-  return {
-    probability,
-    won: random() < probability,
-    attackerCondition,
-    defenderCondition,
-  };
 }
 
 function defenderForColumn(opponents, column, minute, random) {
@@ -1226,16 +1108,6 @@ function pressingScore(player) {
   return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
 }
 
-function poacherScore(player) {
-  const attributes = average([
-    playerAttribute(player, "Anticipation"),
-    playerAttribute(player, "Acceleration"),
-    playerAttribute(player, "Off the Ball"),
-    playerAttribute(player, "Finishing", "Shooting"),
-  ]) * 5;
-  return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
-}
-
 function firstTouchFinishScore(player) {
   const attributes = average([
     playerAttribute(player, "First Touch"),
@@ -1258,16 +1130,6 @@ function playerReference(player) {
   };
 }
 
-function isGoalkeeper(player) {
-  if (player?.role) return player.role === "GK";
-  return /(^|\/|\s)GK($|\/|\s)/i.test(String(player?.position_text || ""));
-}
-
-function isDefender(player) {
-  return player?.line === "defence"
-    || /(^|\/|\s)(?:D|SW|WB)(?:\s|\/|$)/i.test(String(player?.position_text || ""));
-}
-
 function goalkeeper(players) {
   return strongest(players.filter(isGoalkeeper), goalkeeperScore, 1)[0] || players[0];
 }
@@ -1285,19 +1147,24 @@ function randomEventMoment(random, occupied, start = 4, end = 88) {
   };
 }
 
-function playerPreferredColumn(player, random) {
-  const position = String(player?.role || player?.position_text || "").toUpperCase();
-  if (/(?:^|\/|\s)(?:D|DM|M|AM|F|WB)L(?:$|\/|\s)/.test(position)) return 0;
-  if (/(?:^|\/|\s)(?:D|DM|M|AM|F|WB)R(?:$|\/|\s)/.test(position)) return 2;
-  return random() < 0.72 ? 1 : random() < 0.5 ? 0 : 2;
-}
-
 function spatialAction(kind, actor, random, goalType = "") {
   const column = playerPreferredColumn(actor, random);
   const adjacentCenter = column === 1 ? (random() < 0.5 ? 0 : 2) : 1;
   if (kind === "goal") {
-    if (goalType === "long-range") {
-      return { from: 6 + column, to: 1, action: "shot", turnover: false };
+    if (["long-range", "finesse-long-range"].includes(goalType)) {
+      return { from: 3 + column, to: 1, action: "shot", turnover: false };
+    }
+    if (["off-ball-run", "offside-break"].includes(goalType)) {
+      return { from: 6 + column, to: 1, action: "through-ball", turnover: false };
+    }
+    if (goalType === "round-keeper") {
+      return { from: 3 + column, to: 1, action: "dribble", turnover: false };
+    }
+    if (goalType === "chip") {
+      return { from: 3 + column, to: 1, action: "chip", turnover: false };
+    }
+    if (goalType === "late-run") {
+      return { from: 3 + column, to: 1, action: "late-run", turnover: false };
     }
     if (goalType === "counter") {
       return { from: 9 + (column === 1 ? adjacentCenter : column), to: 1, action: "counter", turnover: false };
@@ -1327,6 +1194,7 @@ function spatialAction(kind, actor, random, goalType = "") {
     cross: { from: 3 + column, to: 1, action: "cross", turnover: true },
     counter: { from: 6 + column, to: 3 + adjacentCenter, action: "counter", turnover: true },
     "through-ball": { from: 6 + column, to: column, action: "through-ball", turnover: false },
+    "switch-play": { from: 6 + column, to: 3 + adjacentCenter, action: "switch-play", turnover: false },
     tackle: { from: 3 + column, to: 3 + column, action: "turnover", turnover: true },
     card: {
       from: (isDefender(actor) ? 6 : isAttacker(actor) ? 3 : 6) + column,
@@ -1344,6 +1212,7 @@ function presentationWeight(kind) {
     cross: 1.05,
     counter: 1.1,
     "through-ball": 1.3,
+    "switch-play": 1.18,
     tackle: 0.9,
     card: 1.25,
   }[kind] || 1;
@@ -1442,14 +1311,39 @@ function goalEvent(spec, players, opponents, random, forcedGoalType = "", contex
     const headedFinish = random() < 0.78;
     scorer = context.scorer || (headedFinish ? headerScorer() : volleyScorer());
     text = `${playerName(provider)} clips in the free-kick and ${playerName(scorer)} meets it ${headedFinish ? "with a thumping header" : "on the volley"}.`;
-  } else if (goalType === "long-range") {
-    scorer = context.scorer || pickScorer(longRangeScore, "midfield");
+  } else if (["long-range", "finesse-long-range"].includes(goalType)) {
+    const finesse = goalType === "finesse-long-range";
+    scorer = context.scorer || pickScorer(
+      finesse ? finesseLongShotScore : longRangeScore,
+      "midfield",
+    );
     const descriptions = [
       `lets fly from distance and gives ${playerName(keeper)} no chance`,
       `finds the top corner with a fierce long-range strike`,
       `takes aim from outside the box and rifles the ball past ${playerName(keeper)}`,
     ];
-    text = `${playerName(scorer)} ${descriptions[Math.floor(random() * descriptions.length)]}.`;
+    text = finesse
+      ? `${playerName(scorer)} opens the body outside the box and bends a sumptuous finesse shot beyond ${playerName(keeper)} into the far corner.`
+      : `${playerName(scorer)} ${descriptions[Math.floor(random() * descriptions.length)]}.`;
+  } else if (["off-ball-run", "offside-break"].includes(goalType)) {
+    provider = context.provider || weightedPlayer(pool, random, "midfield", deliveryScore);
+    scorer = context.scorer || pickScorer(offBallRunScore, "attack");
+    const lineBreaker = context.defender ? playerName(context.defender) : "A defender";
+    text = goalType === "offside-break"
+      ? `${lineBreaker} breaks the defensive line, ${playerName(scorer)} anticipates it and races onto ${playerName(provider)}'s perfectly weighted pass before beating ${playerName(keeper)} one-on-one.`
+      : `${playerName(scorer)} times an intelligent run beyond the defence and converts ${playerName(provider)}'s incisive delivery past ${playerName(keeper)}.`;
+  } else if (goalType === "round-keeper") {
+    provider = context.provider || null;
+    scorer = context.scorer || pickScorer(keeperDribbleScore, "attack");
+    text = `${playerName(scorer)} keeps the ball glued to the boot, commits ${playerName(keeper)}, dribbles around the goalkeeper and rolls it into the empty net.`;
+  } else if (goalType === "chip") {
+    provider = context.provider || null;
+    scorer = context.scorer || pickScorer(chipScore, "attack");
+    text = `${playerName(scorer)} sees ${playerName(keeper)} stray off his line and dinks a delicate chip over him, the ball dropping just under the bar.`;
+  } else if (goalType === "late-run") {
+    provider = context.provider || weightedPlayer(pool, random, "midfield", deliveryScore);
+    scorer = context.scorer || pickScorer(lateBoxRunScore, "midfield");
+    text = `${playerName(scorer)} arrives late and unseen in the box to meet ${playerName(provider)}'s delivery, steering the finish beyond ${playerName(keeper)}.`;
   } else if (goalType === "counter") {
     provider = context.provider || weightedPlayer(pool, random, "", (player) =>
       conditionedScore(player, counterRunnerScore, eventMinute));
@@ -1464,7 +1358,9 @@ function goalEvent(spec, players, opponents, random, forcedGoalType = "", contex
   } else if (goalType === "rebound") {
     scorer = context.scorer || weightedPlayer(pool, random, "attack", (player) =>
       conditionedScore(player, poacherScore, eventMinute));
-    text = `A thunderous strike is parried by ${playerName(keeper)}, but ${playerName(scorer)} reacts faster than anyone to poke home the rebound.`;
+    text = context.reboundSource === "post"
+      ? `The effort cannons back off the post, but ${playerName(scorer)} reacts faster than anyone to poke home the rebound.`
+      : `A thunderous strike is parried by ${playerName(keeper)}, but ${playerName(scorer)} reacts faster than anyone to poke home the rebound.`;
   } else if (goalType === "cut-back") {
     provider = context.provider || weightedPlayer(pool, random, "", counterRunnerScore);
     scorer = context.scorer || weightedPlayer(pool, random, "attack", firstTouchFinishScore);
@@ -1498,10 +1394,21 @@ function goalEvent(spec, players, opponents, random, forcedGoalType = "", contex
     goal: true,
     goalType,
     goalCredit,
+    moraleUser: spec.moraleUser,
+    moraleOpponent: spec.moraleOpponent,
+    manDownUser: spec.manDownUser,
+    manDownOpponent: spec.manDownOpponent,
     scorer: playerName(scorer),
     scorerPlayer: playerReference(scorer),
     provider: provider ? playerName(provider) : "",
     providerPlayer: provider ? playerReference(provider) : null,
+    defender: context.defender ? playerName(context.defender) : "",
+    defenderPlayer: context.defender ? playerReference(context.defender) : null,
+    scenarioType: context.scenarioType || goalType,
+    defensiveError: context.defensiveError || "",
+    zoneFrom: context.zoneFrom,
+    zoneTo: context.zoneTo,
+    action: context.action,
     text,
   }, scorer, random);
 }
@@ -1691,13 +1598,6 @@ function buildTimeline({
   return { events, disciplinary };
 }
 
-function transitionShotChance(shooter, keeper, minute, baseChance, score = attackerScore) {
-  const attackPower = conditionedScore(shooter, score, minute) / 100;
-  const keeperPower = conditionedScore(keeper, goalkeeperScore, minute) / 100;
-  const share = attackPower / Math.max(0.01, attackPower + keeperPower);
-  return clamp(0.008, 0.32, baseChance * (0.45 + share * 1.1) * 0.4);
-}
-
 function buildTransitionTimeline({
   random,
   ourPlayers,
@@ -1718,9 +1618,14 @@ function buildTransitionTimeline({
   let side = random() < 0.5 ? "user" : "opponent";
   let zone = 6 + Math.floor(random() * 3);
   let counterSteps = 0;
+  let pinnedNextActor = null;
   let allInSide = "";
   let pressureSide = side;
   let pressureTicks = 0;
+  const morale = { user: 0, opponent: 0 };
+  const manDown = { user: false, opponent: false };
+  const moraleMultiplier = (moraleSide) =>
+    clamp(0.85, 1.15, 1 + morale[moraleSide] * 0.035);
 
   const opposite = (value) => value === "user" ? "opponent" : "user";
   const active = (activeSide) => {
@@ -1734,11 +1639,16 @@ function buildTransitionTimeline({
     matchSecond,
     side,
     kind: "transition",
+    moraleUser: morale.user,
+    moraleOpponent: morale.opponent,
+    manDownUser: manDown.user,
+    manDownOpponent: manDown.opponent,
   });
   const resetFromKickoff = (kickoffSide) => {
     side = kickoffSide;
     zone = 6 + Math.floor(random() * 3);
     counterSteps = 0;
+    pinnedNextActor = null;
   };
   const addGoal = (goalType, players, opponents, context = {}) => {
     const goal = goalEvent(
@@ -1756,11 +1666,11 @@ function buildTransitionTimeline({
         ? " The trailing side's all-out attack finally breaks through."
         : " The all-out attack is punished by a ruthless counter.";
     }
-    if (pressureTicks >= 3) {
-      goal.pressureWave = true;
-      goal.momentumLevel = Math.min(5, pressureTicks);
-    }
     events.push(goal);
+    traceScenario({
+      minute: goal.minute, side: goal.side, zone: context.zoneFrom ?? null,
+      scenario: context.scenarioType || goalType, outcome: "GOAL",
+    });
     resetFromKickoff(opposite(side));
   };
   const addDuelEvent = ({
@@ -1774,6 +1684,9 @@ function buildTransitionTimeline({
     text,
     possession,
     bypassedZone = null,
+    provider = null,
+    scenarioType = "",
+    defensiveError = "",
   }) => {
     const event = withSpatialMetadata({
       ...moment(),
@@ -1785,6 +1698,10 @@ function buildTransitionTimeline({
       defenderCondition: duel ? Number(duel.defenderCondition.toFixed(3)) : null,
       defender: defender ? playerName(defender) : "",
       defenderPlayer: defender ? playerReference(defender) : null,
+      provider: provider ? playerName(provider) : "",
+      providerPlayer: provider ? playerReference(provider) : null,
+      scenarioType,
+      defensiveError,
       zoneFrom: from,
       zoneTo: to,
       bypassedZone,
@@ -1794,12 +1711,12 @@ function buildTransitionTimeline({
       scorerPlayer: playerReference(actor),
       text,
     }, actor, random);
-    if (pressureTicks >= 3) {
-      event.pressureWave = true;
-      event.momentumLevel = Math.min(5, pressureTicks);
-    }
     events.push(event);
     highlightCount += 1;
+    traceScenario({
+      minute: event.minute, side: event.side, zone: from ?? null,
+      scenario: scenarioType || kind, outcome: kind,
+    });
   };
 
   for (let tick = 0; tick < maxTicks && matchSecond < lastSecond; tick += 1) {
@@ -1837,10 +1754,19 @@ function buildTransitionTimeline({
       : row === 1 || (row === 0 && column !== 1)
         ? counterRunnerScore
         : attackerScore;
-    const actor = weightedPlayer(attackingPool, random, preferredLine, (player) =>
-      conditionedScore(player, transitionScore, minute));
+    // A receiver picked at the end of the previous tick (see the
+    // transitionDuel.won branch below) takes priority over a fresh generic
+    // roll -- this is what makes a good off-ball mover actually show up as
+    // the next ball carrier more often, rather than every tick re-rolling
+    // from scratch with no memory of who the pass just found.
+    const actor = (pinnedNextActor && attackingPool.includes(pinnedNextActor))
+      ? pinnedNextActor
+      : weightedPlayer(attackingPool, random, preferredLine, (player) =>
+          conditionedScore(player, transitionScore, minute));
+    pinnedNextActor = null;
     const defender = defenderForColumn(defendingPool, column, minute, random);
     const keeper = goalkeeper(opponents);
+    const pressure = computePressure(defender, zone, counterSteps);
     const shotChance = (shooter, targetKeeper, atMinute, baseChance, score = attackerScore) => {
       const tacticalMultiplier = !allInSide
         ? 1
@@ -1848,78 +1774,502 @@ function buildTransitionTimeline({
       const momentumMultiplier = pressureTicks >= 3
         ? 1 + Math.min(0.2, (pressureTicks - 2) * 0.045)
         : 1;
+      const manDownMultiplier = manDown[opposite(side)]
+        ? 1.16
+        : manDown[side] ? 0.92 : 1;
       return clamp(
         0.008,
         0.46,
         transitionShotChance(shooter, targetKeeper, atMinute, baseChance, score)
-          * tacticalMultiplier * momentumMultiplier,
+          * tacticalMultiplier * momentumMultiplier * manDownMultiplier * moraleMultiplier(side),
       );
     };
 
-    if (random() < 0.014) {
-      const identity = `${opposite(side)}:${playerIdentity(defender)}`;
-      const previousYellow = yellows.get(identity) || 0;
-      const directRed = random() < 0.018;
-      const secondYellow = previousYellow === 1 && random() < 0.18;
-      const card = directRed || secondYellow ? "red" : "yellow";
-      if (card === "red") sentOff.add(identity);
-      else yellows.set(identity, 1);
-      events.push(withSpatialMetadata({
-        ...moment(),
-        side: opposite(side),
-        actorSide: opposite(side),
-        kind: "card",
-        goal: false,
-        card,
-        zoneFrom: MIRRORED_ZONE[zone],
-        zoneTo: MIRRORED_ZONE[zone],
-        possessionAfter: side,
-        scorer: playerName(defender),
-        scorerPlayer: playerReference(defender),
-        text: directRed
-          ? `${playerName(defender)} is shown a straight red card for stopping the transition recklessly.`
-          : secondYellow
-            ? `${playerName(defender)} receives a second yellow and is sent off.`
-            : `${playerName(defender)} is booked for halting ${playerName(actor)}'s progress.`,
-      }, defender, random));
-      if (row <= 1 && random() < 0.46) {
-        const taker = setPieceTaker(players, "free-kick");
-        const direct = column === 1 && random() < 0.58;
-        if (direct) {
-          const freeKickChance = shotChance(
-            taker,
-            keeper,
-            minute,
-            0.13,
-            (player) => setPieceScore(player, "free-kick") * 5,
-          );
-          if (random() < freeKickChance) {
-            addGoal("direct-free-kick", players, opponents, { scorer: taker });
-            continue;
-          }
+    // Foul/Discipline (see MATCH_ENGINE_SCENARIOS.md). Shared by both the
+    // D.* tackle-engagement tail below and K.ONEONONE.6 in the shot
+    // resolution -- a fouled breakaway is treated as an automatic last-man
+    // situation via forcedLastMan, same as the design doc specifies.
+    const applyFoulOutcome = (fouler, engagementLabel, forcedLastMan = false) => {
+      // A genuine last-man situation -- clear run at goal, this defender is
+      // the only cover left -- should be rare, not "any foul during a
+      // decent spell of momentum." Gated by zone and an extra roll on top
+      // of the momentum proxy so it doesn't fire on most counterSteps>=2 fouls.
+      const isLastMan = forcedLastMan
+        || (Math.floor(zone / 3) === 0 && counterSteps >= 3 && random() < 0.08);
+      const foul = resolveFoul(fouler, engagementLabel, zone, isLastMan, minute, random);
+      const cardedSide = opposite(side);
+
+      if (foul.card !== "none") {
+        const identity = `${cardedSide}:${playerIdentity(fouler)}`;
+        const previousYellow = yellows.get(identity) || 0;
+        const finalCard = foul.card === "yellow" && previousYellow === 1 ? "red" : foul.card;
+        if (finalCard === "red") {
+          sentOff.add(identity);
+          manDown[cardedSide] = true;
+          morale[cardedSide] = clamp(-5, 5, morale[cardedSide] - 3);
         } else {
-          const target = weightedPlayer(attackingPool, random, "", (player) =>
-            conditionedScore(player, headerScore, minute));
-          const marker = defenderForColumn(defendingPool, 1, minute, random);
-          const freeKickDuel = localizedDuel(
-            target,
-            marker,
-            ["Heading", "Jumping", "Strength", "Off the Ball"],
-            ["Heading", "Jumping", "Strength", "Positioning"],
-            minute,
-            random,
-            1,
-          );
-          if (freeKickDuel.won
-            && random() < shotChance(target, keeper, minute, 0.14, headerScore)) {
-            addGoal("free-kick-cross", players, opponents, { provider: taker, scorer: target });
-            continue;
-          }
+          yellows.set(identity, 1);
+        }
+        const cardEvent = withSpatialMetadata({
+          ...moment(),
+          side: cardedSide,
+          actorSide: cardedSide,
+          kind: "card",
+          goal: false,
+          card: finalCard,
+          manDown: finalCard === "red",
+          zoneFrom: MIRRORED_ZONE[zone],
+          zoneTo: MIRRORED_ZONE[zone],
+          possessionAfter: side,
+          scorer: playerName(fouler),
+          scorerPlayer: playerReference(fouler),
+          scenarioType: isLastMan ? "foul-last-man" : `foul-${engagementLabel}`,
+          text: isLastMan
+            ? `${playerName(fouler)} is shown a straight red card for denying a clear goalscoring chance.`
+            : finalCard === "red"
+              ? (previousYellow === 1
+                ? `${playerName(fouler)} receives a second yellow and is sent off.`
+                : `${playerName(fouler)} is shown a straight red card for a reckless challenge.`)
+              : `${playerName(fouler)} is booked for the foul.`,
+        }, fouler, random);
+        if (finalCard === "red") {
+          cardEvent.text += ` Down to ten men, the side drops deeper and looks to hold its shape.`;
+        }
+        events.push(cardEvent);
+        traceScenario({
+          minute: cardEvent.minute, side: cardEvent.side, zone: MIRRORED_ZONE[zone] ?? null,
+          scenario: cardEvent.scenarioType, outcome: `CARD.${finalCard.toUpperCase()}`,
+        });
+      }
+
+      if (foul.restart === "penalty") {
+        const taker = strongest(attackingPool, (player) => playerAttribute(player, "Penalty Taking"), 1)[0]
+          || attackingPool[0];
+        const penalty = resolvePenaltyKick(taker, keeper, minute, random);
+        if (penalty.goal) {
+          addGoal("penalty", players, opponents, {
+            scorer: taker, zoneFrom: 1, zoneTo: 1, action: "penalty",
+          });
+          return;
+        }
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "chance", actor: taker, defender: keeper, duel: null,
+            from: 1, to: 1, action: "penalty", possession: opposite(side),
+            text: `${playerName(taker)} steps up to take the penalty, but ${playerName(keeper)} guesses right and keeps it out.`,
+          });
         }
         side = opposite(side);
         zone = 7;
         counterSteps = 0;
+        return;
+      }
+
+      // row<=1 possessions almost always resolve through a shot/cross
+      // attempt before a duel can even fail for the attacker (wideByline/
+      // X1/lateRunners/F.SELECT all fire first and continue), so most real
+      // fouls actually land at row 2 -- widened from the original row<=1
+      // free-kick gate so this machinery is actually reachable, not just
+      // correct in isolation. Row 2 is a plausible real long-range/deep
+      // free-kick zone anyway, just weighted away from shooting.
+      if (foul.restart === "free-kick" && row <= 2 && random() < 0.46) {
+        // FK.SELECT -- shoot / cross / short (see MATCH_ENGINE_SCENARIOS.md),
+        // weighted by zone (closer+central favors shooting) and the taker's
+        // Free Kick Taking (a poor specialist shifts weight to the short
+        // option even from a good position).
+        const taker = setPieceTaker(players, "free-kick");
+        const freeKickTaking = playerAttribute(taker, "Free Kick Taking", "Set Pieces");
+        const zoneShootBias = row === 2 ? 0.35 : column === 1 ? (row === 0 ? 3 : 1.5) : 0.4;
+        const selection = weightedChoice([
+          { value: "shoot", weight: freeKickTaking * zoneShootBias },
+          { value: "cross", weight: column !== 1 ? 10 : 4 },
+          { value: "short", weight: 6 },
+        ], random);
+
+        if (selection === "short") {
+          const receivers = attackingPool.filter((player) => player !== taker);
+          pinnedNextActor = selectReceiver(
+            receivers, zone, playerAttribute(taker, "Vision"), 0.2, random,
+          ) || taker;
+          return;
+        }
+
+        if (selection === "cross") {
+          // FK.SELECT.CROSS merges into DELIVERY.* -- same mechanism as a
+          // corner, just weighted toward Crossing rather than Corners since
+          // it's mechanically an open-play cross taken from a dead ball.
+          const deliveryTarget = weightedPlayer(attackingPool, random, "attack", (player) =>
+            conditionedScore(player, headerScore, minute));
+          const marker = defenderForColumn(defendingPool, 1, minute, random);
+          const delivery = resolveDelivery(deliveryTarget, marker, keeper, minute, random, 1);
+          if (delivery.goal) {
+            addGoal(delivery.code === "DELIVERY.INSWING.GHOST" ? "set-piece-scramble" : "free-kick-cross", players, opponents, {
+              provider: taker, scorer: deliveryTarget, zoneFrom: 1, zoneTo: 1, action: "free-kick",
+            });
+            return;
+          }
+          if (!delivery.rebound) {
+            if (delivery.code === "K.SAVE.3" || delivery.code === "K.SAVE.7") {
+              awardCorner();
+              return;
+            }
+            side = opposite(side);
+            zone = delivery.throughUntouched ? 6 + Math.floor(random() * 3) : 7;
+            return;
+          }
+          const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
+            conditionedScore(player, poacherScore, minute));
+          const reboundDefender = defenderForColumn(defendingPool, 1, minute, random);
+          const reboundDuel = localizedDuel(
+            poacher, reboundDefender,
+            ["Anticipation", "Acceleration", "Off the Ball"],
+            ["Positioning", "Anticipation", "Strength"],
+            minute, random, 1,
+          );
+          if (reboundDuel.won && random() < shotChance(poacher, keeper, minute, 0.32, poacherScore)) {
+            addGoal("rebound", players, opponents, {
+              scorer: poacher, reboundSource: delivery.code === "K.SAVE.6" ? "post" : "save",
+            });
+            return;
+          }
+          side = opposite(side);
+          zone = 7;
+          return;
+        }
+
+        // FK.SHOT -- dead-ball shooting uses its own attribute weighting,
+        // not F.SELECT's, plus FK.WALL, a new mechanic: does it even get
+        // past the wall before the keeper is involved at all.
+        const wallDefenders = defendingPool.filter((player) => !isGoalkeeper(player)).slice(0, 3);
+        const wall = resolveWall(taker, wallDefenders, random);
+        if (wall.hit) {
+          if (wall.outcome === "out") {
+            if (highlightCount < highlightLimit) {
+              addDuelEvent({
+                kind: "chance", actor: taker, defender: null, duel: null,
+                from: 1, to: 1, action: "free-kick", possession: opposite(side),
+                scenarioType: wall.code,
+                text: `${playerName(taker)}'s effort cannons off the wall and away for a corner.`,
+              });
+            }
+            awardCorner();
+            return;
+          }
+          if (wall.outcome === "deflect") {
+            if (random() < 0.55) {
+              addGoal("direct-free-kick", players, opponents, { scorer: taker, scenarioType: "FK.WALL.HIT" });
+              return;
+            }
+            if (highlightCount < highlightLimit) {
+              addDuelEvent({
+                kind: "chance", actor: taker, defender: null, duel: null,
+                from: 1, to: 1, action: "free-kick", possession: opposite(side),
+                scenarioType: wall.code,
+                text: `The effort takes a wicked deflection off the wall, wrongfooting everyone, but it drifts just wide.`,
+              });
+            }
+            side = opposite(side);
+            zone = 7;
+            return;
+          }
+          // "loose"
+          const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
+            conditionedScore(player, poacherScore, minute));
+          const wallDefender = wallDefenders[0] || defenderForColumn(defendingPool, 1, minute, random);
+          const looseDuel = contestedRace(poacher, wallDefender, minute, random, 1);
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance", actor: poacher, defender: wallDefender, duel: looseDuel,
+              from: 1, to: 1, action: "free-kick", possession: looseDuel.won ? side : opposite(side),
+              scenarioType: wall.code,
+              text: looseDuel.won
+                ? `${playerName(taker)}'s effort cannons off the wall and ${playerName(poacher)} pounces on the loose ball.`
+                : `${playerName(taker)}'s effort cannons off the wall, but ${playerName(wallDefender)} clears the danger.`,
+            });
+          }
+          if (!looseDuel.won) {
+            side = opposite(side);
+            zone = 7;
+          }
+          return;
+        }
+
+        const shotType = selectFreeKickShotType(taker, random);
+        const attempt = resolveFreeKickAttempt(shotType, taker, random);
+        if (!attempt.onTarget) {
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance", actor: taker, defender: null, duel: null,
+              from: 1, to: 1, action: "free-kick", possession: opposite(side),
+              scenarioType: attempt.code,
+              text: `${playerName(taker)}'s free kick doesn't trouble ${playerName(keeper)}.`,
+            });
+          }
+          side = opposite(side);
+          zone = 7;
+          return;
+        }
+        const keeperFinishType = { regular: "calm", hard: "blast", curl: "finesse" }[shotType] || "calm";
+        const save = resolveKeeperSave(taker, keeper, keeperFinishType, minute, random, 1);
+        if (save.goal) {
+          addGoal("direct-free-kick", players, opponents, { scorer: taker, scenarioType: save.code });
+          return;
+        }
+        if (!save.rebound) {
+          if (save.code === "K.SAVE.3" || save.code === "K.SAVE.7") {
+            awardCorner();
+            return;
+          }
+          side = opposite(side);
+          zone = 7;
+          return;
+        }
+        const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
+          conditionedScore(player, poacherScore, minute));
+        const reboundDefender = defenderForColumn(defendingPool, 1, minute, random);
+        const reboundDuel = localizedDuel(
+          poacher, reboundDefender,
+          ["Anticipation", "Acceleration", "Off the Ball"],
+          ["Positioning", "Anticipation", "Strength"],
+          minute, random, 1,
+        );
+        if (reboundDuel.won && random() < shotChance(poacher, keeper, minute, 0.32, poacherScore)) {
+          addGoal("rebound", players, opponents, {
+            scorer: poacher, reboundSource: save.code === "K.SAVE.6" ? "post" : "save",
+          });
+          return;
+        }
+        side = opposite(side);
+        zone = 7;
+        return;
+      }
+      // Advantage played, or a free kick that didn't produce a direct
+      // chance -- the attacking side simply keeps the ball from here.
+    };
+
+    // Corner-kick delivery (see MATCH_ENGINE_SCENARIOS.md, DELIVERY.*).
+    // Called from wherever a shot/header ends up "tipped behind" or "off
+    // the post and out" (K.SAVE.3/.7) instead of just resetting possession
+    // -- the attacking side actually gets the corner it just earned, rather
+    // than that outcome being cosmetic text with no real follow-up.
+    const awardCorner = () => {
+      const taker = setPieceTaker(players, "corner");
+      if (selectDeliveryChoice(taker, "Corners", random) === "short") {
+        const receivers = attackingPool.filter((player) => player !== taker);
+        pinnedNextActor = selectReceiver(
+          receivers, 1, playerAttribute(taker, "Vision"), 0.3, random,
+        ) || taker;
+        zone = 1;
+        return;
+      }
+      const target = weightedPlayer(attackingPool, random, "attack", (player) =>
+        conditionedScore(player, headerScore, minute));
+      const marker = defenderForColumn(defendingPool, 1, minute, random);
+      const delivery = resolveDelivery(target, marker, keeper, minute, random, 1);
+      if (delivery.goal) {
+        addGoal(delivery.code === "DELIVERY.INSWING.GHOST" ? "set-piece-scramble" : "corner-header", players, opponents, {
+          provider: taker, scorer: target, zoneFrom: 1, zoneTo: 1, action: "corner",
+        });
+        return;
+      }
+      const cornerText = {
+        "DELIVERY.OUTSWING.THROUGH": `${playerName(taker)}'s outswinging corner drifts through everyone and away for a throw-in.`,
+        "DELIVERY.CLEARED": `${playerName(marker)} climbs highest and heads ${playerName(taker)}'s corner clear.`,
+        "F.HEADER.OFF": `${playerName(target)} gets up well, but the header drifts off target.`,
+        "K.SAVE.1": `${playerName(target)}'s header is well struck, but ${playerName(keeper)} claims it.`,
+        "K.SAVE.3": `${playerName(target)} glances it goalward and ${playerName(keeper)} tips it behind for another corner.`,
+        "K.SAVE.4": `${playerName(keeper)} fumbles the header under pressure but recovers before anyone reacts.`,
+        "K.SAVE.7": `${playerName(target)}'s header cannons off the post and away.`,
+      }[delivery.code];
+      if (!delivery.rebound) {
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "cross", actor: taker, defender: marker, duel: null,
+            from: column === 2 ? 2 : 0, to: 1, action: "corner", possession: opposite(side),
+            scenarioType: delivery.code,
+            text: cornerText || `${playerName(marker)} deals with the danger from the corner.`,
+          });
+        }
+        side = opposite(side);
+        zone = delivery.throughUntouched ? 6 + Math.floor(random() * 3) : 7;
+        return;
+      }
+      const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
+        conditionedScore(player, poacherScore, minute));
+      const reboundDefender = defenderForColumn(defendingPool, 1, minute, random);
+      const reboundDuel = localizedDuel(
+        poacher, reboundDefender,
+        ["Anticipation", "Acceleration", "Off the Ball"],
+        ["Positioning", "Anticipation", "Strength"],
+        minute, random, 1,
+      );
+      if (reboundDuel.won && random() < shotChance(poacher, keeper, minute, 0.32, poacherScore)) {
+        addGoal("rebound", players, opponents, {
+          scorer: poacher, reboundSource: delivery.code === "K.SAVE.6" ? "post" : "save",
+        });
+        return;
+      }
+      if (highlightCount < highlightLimit) {
+        addDuelEvent({
+          kind: "chance", actor: poacher, defender: reboundDefender, duel: reboundDuel,
+          from: 1, to: 1, action: "rebound", possession: opposite(side),
+          text: reboundDuel.won
+            ? `${playerName(poacher)} reacts fastest from the corner but can't direct it goalward.`
+            : `${playerName(reboundDefender)} reacts first and clears the corner-kick scramble.`,
+        });
+      }
+      side = opposite(side);
+      zone = 7;
+    };
+
+    // A side down to ten men holds its shape rather than committing men forward.
+    const forwardRiskMultiplier = manDown[side] ? 0.5 : 1;
+
+    if (row >= 2 && highlightCount < highlightLimit) {
+      const switchCandidates = attackingPool.filter((player) =>
+        isMidfielder(player) || isDefender(player));
+      const switcher = weightedPlayer(
+        switchCandidates.length ? switchCandidates : attackingPool,
+        random,
+        "midfield",
+        (player) => conditionedScore(player, switchPlayScore, minute),
+      );
+      const switchQuality = switchPlayScore(switcher);
+      const switchChance = clamp(0, 0.13, (switchQuality - 68) / 180) * forwardRiskMultiplier;
+      if (switchQuality >= 74 && random() < switchChance) {
+        const targetColumn = column === 0 ? 2 : column === 2 ? 0 : random() < 0.5 ? 0 : 2;
+        const targetZone = Math.max(1, row - 1) * 3 + targetColumn;
+        addDuelEvent({
+          kind: "switch-play",
+          actor: switcher,
+          defender,
+          duel: null,
+          from: zone,
+          to: targetZone,
+          action: "switch-play",
+          possession: side,
+          scenarioType: "diagonal-switch",
+          text: `${playerName(switcher)} looks one way and drills a diagonal switch into the opposite channel, suddenly turning the defence toward its own goal.`,
+        });
+        zone = targetZone;
         continue;
+      }
+    }
+
+    if (row >= 2) {
+      const runners = attackingPool.filter((player) =>
+        !isDefender(player)
+        && playerAttribute(player, "Off the Ball") > 15
+        && playerAttribute(player, "Anticipation") >= 14);
+      const runner = weightedPlayer(runners, random, "attack", (player) =>
+        conditionedScore(player, offBallRunScore, minute));
+      const providers = attackingPool.filter((player) => player !== runner);
+      const provider = weightedPlayer(
+        providers.length ? providers : attackingPool,
+        random,
+        "midfield",
+        (player) => conditionedScore(player, deliveryScore, minute),
+      );
+      const lineDefenders = defendingPool.filter(isDefender);
+      const lineDefender = (lineDefenders.length ? lineDefenders : defendingPool)
+        .slice()
+        .sort((left, right) =>
+          playerAttribute(left, "Positioning") - playerAttribute(right, "Positioning"))[0];
+      const providerQuality = deliveryScore(provider);
+      const defenderPositioning = playerAttribute(lineDefender, "Positioning");
+      const brokenLine = defenderPositioning < 14;
+      const runChance = runner && provider && providerQuality >= 70
+        ? clamp(
+            0.008,
+            0.11,
+            0.012
+              + Math.max(0, playerAttribute(runner, "Off the Ball") - 15) * 0.012
+              + Math.max(0, providerQuality - 70) * 0.0022
+              + Math.max(0, 14 - defenderPositioning) * 0.012,
+          ) * forwardRiskMultiplier
+        : 0;
+      if (runner && lineDefender && random() < runChance) {
+        const deliveryDuel = localizedDuel(
+          provider,
+          lineDefender,
+          ["Passing", "Vision", "Creativity", "Technique", "Decisions"],
+          ["Positioning", "Anticipation", "Decisions"],
+          minute,
+          random,
+          zone,
+        );
+        if (deliveryDuel.won) {
+          const dribbleKeeper = playerAttribute(runner, "Dribbling") >= 16
+            && playerAttribute(runner, "Technique") >= 15
+            && random() < 0.28;
+          if (dribbleKeeper) {
+            const keeperDuel = localizedDuel(
+              runner,
+              keeper,
+              ["Dribbling", "Technique", "Flair", "Composure", "Acceleration"],
+              ["One On Ones", "Reflexes", "Agility", "Anticipation"],
+              minute,
+              random,
+              1,
+            );
+            if (keeperDuel.won
+              && random() < shotChance(runner, keeper, minute, 0.42, keeperDribbleScore)) {
+              addGoal("round-keeper", players, opponents, {
+                provider,
+                scorer: runner,
+                defender: lineDefender,
+                scenarioType: brokenLine ? "offside-break-keeper-dribble" : "off-ball-keeper-dribble",
+                defensiveError: brokenLine ? "broken-offside-line" : "",
+                zoneFrom: zone,
+                zoneTo: 1,
+                action: "dribble",
+              });
+              continue;
+            }
+          }
+          const finishChance = shotChance(
+            runner,
+            keeper,
+            minute,
+            brokenLine ? 0.36 : 0.28,
+            offBallRunScore,
+          );
+          if (random() < finishChance) {
+            addGoal(brokenLine ? "offside-break" : "off-ball-run", players, opponents, {
+              provider,
+              scorer: runner,
+              defender: lineDefender,
+              scenarioType: brokenLine ? "offside-break" : "off-ball-run",
+              defensiveError: brokenLine ? "broken-offside-line" : "",
+              zoneFrom: zone,
+              zoneTo: 1,
+              action: "through-ball",
+            });
+            continue;
+          }
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance",
+              actor: runner,
+              defender: lineDefender,
+              duel: deliveryDuel,
+              provider,
+              from: zone,
+              to: 1,
+              action: "one-on-one",
+              possession: opposite(side),
+              scenarioType: brokenLine ? "offside-break" : "off-ball-run",
+              defensiveError: brokenLine ? "broken-offside-line" : "",
+              text: brokenLine
+                ? `${playerName(lineDefender)} steps out and breaks the offside line. ${playerName(provider)} finds ${playerName(runner)} racing clear, but ${playerName(keeper)} rescues the defence in the one-on-one.`
+                : `${playerName(runner)} loses the marker with an elite off-ball run and meets ${playerName(provider)}'s delivery, but ${playerName(keeper)} smothers the serious chance.`,
+            });
+          }
+          side = opposite(side);
+          zone = 7;
+          counterSteps = 0;
+          continue;
+        }
       }
     }
 
@@ -1955,29 +2305,490 @@ function buildTransitionTimeline({
         }
       }
 
-      const longRange = row === 1 && random() < 0.34;
-      const shooter = weightedPlayer(attackingPool, random, longRange ? "midfield" : "attack", (player) =>
-        conditionedScore(player, longRange ? longRangeScore : attackerScore, minute));
-      const baseChance = longRange ? 0.075 : column === 1 ? 0.19 : 0.11;
-      if (random() < shotChance(
-        shooter,
-        keeper,
-        minute,
-        baseChance,
-        longRange ? longRangeScore : attackerScore,
-      )) {
-        const route = longRange
-          ? "long-range"
-          : counterSteps > 0
-            ? "counter"
-            : "open-play";
-        addGoal(route, players, opponents, { provider: actor, scorer: shooter });
+      // X1 -- open-play cross into the box (see MATCH_ENGINE_SCENARIOS.md).
+      // Reached whenever the wide player didn't successfully cut it back
+      // above (wideByline's own condition/roll/duel didn't produce a
+      // continue). X1.R is an aerial Contested Race between the arriving
+      // attacker and their marker; the winning attacker goes into a
+      // header-flavored F.SELECT/K.SAVE, the winning defender routes into
+      // the same zone-aware engagement menu used everywhere else, treated
+      // as a standing/aerial clearance (no sliding tackle for a header).
+      const crossOpportunity = column !== 1 && isWidePlayer(actor);
+      if (crossOpportunity && random() < 0.38) {
+        const target = weightedPlayer(attackingPool, random, "attack", (player) =>
+          conditionedScore(player, headerScore, minute));
+        const marker = defenderForColumn(defendingPool, 1, minute, random);
+        const race = contestedRace(target, marker, minute, random, 1, { aerial: true });
+
+        if (race.won) {
+          const headerAttempt = resolveFinishAttempt("header", target, random, 1);
+          if (!headerAttempt.onTarget) {
+            if (highlightCount < highlightLimit) {
+              addDuelEvent({
+                kind: "chance", actor: target, defender: marker, duel: null,
+                from: zone, to: 1, action: "cross", possession: opposite(side),
+                scenarioType: headerAttempt.code,
+                text: `${playerName(actor)} whips in a cross and ${playerName(target)} rises above ${playerName(marker)}, but the header drifts off target.`,
+              });
+            }
+            side = opposite(side);
+            zone = 7;
+            continue;
+          }
+          const headerSave = resolveKeeperSave(target, keeper, "header", minute, random, 1);
+          if (headerSave.goal) {
+            addGoal(headerSave.code === "K.SAVE.8" ? "rebound" : "corner-header", players, opponents, {
+              provider: actor, scorer: target, zoneFrom: zone, zoneTo: 1, action: "cross",
+              ...(headerSave.code === "K.SAVE.8" ? { reboundSource: "post" } : {}),
+            });
+            continue;
+          }
+          const headerSaveText = {
+            "K.SAVE.1": `${playerName(target)} powers the header goalward, but ${playerName(keeper)} claims it well.`,
+            "K.SAVE.3": `${playerName(target)} glances the header on target, and ${playerName(keeper)} tips it behind for a corner.`,
+            "K.SAVE.4": `${playerName(keeper)} fumbles the header under pressure but recovers before anyone reacts.`,
+            "K.SAVE.7": `${playerName(target)}'s header cannons back off the post and away for a corner.`,
+          }[headerSave.code];
+          if (!headerSave.rebound) {
+            if (headerSave.code === "K.SAVE.3" || headerSave.code === "K.SAVE.7") {
+              if (highlightCount < highlightLimit) {
+                addDuelEvent({
+                  kind: "chance", actor: target, defender: keeper, duel: null,
+                  from: zone, to: 1, action: "cross", possession: opposite(side),
+                  scenarioType: headerSave.code,
+                  text: headerSaveText,
+                });
+              }
+              awardCorner();
+              continue;
+            }
+            if (highlightCount < highlightLimit) {
+              addDuelEvent({
+                kind: "chance", actor: target, defender: keeper, duel: null,
+                from: zone, to: 1, action: "cross", possession: opposite(side),
+                scenarioType: headerSave.code,
+                text: headerSaveText || `${playerName(keeper)} deals with ${playerName(target)}'s header.`,
+              });
+            }
+            side = opposite(side);
+            zone = 7;
+            continue;
+          }
+          const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
+            conditionedScore(player, poacherScore, minute));
+          const reboundDefender = defenderForColumn(defendingPool, 1, minute, random);
+          const reboundDuel = localizedDuel(
+            poacher, reboundDefender,
+            ["Anticipation", "Acceleration", "Off the Ball"],
+            ["Positioning", "Anticipation", "Strength"],
+            minute, random, 1,
+          );
+          if (reboundDuel.won
+            && random() < shotChance(poacher, keeper, minute, 0.35, poacherScore)) {
+            addGoal("rebound", players, opponents, {
+              scorer: poacher, reboundSource: headerSave.code === "K.SAVE.6" ? "post" : "save",
+            });
+            continue;
+          }
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance", actor: poacher, defender: reboundDefender, duel: reboundDuel,
+              from: 1, to: 1, action: "rebound", possession: opposite(side),
+              text: reboundDuel.won
+                ? `${playerName(poacher)} reacts fastest to the loose ball but can't quite direct it goalward.`
+                : `${playerName(reboundDefender)} reads the rebound and clears the danger.`,
+            });
+          }
+          side = opposite(side);
+          zone = 7;
+          continue;
+        }
+
+        // X1.D -- defender wins the header.
+        const crossEngagement = resolveEngagement("D.STAND", marker, random, 0);
+        if (crossEngagement.outcome === "won") {
+          if (highlightCount < highlightLimit && random() < 0.3) {
+            addDuelEvent({
+              kind: "tackle", actor: marker, defender: null, duel: race,
+              from: 1, to: 1, action: "clearance", possession: opposite(side),
+              scenarioType: crossEngagement.code,
+              text: `${playerName(marker)} climbs above ${playerName(target)} and heads the cross clear.`,
+            });
+          }
+          side = opposite(side);
+          zone = 7;
+          continue;
+        }
+        if (crossEngagement.outcome === "loose") {
+          const looseBall = contestedRace(actor, marker, minute, random, 1);
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance", actor, defender: marker, duel: looseBall,
+              from: 1, to: 1, action: "cross", possession: looseBall.won ? side : opposite(side),
+              text: looseBall.won
+                ? `The header is only half-cleared and ${playerName(actor)}'s side keeps the scramble alive.`
+                : `The header is only half-cleared, but ${playerName(marker)}'s side reacts first and clears the box.`,
+            });
+          }
+          if (looseBall.won) {
+            zone = 1;
+          } else {
+            side = opposite(side);
+            zone = 7;
+          }
+          continue;
+        }
+        if (crossEngagement.outcome === "foul") {
+          applyFoulOutcome(marker, "D.STAND", false);
+          continue;
+        }
+        // "beaten" -- the marker misjudges the cross entirely; the attack
+        // keeps a live chance in the box without a shot having been forced.
+        zone = 1;
         continue;
       }
 
-      const parried = random() < clamp(0.08, 0.28,
-        0.2 - playerAttribute(keeper, "Handling") / 180);
-      if (parried) {
+      const lateRunners = attackingPool.filter((player) =>
+        isMidfielder(player)
+        && playerAttribute(player, "Off the Ball") >= 14
+        && playerAttribute(player, "Anticipation") >= 14);
+      const lateRunner = weightedPlayer(lateRunners, random, "midfield", (player) =>
+        conditionedScore(player, lateBoxRunScore, minute));
+      const lateProviders = attackingPool.filter((player) => player !== lateRunner);
+      const lateProvider = weightedPlayer(
+        lateProviders.length ? lateProviders : attackingPool,
+        random,
+        "midfield",
+        (player) => conditionedScore(player, deliveryScore, minute),
+      );
+      const lateRunChance = lateRunner && deliveryScore(lateProvider) >= 68
+        ? clamp(0, 0.095,
+            (lateBoxRunScore(lateRunner) - 68) / 290
+            + (deliveryScore(lateProvider) - 68) / 420) * forwardRiskMultiplier
+        : 0;
+      if (lateRunner && random() < lateRunChance) {
+        if (random() < shotChance(lateRunner, keeper, minute, 0.29, lateBoxRunScore)) {
+          addGoal("late-run", players, opponents, {
+            provider: lateProvider,
+            scorer: lateRunner,
+            scenarioType: "late-box-run",
+            zoneFrom: zone,
+            zoneTo: 1,
+            action: "late-run",
+          });
+          continue;
+        }
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "chance",
+            actor: lateRunner,
+            defender,
+            duel: null,
+            provider: lateProvider,
+            from: zone,
+            to: 1,
+            action: "late-run",
+            possession: opposite(side),
+            scenarioType: "late-box-run",
+            text: `${playerName(lateRunner)} delays the run and arrives untracked onto ${playerName(lateProvider)}'s delivery, but the late finish whistles past the post.`,
+          });
+        }
+        side = opposite(side);
+        zone = 7;
+        continue;
+      }
+
+      const finesseCandidates = attackingPool.filter((player) =>
+        playerAttribute(player, "Technique") >= 15
+        && Math.max(
+          playerAttribute(player, "Long Shots", "Shooting"),
+          playerAttribute(player, "Finishing", "Shooting"),
+        ) >= 15);
+      const finesseAttempt = [3, 5].includes(zone)
+        && finesseCandidates.length > 0
+        && random() < 0.42;
+      const longRange = row === 1 && (finesseAttempt || random() < 0.34);
+      const shotScore = finesseAttempt
+        ? finesseLongShotScore
+        : longRange ? longRangeScore : attackerScore;
+      const shooter = weightedPlayer(
+        finesseAttempt ? finesseCandidates : attackingPool,
+        random,
+        longRange ? "midfield" : "attack",
+        (player) => conditionedScore(player, shotScore, minute),
+      );
+      const baseChance = finesseAttempt ? 0.09 : longRange ? 0.075 : column === 1 ? 0.19 : 0.11;
+
+      const triesChip = !longRange
+        && playerAttribute(shooter, "Composure") >= 15
+        && playerAttribute(shooter, "Technique") >= 14
+        && random() < 0.16;
+      if (triesChip) {
+        if (random() < shotChance(shooter, keeper, minute, 0.34, chipScore)) {
+          addGoal("chip", players, opponents, {
+            provider: actor === shooter ? null : actor,
+            scorer: shooter,
+            scenarioType: "chip",
+            zoneFrom: zone,
+            zoneTo: 1,
+            action: "chip",
+          });
+          continue;
+        }
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "chance",
+            actor: shooter,
+            defender: keeper,
+            duel: null,
+            from: zone,
+            to: 1,
+            action: "chip",
+            possession: opposite(side),
+            scenarioType: "chip",
+            text: `${playerName(shooter)} sees ${playerName(keeper)} off his line and dinks a delicate chip, but it drifts just over the crossbar.`,
+          });
+        }
+        side = opposite(side);
+        zone = 7;
+        continue;
+      }
+
+      // Pressure widened into this decision too (see MATCH_ENGINE_SCENARIOS.md,
+      // "Promoted: P.RECEIVE" -> pressure consumers) -- rounding the keeper
+      // is an audacious, composed decision; a player who's had to fight
+      // through heavier pressure to get here is less inclined to attempt
+      // it, independent of whether they'd actually pull it off (that's
+      // still keeperDuel below, untouched).
+      const triesKeeperDribble = !longRange
+        && playerAttribute(shooter, "Dribbling") >= 16
+        && playerAttribute(shooter, "Technique") >= 15
+        && random() < clamp(0.08, 0.22, 0.22 - pressure * 0.15);
+      if (triesKeeperDribble) {
+        const keeperDuel = localizedDuel(
+          shooter,
+          keeper,
+          ["Dribbling", "Technique", "Flair", "Composure", "Acceleration"],
+          ["One On Ones", "Reflexes", "Agility", "Anticipation"],
+          minute,
+          random,
+          1,
+        );
+        if (keeperDuel.won
+          && random() < shotChance(shooter, keeper, minute, 0.4, keeperDribbleScore)) {
+          addGoal("round-keeper", players, opponents, {
+            provider: actor === shooter ? null : actor,
+            scorer: shooter,
+            scenarioType: "keeper-dribble",
+            zoneFrom: zone,
+            zoneTo: 1,
+            action: "dribble",
+          });
+          continue;
+        }
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "chance",
+            actor: shooter,
+            defender: keeper,
+            duel: keeperDuel,
+            provider: actor === shooter ? null : actor,
+            from: zone,
+            to: 1,
+            action: "dribble",
+            possession: opposite(side),
+            scenarioType: "keeper-dribble",
+            text: keeperDuel.won
+              ? `${playerName(shooter)} dribbles around ${playerName(keeper)}, but the angle closes and the finish rolls wide.`
+              : `${playerName(shooter)} tries to take the ball around ${playerName(keeper)}, who stays big and wins the one-on-one.`,
+          });
+        }
+        side = opposite(side);
+        zone = 7;
+        continue;
+      }
+
+      // P.SHOOT -> F.SELECT -> K.SAVE/K.ONEONONE (see MATCH_ENGINE_SCENARIOS.md).
+      // Replaces the old single shotChance() gate + ad-hoc hitPost/parried
+      // fallback with the richer finish-type/keeper-save tree. The existing
+      // contextual multipliers (comeback tactics, momentum, man-down, morale)
+      // are preserved as a scalar on the new on-target roll so match-state
+      // tuning isn't lost.
+      const finishType = selectFinishType(shooter, random, pressure);
+      const tacticalMultiplier = !allInSide ? 1 : side === allInSide ? 1.4 : 1.28;
+      const momentumMultiplier = pressureTicks >= 3
+        ? 1 + Math.min(0.2, (pressureTicks - 2) * 0.045)
+        : 1;
+      const manDownMultiplier = manDown[opposite(side)] ? 1.16 : manDown[side] ? 0.92 : 1;
+      // Pressure folded in here too -- a shot attempted under a well-set
+      // defense (or simply a congested zone) is less likely to even be
+      // clean and on target, same signal that already relieves during a
+      // fresh transition via computePressure()'s transitionRelief term.
+      const pressureMultiplier = clamp(0.6, 1.15, 1.25 - pressure * 0.5);
+      const finishContextMultiplier = tacticalMultiplier * momentumMultiplier
+        * manDownMultiplier * moraleMultiplier(side) * pressureMultiplier;
+
+      // A genuine breakaway (isBreakaway, computed here so shot-blocking can
+      // skip it too) by definition has no defender close enough to block --
+      // that's the whole premise of the one-on-one. Everywhere else, the
+      // marking defender gets a chance to throw a body in front of it
+      // before the shot is even resolved as on-target or not.
+      const isBreakaway = counterSteps >= 2 && column === 1;
+      if (!isBreakaway) {
+        const block = resolveShotBlock(defender, finishType, minute, random);
+        if (block.blocked) {
+          if (block.outcome === "safe") {
+            if (highlightCount < highlightLimit) {
+              addDuelEvent({
+                kind: "chance", actor: shooter, defender, duel: null,
+                from: zone, to: 1, action: "block", possession: opposite(side),
+                scenarioType: block.code,
+                text: `${playerName(defender)} throws a body in the way and blocks ${playerName(shooter)}'s effort.`,
+              });
+            }
+            side = opposite(side);
+            zone = 7;
+            continue;
+          }
+          if (block.outcome === "behind") {
+            if (highlightCount < highlightLimit) {
+              addDuelEvent({
+                kind: "chance", actor: shooter, defender, duel: null,
+                from: zone, to: 1, action: "block", possession: opposite(side),
+                scenarioType: block.code,
+                text: `${playerName(defender)} bravely blocks ${playerName(shooter)}'s shot behind for a corner.`,
+              });
+            }
+            awardCorner();
+            continue;
+          }
+          // "loose" -- deflects into a contestable rebound, same
+          // poacher-vs-defender pattern used everywhere else.
+          const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
+            conditionedScore(player, poacherScore, minute));
+          const reboundDefender = defenderForColumn(defendingPool, 1, minute, random);
+          const reboundDuel = localizedDuel(
+            poacher, reboundDefender,
+            ["Anticipation", "Acceleration", "Off the Ball"],
+            ["Positioning", "Anticipation", "Strength"],
+            minute, random, 1,
+          );
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance", actor: defender, defender: null, duel: null,
+              from: zone, to: 1, action: "block", possession: side,
+              scenarioType: block.code,
+              text: `${playerName(defender)} gets a vital block in, but the ball spills loose in the box.`,
+            });
+          }
+          if (reboundDuel.won && random() < shotChance(poacher, keeper, minute, 0.32, poacherScore)) {
+            addGoal("rebound", players, opponents, { scorer: poacher, reboundSource: "save" });
+            continue;
+          }
+          if (!reboundDuel.won) {
+            side = opposite(side);
+            zone = 7;
+          }
+          continue;
+        }
+      }
+
+      const attempt = resolveFinishAttempt(finishType, shooter, random, finishContextMultiplier);
+
+      if (!attempt.onTarget) {
+        const missText = {
+          "F.CALM.WEAK": `${playerName(shooter)} tries to place it low into the corner, but the effort lacks conviction and rolls tamely wide.`,
+          "F.BLAST.OVER": `${playerName(shooter)} strikes it with everything, but the effort balloons well over the bar.`,
+          "F.FINESSE.WIDE": `${playerName(shooter)} tries to bend it into the far corner, but it curls just wide of the post.`,
+        }[attempt.code];
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "chance", actor: shooter, defender, duel: null,
+            from: zone, to: 1, action: "shot", possession: opposite(side),
+            scenarioType: attempt.code,
+            text: missText,
+          });
+        }
+        side = opposite(side);
+        zone = 7;
+        continue;
+      }
+
+      const save = isBreakaway
+        ? resolveOneOnOne(shooter, keeper, minute, random, 1)
+        : resolveKeeperSave(shooter, keeper, finishType, minute, random, 1);
+
+      if (save.goal) {
+        const route = save.code === "K.ONEONONE.4"
+          ? "chip"
+          : save.code === "K.SAVE.8"
+            ? "rebound"
+            : finesseAttempt
+              ? "finesse-long-range"
+              : longRange
+                ? "long-range"
+                : counterSteps > 0
+                  ? "counter"
+                  : "open-play";
+        addGoal(route, players, opponents, {
+          provider: actor,
+          scorer: shooter,
+          scenarioType: save.code,
+          zoneFrom: zone,
+          zoneTo: 1,
+          action: "shot",
+          ...(route === "rebound" ? { reboundSource: "post" } : {}),
+        });
+        continue;
+      }
+
+      const saveText = {
+        "K.SAVE.1": `${playerName(shooter)}'s effort is well struck, but ${playerName(keeper)} gets down well to collect.`,
+        "K.SAVE.3": `${playerName(shooter)} forces a good save — ${playerName(keeper)} tips it away for a corner.`,
+        "K.SAVE.4": `${playerName(keeper)} spills ${playerName(shooter)}'s effort but recovers to smother it at the second attempt.`,
+        "K.SAVE.7": `${playerName(shooter)}'s shot cannons back off the post and away for a corner.`,
+        "K.ONEONONE.2": `${playerName(shooter)} rushes the finish through on goal and drags it wide of ${playerName(keeper)}'s post.`,
+        "K.ONEONONE.5": `${playerName(keeper)} advances quickly and narrows the angle — ${playerName(shooter)} can't find a way past him.`,
+      }[save.code];
+      if (save.code === "K.ONEONONE.6") {
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "chance", actor: shooter, defender, duel: null,
+            from: zone, to: 1, action: "shot", possession: side,
+            scenarioType: save.code,
+            text: `${playerName(defender)} has no other way to stop ${playerName(shooter)} clean through on goal and brings him down.`,
+          });
+        }
+        applyFoulOutcome(defender, "breakaway", true);
+        continue;
+      }
+      if (!save.rebound) {
+        if (save.code === "K.SAVE.3" || save.code === "K.SAVE.7") {
+          if (highlightCount < highlightLimit) {
+            addDuelEvent({
+              kind: "chance", actor: shooter, defender: keeper, duel: null,
+              from: zone, to: 1, action: "shot", possession: opposite(side),
+              scenarioType: save.code,
+              text: saveText,
+            });
+          }
+          awardCorner();
+          continue;
+        }
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "chance", actor: shooter, defender: keeper, duel: null,
+            from: zone, to: 1, action: "shot", possession: opposite(side),
+            scenarioType: save.code,
+            text: saveText || `${playerName(keeper)} keeps ${playerName(shooter)} out.`,
+          });
+        }
+        side = opposite(side);
+        zone = 7;
+        continue;
+      }
+
+      if (save.rebound) {
         const poacher = weightedPlayer(attackingPool, random, "attack", (player) =>
           conditionedScore(player, poacherScore, minute));
         const reboundDefender = defenderForColumn(defendingPool, 1, minute, random);
@@ -1991,66 +2802,27 @@ function buildTransitionTimeline({
           1,
         );
         if (reboundDuel.won
-          && random() < shotChance(poacher, keeper, minute, 0.36, poacherScore)) {
-          addGoal("rebound", players, opponents, { scorer: poacher });
+          && random() < shotChance(poacher, keeper, minute, 0.35, poacherScore)) {
+          addGoal("rebound", players, opponents, {
+            scorer: poacher,
+            reboundSource: save.code === "K.SAVE.6" ? "post" : "save",
+          });
           continue;
         }
-      }
-
-      const corner = random() < 0.16;
-      if (corner) {
-        const taker = setPieceTaker(players, "corner");
-        const volley = random() < 0.22;
-        const finishScore = volley ? volleyScore : headerScore;
-        const target = weightedPlayer(attackingPool, random, "", (player) =>
-          conditionedScore(player, finishScore, minute));
-        const marker = defenderForColumn(defendingPool, 1, minute, random);
-        const aerialDuel = localizedDuel(
-          target,
-          marker,
-          volley
-            ? ["Technique", "Finishing", "First Touch", "Anticipation"]
-            : ["Heading", "Jumping", "Strength", "Off the Ball"],
-          ["Heading", "Jumping", "Strength", "Positioning"],
-          minute,
-          random,
-          1,
-        );
-        const attackPressure = average(strongest(attackingPool, headerScore, 3).map(headerScore));
-        const defencePressure = average(strongest(defendingPool, headerScore, 3).map(headerScore));
-        const scrambleChance = clamp(0.008, 0.085,
-          0.018 + Math.max(0, attackPressure - defencePressure) / 420);
-        if (aerialDuel.won && random() < scrambleChance) {
-          addGoal("set-piece-scramble", players, opponents, { provider: taker, defender: marker });
-          continue;
-        }
-        if (aerialDuel.won
-          && random() < shotChance(target, keeper, minute, volley ? 0.12 : 0.15, finishScore)) {
-          addGoal(volley ? "corner-volley" : "corner-header", players, opponents, { provider: taker, scorer: target });
-          continue;
-        }
-        if (highlightCount < highlightLimit && random() < 0.45) {
+        if (highlightCount < highlightLimit) {
           addDuelEvent({
-            kind: "cross", actor: taker, defender: marker, duel: aerialDuel,
-            from: column === 2 ? 2 : 0, to: 1, action: "corner", possession: opposite(side),
-            text: aerialDuel.won
-              ? `${playerName(taker)} finds ${playerName(target)} from the corner, but the header flashes wide.`
-              : `${playerName(marker)} rises above ${playerName(target)} and clears ${playerName(taker)}'s corner.`,
+            kind: "chance", actor: poacher, defender: reboundDefender, duel: reboundDuel,
+            from: 1, to: 1, action: "rebound", possession: opposite(side),
+            text: reboundDuel.won
+              ? `${playerName(poacher)} reacts fastest to the loose ball but can't quite direct it goalward.`
+              : `${playerName(reboundDefender)} reads the rebound and clears the danger.`,
           });
         }
-      } else if (highlightCount < highlightLimit && random() < 0.55) {
-        addDuelEvent({
-          kind: "chance", actor: shooter, defender, duel: null,
-          from: zone, to: 1, action: "shot", possession: opposite(side),
-          text: longRange
-            ? `${playerName(shooter)} drives one from distance and ${playerName(keeper)} pushes it away.`
-            : `${playerName(shooter)} gets a sight of goal, but ${playerName(keeper)} makes the save.`,
-        });
+        morale[side] = clamp(-5, 5, morale[side] - 1);
+        side = opposite(side);
+        zone = 7;
+        continue;
       }
-      side = opposite(side);
-      zone = 6 + Math.floor(random() * 3);
-      counterSteps = 0;
-      continue;
     }
 
     const bypass = row === 2
@@ -2087,7 +2859,55 @@ function buildTransitionTimeline({
         });
       }
       zone = nextZone;
-      if (counterSteps > 0) counterSteps -= 1;
+      // Receiver selection (see MATCH_ENGINE_SCENARIOS.md) -- who the ball
+      // actually finds in nextZone, not just that progression succeeded.
+      pinnedNextActor = selectReceiver(
+        attackingPool.filter((player) => player !== actor),
+        nextZone,
+        playerAttribute(actor, "Vision"),
+        pressure,
+        random,
+      );
+      // P.RECEIVE (see MATCH_ENGINE_SCENARIOS.md, "Promoted: P.RECEIVE") --
+      // what that successful pass actually costs the receiver to control.
+      // CLEAN is the silent default (prior behavior, no event); the other
+      // four outcomes get their own event and telemetry tag. Reuses this
+      // tick's covering defender as the challenge -- the same one
+      // transitionDuel and selectReceiver already worked with.
+      const receiver = pinnedNextActor || actor;
+      const receiveResult = resolveReceive(
+        receiver, defender, transitionDuel.probability, pressure, bypass, zone, minute, random,
+      );
+      if (receiveResult.context.code !== "P.RECEIVE.CLEAN" && highlightCount < highlightLimit) {
+        const receiveText = {
+          "P.RECEIVE.PROTECT": receiveResult.context.orientation === "BACK_TO_GOAL"
+            ? `${playerName(receiver)} takes it with his back to goal and shields it from ${playerName(defender)}, killing the tempo but keeping possession.`
+            : `${playerName(receiver)} shields the ball under pressure from ${playerName(defender)}, killing the tempo but keeping possession.`,
+          "P.RECEIVE.HEAVY": receiveResult.context.recovered
+            ? `${playerName(receiver)} takes a heavy touch under pressure but scrambles to retain it ahead of ${playerName(defender)}.`
+            : `${playerName(receiver)} takes a heavy touch under pressure and ${playerName(defender)} nips in to win the ball back.`,
+          "P.RECEIVE.KNOCK_FORWARD": receiveResult.context.won
+            ? `${playerName(receiver)} knocks the ball into space and wins the race ahead of ${playerName(defender)}.`
+            : `${playerName(receiver)} knocks the ball into space but ${playerName(defender)} gets there first.`,
+          "P.RECEIVE.LOSE": `${playerName(receiver)} can't control the pass and ${playerName(defender)} pounces on the loose ball.`,
+        }[receiveResult.context.code];
+        addDuelEvent({
+          kind: "receive", actor: receiver, defender, duel: receiveResult.context.duel,
+          from: zone, to: receiveResult.nextZone,
+          action: receiveResult.possession === "opponent" ? "turnover" : "control",
+          possession: receiveResult.possession === "opponent" ? opposite(side) : side,
+          scenarioType: receiveResult.context.code,
+          text: receiveText,
+        });
+      }
+      zone = receiveResult.nextZone;
+      if (receiveResult.possession === "opponent") {
+        side = opposite(side);
+        pinnedNextActor = null;
+        counterSteps = 3;
+      } else if (counterSteps > 0) {
+        counterSteps -= 1;
+      }
       continue;
     }
 
@@ -2120,12 +2940,70 @@ function buildTransitionTimeline({
       }
     }
 
-    if (!bypass && highlightCount < highlightLimit && random() < 0.2) {
-      addDuelEvent({
-        kind: "tackle", actor, defender, duel: transitionDuel,
-        from: zone, to: zone, action: "turnover", possession: opposite(side),
-        text: `${playerName(defender)} wins the localized duel against ${playerName(actor)} and takes possession.`,
-      });
+    if (!bypass) {
+      // D.* -- defender's engagement choice (see MATCH_ENGINE_SCENARIOS.md).
+      // The broader progression duel has already gone the defender's way
+      // (transitionDuel is lost for the attacker); this decides the flavor
+      // of that win: a clean tackle, a loose ball, or -- despite the
+      // aggregate favoring the defense -- a mistimed engagement that fouls
+      // or lets the attacker straight through.
+      const raceWasClose = transitionDuel.probability > 0.4;
+      const engagementType = selectEngagement(defender, raceWasClose, random);
+      const engagement = resolveEngagement(engagementType, defender, random, row);
+
+      if (engagement.outcome === "won") {
+        if (highlightCount < highlightLimit && random() < 0.2) {
+          const tackleText = {
+            "D.STAND": `${playerName(defender)} times the standing tackle well and wins the ball from ${playerName(actor)}.`,
+            "D.SLIDE": `${playerName(defender)} slides in and comes away with the ball cleanly.`,
+            "D.DUEL": `${playerName(defender)} shepherds ${playerName(actor)} away from goal and forces the turnover.`,
+          }[engagementType];
+          addDuelEvent({
+            kind: "tackle", actor, defender, duel: transitionDuel,
+            from: zone, to: zone, action: "turnover", possession: opposite(side),
+            scenarioType: engagement.code,
+            text: tackleText,
+          });
+        }
+        side = opposite(side);
+        zone = MIRRORED_ZONE[zone];
+        counterSteps = 3;
+        continue;
+      }
+
+      if (engagement.outcome === "loose") {
+        const loose = contestedRace(actor, defender, minute, random, zone);
+        if (highlightCount < highlightLimit) {
+          addDuelEvent({
+            kind: "tackle", actor, defender, duel: loose,
+            from: zone, to: zone, action: "turnover", possession: loose.won ? side : opposite(side),
+            scenarioType: engagement.code,
+            text: loose.won
+              ? `The ball breaks loose in the challenge and ${playerName(actor)} reacts fastest to retain it.`
+              : `The ball breaks loose in the challenge and ${playerName(defender)} is first to react, clearing the danger.`,
+          });
+        }
+        if (!loose.won) {
+          side = opposite(side);
+          zone = MIRRORED_ZONE[zone];
+          counterSteps = 3;
+        }
+        continue;
+      }
+
+      if (engagement.outcome === "foul") {
+        applyFoulOutcome(defender, engagementType, false);
+        continue;
+      }
+
+      // "beaten" -- the attacker retains the ball despite the aggregate
+      // duel favoring the defense. A missed slide tackle leaves the
+      // defender grounded and briefly out of the phase, so the attack gets
+      // a small zone nudge forward that a missed standing tackle doesn't.
+      if (engagementType === "D.SLIDE") {
+        zone = Math.max(0, row - 1) * 3 + column;
+      }
+      continue;
     }
     side = opposite(side);
     zone = MIRRORED_ZONE[zone];
@@ -2841,16 +3719,21 @@ async function animateClockRange(
   }
 }
 
-function displayZone(zone, side) {
-  const validZone = clamp(0, 11, Number(zone) || 0);
-  return side === "opponent" ? MIRRORED_ZONE[validZone] : validZone;
-}
-
 function setMiniPitchZone(pitch, event, endpoint = "to", opponentName = "Opponent") {
   if (!pitch || !event) return;
   const semanticZone = endpoint === "from" ? event.zoneFrom : event.zoneTo;
   const zone = displayZone(semanticZone, event.side);
   const [x, y] = ZONE_CENTERS[zone];
+  if (endpoint === "from") {
+    pitch.style.setProperty("--trail-x", `${x}%`);
+    pitch.style.setProperty("--trail-y", `${y}%`);
+    const trail = pitch.querySelector(".run-mini-trail");
+    if (trail) {
+      trail.classList.remove("is-animating");
+      void trail.offsetWidth;
+      trail.classList.add("is-animating");
+    }
+  }
   pitch.style.setProperty("--ball-x", `${x}%`);
   pitch.style.setProperty("--ball-y", `${y}%`);
   const possession = endpoint === "to" && event.possessionAfter
@@ -2858,6 +3741,7 @@ function setMiniPitchZone(pitch, event, endpoint = "to", opponentName = "Opponen
     : event.side;
   pitch.dataset.possession = possession;
   pitch.dataset.action = event.action || event.kind || "pass";
+  pitch.dataset.goal = event.goal ? "true" : "false";
   pitch.dataset.signature = event.signatureMoment ? "true" : "false";
   pitch.dataset.pressure = event.pressureWave ? event.side : "";
   pitch.querySelectorAll("[data-zone]").forEach((cell) => {
@@ -2869,6 +3753,21 @@ function setMiniPitchZone(pitch, event, endpoint = "to", opponentName = "Opponen
       ? `${team.teamName} · ${event.action || event.kind}`
       : `${opponentName} · ${event.action || event.kind}`;
   }
+  const moraleTrack = pitch.parentElement?.querySelector("[data-morale-track]");
+  if (moraleTrack) {
+    const net = clamp(-5, 5, Number(event.moraleUser || 0) - Number(event.moraleOpponent || 0));
+    moraleTrack.style.setProperty("--morale-pos", `${50 + (net / 5) * 45}%`);
+  }
+  const manDownLabel = pitch.parentElement?.querySelector("[data-mandown]");
+  if (manDownLabel) {
+    const text = event.manDownUser
+      ? `${team.teamName} down to 10 men`
+      : event.manDownOpponent
+        ? `${opponentName} down to 10 men`
+        : "";
+    manDownLabel.hidden = !text;
+    manDownLabel.textContent = text;
+  }
 }
 
 function miniPitchMarkup() {
@@ -2876,15 +3775,20 @@ function miniPitchMarkup() {
     `<span class="run-mini-zone" data-zone="${index}"></span>`).join("");
   return `
     <aside class="run-mini-pitch-wrap" aria-label="Live ball position">
-      <div class="run-mini-pitch" data-mini-pitch data-possession="user">
+      <div class="run-mini-pitch" data-mini-pitch data-possession="user" data-goal="false">
         ${zones}
         <span class="run-mini-halfway" aria-hidden="true"></span>
         <span class="run-mini-centre-circle" aria-hidden="true"></span>
         <span class="run-mini-box run-mini-box-top" aria-hidden="true"></span>
         <span class="run-mini-box run-mini-box-bottom" aria-hidden="true"></span>
+        <span class="run-mini-trail" aria-hidden="true"></span>
         <span class="run-mini-ball" aria-hidden="true"></span>
       </div>
+      <div class="run-mini-morale" data-morale-track aria-hidden="true">
+        <span class="run-mini-morale-marker"></span>
+      </div>
       <span class="run-mini-pitch-status" data-pitch-status>Kick-off</span>
+      <span class="run-mini-mandown" data-mandown hidden></span>
     </aside>
   `;
 }
@@ -3051,9 +3955,14 @@ function renderCanonicalMatchSnapshot(view, snapshot) {
   view.possessionHome.textContent = `${possession.user}%`;
   view.possessionAway.textContent = `${possession.opponent}%`;
   view.possessionWrap.dataset.dominant = possession.dominantSide || "";
-  view.suspense.hidden = !snapshot.suspense;
-  view.suspense.querySelector("strong").textContent = snapshot.suspense?.label || "CHANCE!";
-  view.article.classList.toggle("is-suspense", Boolean(snapshot.suspense));
+  const emphasis = snapshot.suspense;
+  const goalEmphasis = emphasis?.kind === "goal";
+  view.suspense.hidden = !emphasis;
+  view.suspense.classList.toggle("is-goal", goalEmphasis);
+  view.suspense.querySelector("span").textContent = goalEmphasis ? "Scored" : "Danger";
+  view.suspense.querySelector("strong").textContent = emphasis?.label || "CHANCE!";
+  view.article.classList.toggle("is-suspense", Boolean(emphasis));
+  view.article.classList.toggle("is-goal-emphasis", goalEmphasis);
 
   view.clockDisplay.textContent = snapshot.phase === "penalties"
     ? "PEN"
@@ -3313,19 +4222,25 @@ function currentKnockoutOpponent() {
   return fixture?.find((key) => key !== "user") || "";
 }
 
-const CLUB_STRENGTH = {
+const TEAM_STRENGTH = {
   real: 94, milan: 93, juventus: 91, arsenal: 90, united: 89,
   barcelona: 89, inter: 88, chelsea: 87, porto: 87, bayern: 86,
   valencia: 85, monaco: 84, deportivo: 84, ajax: 83, lyon: 82,
   sociedad: 80, stuttgart: 80, lokomotiv: 78, sparta: 77,
+  brazil: 95, germany: 89, france: 88, argentina: 88, italy: 87,
+  spain: 86, portugal: 85, england: 84, sweden: 81, turkey: 81,
+  southkorea: 79, mexico: 79, denmark: 78, unitedstates: 77,
+  belgium: 77, ireland: 77, japan: 76, croatia: 76, nigeria: 75,
+  cameroon: 75, senegal: 75, russia: 75, uruguay: 74, paraguay: 74,
+  poland: 74,
 };
 
 function simulatedBracketWinner([left, right], roundIndex, fixtureIndex) {
   const random = seededRandom(hashString(
     `${runSeed}:${scenario.key}:bracket:${roundIndex}:${fixtureIndex}:${left}:${right}`,
   ));
-  const leftScore = (CLUB_STRENGTH[left] || 74) + random() * 18;
-  const rightScore = (CLUB_STRENGTH[right] || 74) + random() * 18;
+  const leftScore = (TEAM_STRENGTH[left] || 74) + random() * 18;
+  const rightScore = (TEAM_STRENGTH[right] || 74) + random() * 18;
   return leftScore >= rightScore ? left : right;
 }
 
@@ -3537,57 +4452,66 @@ async function playGroupRound() {
   renderPendingFixture();
 }
 
-async function playKnockoutRound() {
-  const opponentKey = currentKnockoutOpponent();
-  const stage = scenario.stages[state.knockoutIndex];
-  elements.nextButton.disabled = true;
-  elements.stageTitle.textContent = `${stage} · ${team.teamName} vs ${CLUBS[opponentKey].name}`;
-  elements.stageDescription.textContent = "Loading the opponent squad and calculating the tie…";
-  const rosterBase = await opponentRoster(opponentKey);
-  const [roster] = await Promise.all([
-    hydratePlayers(rosterBase),
-    hydratePlayers(userPlayers()),
-  ]);
-  state.matchNumber += 1;
-  const result = matchSimulation(opponentKey, roster, stage);
-  if (result.needsPenalties) {
-    elements.stageDescription.textContent = "The tie may require penalties. Selecting the strongest available takers…";
-    await preparePenaltyShootout(result, roster);
-  }
-  finalizeMatchResult(result);
-  await animateMatch(result);
-  updateUserRecord(result);
+// Knockout and Titan Fight rounds share the exact same shape (load one opponent roster,
+// simulate, penalties if needed, then a win/loss branch) — only the labels and the
+// advance-to-next-opponent bookkeeping differ, which this config supplies per kind.
+const ELIMINATION_ROUNDS = {
+  knockout: {
+    opponentKey: () => currentKnockoutOpponent(),
+    opponent: (key) => CLUBS[key],
+    stage: () => scenario.stages[state.knockoutIndex],
+    loadingText: () => "Loading the opponent squad and calculating the tie…",
+    penaltyText: () => "The tie may require penalties. Selecting the strongest available takers…",
+    lossText: () => "The European run ends here.",
+    onAdvance: (opponent) => {
+      if (!advanceKnockoutBracket()) {
+        elements.stageTitle.textContent = "Champions of Europe";
+        elements.stageDescription.textContent = "The final whistle confirms the title.";
+        showResult({ champion: true });
+        return false;
+      }
+      renderBracket();
+      const nextOpponent = currentKnockoutOpponent();
+      elements.stageKicker.textContent = scenario.stages[state.knockoutIndex];
+      elements.stageTitle.textContent = `${scenario.stages[state.knockoutIndex]} · ${CLUBS[nextOpponent].name}`;
+      elements.stageDescription.textContent = `${opponent.name} eliminated. The next tie is ready.`;
+      elements.nextButton.textContent = `Play ${CLUBS[nextOpponent].name} →`;
+      return true;
+    },
+  },
+  titan: {
+    opponentKey: () => titanOrder[state.titanIndex],
+    opponent: (key) => TITAN_BY_KEY.get(key),
+    stage: () => `Titan Fight · Battle ${state.titanIndex + 1}/8`,
+    loadingText: (opponent) => `Loading the ${opponent.shortName} starting XI and calculating the battle…`,
+    penaltyText: () => "The battle requires penalties. Selecting the strongest available takers…",
+    lossText: (opponent) => `${opponent.shortName} end the Titan Fight run.`,
+    onAdvance: (opponent) => {
+      state.titanIndex += 1;
+      if (state.titanIndex >= titanOrder.length) {
+        elements.stageTitle.textContent = "Titan Fight conquered";
+        elements.stageDescription.textContent = "All eight legendary teams have fallen.";
+        showResult({ champion: true });
+        return false;
+      }
+      const next = TITAN_BY_KEY.get(titanOrder[state.titanIndex]);
+      elements.stageKicker.textContent = `Titan ${state.titanIndex + 1} of 8`;
+      elements.stageTitle.textContent = `${opponent.shortName} defeated`;
+      elements.stageDescription.textContent = `Next: ${next.name}.`;
+      elements.nextButton.textContent = `Face ${next.shortName} →`;
+      return true;
+    },
+  },
+};
 
-  if (!result.userWon) {
-    elements.stageDescription.textContent = "The European run ends here.";
-    showResult({ eliminatedBy: CLUBS[opponentKey].name, eliminatedStage: stage });
-    return;
-  }
-
-  if (!advanceKnockoutBracket()) {
-    elements.stageTitle.textContent = "Champions of Europe";
-    elements.stageDescription.textContent = "The final whistle confirms the title.";
-    showResult({ champion: true });
-    return;
-  }
-
-  renderBracket();
-  const nextOpponent = currentKnockoutOpponent();
-  elements.stageKicker.textContent = scenario.stages[state.knockoutIndex];
-  elements.stageTitle.textContent = `${scenario.stages[state.knockoutIndex]} · ${CLUBS[nextOpponent].name}`;
-  elements.stageDescription.textContent = `${CLUBS[opponentKey].name} eliminated. The next tie is ready.`;
-  elements.nextButton.textContent = `Play ${CLUBS[nextOpponent].name} →`;
-  elements.nextButton.disabled = false;
-  renderPendingFixture();
-}
-
-async function playTitanRound() {
-  const opponentKey = titanOrder[state.titanIndex];
-  const opponent = TITAN_BY_KEY.get(opponentKey);
-  const stage = `Titan Fight · Battle ${state.titanIndex + 1}/8`;
+async function playEliminationRound(kind) {
+  const config = ELIMINATION_ROUNDS[kind];
+  const opponentKey = config.opponentKey();
+  const opponent = config.opponent(opponentKey);
+  const stage = config.stage();
   elements.nextButton.disabled = true;
   elements.stageTitle.textContent = `${stage} · ${team.teamName} vs ${opponent.name}`;
-  elements.stageDescription.textContent = `Loading the ${opponent.shortName} starting XI and calculating the battle…`;
+  elements.stageDescription.textContent = config.loadingText(opponent);
   const rosterBase = await opponentRoster(opponentKey);
   const [roster] = await Promise.all([
     hydratePlayers(rosterBase),
@@ -3596,8 +4520,7 @@ async function playTitanRound() {
   state.matchNumber += 1;
   const result = matchSimulation(opponentKey, roster, stage);
   if (result.needsPenalties) {
-    elements.stageDescription.textContent =
-      "The battle requires penalties. Selecting the strongest available takers…";
+    elements.stageDescription.textContent = config.penaltyText();
     await preparePenaltyShootout(result, roster);
   }
   finalizeMatchResult(result);
@@ -3605,36 +4528,29 @@ async function playTitanRound() {
   updateUserRecord(result);
 
   if (!result.userWon) {
-    elements.stageDescription.textContent = `${opponent.shortName} end the Titan Fight run.`;
+    elements.stageDescription.textContent = config.lossText(opponent);
     showResult({ eliminatedBy: opponent.name, eliminatedStage: stage });
     return;
   }
 
-  state.titanIndex += 1;
-  if (state.titanIndex >= titanOrder.length) {
-    elements.stageTitle.textContent = "Titan Fight conquered";
-    elements.stageDescription.textContent =
-      "All eight legendary teams have fallen.";
-    showResult({ champion: true });
-    return;
-  }
-
-  const next = TITAN_BY_KEY.get(titanOrder[state.titanIndex]);
-  elements.stageKicker.textContent = `Titan ${state.titanIndex + 1} of 8`;
-  elements.stageTitle.textContent = `${opponent.shortName} defeated`;
-  elements.stageDescription.textContent = `Next: ${next.name}.`;
-  elements.nextButton.textContent = `Face ${next.shortName} →`;
+  if (!config.onAdvance(opponent)) return;
   elements.nextButton.disabled = false;
   renderPendingFixture();
+}
+
+// Group stage keeps its own function: it plays two matches per round (the user's fixture
+// plus a hidden simulated one) and drives table standings rather than bracket advancement,
+// so folding it into playEliminationRound's shape would do more harm than good.
+async function playRound(kind) {
+  if (kind === "group") return playGroupRound();
+  return playEliminationRound(kind);
 }
 
 async function playNext() {
   if (state.busy || state.completed) return;
   state.busy = true;
   try {
-    if (state.phase === "titan") await playTitanRound();
-    else if (state.phase === "group") await playGroupRound();
-    else await playKnockoutRound();
+    await playRound(state.phase);
   } catch (error) {
     elements.stageDescription.textContent = error.message || "The match could not be simulated.";
     elements.nextButton.disabled = false;
@@ -3727,12 +4643,16 @@ function startFriendlyRoom() {
   elements.matches.innerHTML = '<div class="run-empty">Connecting to the private room…</div>';
   renderSquad(draftedTeam);
 
-  const socket = new WebSocket(friendWebSocketUrl(friendSession));
-  const clockSamples = [];
+  const MAX_RECONNECT_ATTEMPTS = 6;
+  const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 8000, 8000];
+  let clockSamples = [];
   let serverOffsetMs = 0;
   let pendingMatch = null;
   let matchStarted = false;
   let fallbackTimer = null;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+
   const begin = () => {
     if (matchStarted || !pendingMatch) return;
     if (clockSamples.length < 3 && !fallbackTimer) {
@@ -3745,51 +4665,72 @@ function startFriendlyRoom() {
       elements.stageDescription.textContent = error.message || "The friendly match could not be simulated.";
     });
   };
-  socket.addEventListener("open", () => {
-    elements.matches.innerHTML = '<div class="run-empty">Your XI is locked. Waiting for the other manager…</div>';
-    [0, 140, 280, 420, 560].forEach((delayMs) => {
-      window.setTimeout(() => socket.send(JSON.stringify({ type: "ping", sentAt: Date.now() })), delayMs);
-    });
-    socket.send(JSON.stringify({ type: "submit-squad", squad: draftedTeam }));
-  });
-  socket.addEventListener("message", (event) => {
-    let message;
-    try {
-      message = JSON.parse(event.data);
-    } catch {
+
+  const scheduleReconnect = () => {
+    if (matchStarted || reconnectTimer) return;
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      elements.stageDescription.textContent =
+        "Room connection lost. Return to the invitation link to reconnect.";
       return;
     }
-    if (message.type === "pong") {
-      clockSamples.push({
-        sentAt: Number(message.sentAt),
-        serverNow: Number(message.serverNow),
-        receivedAt: Date.now(),
+    const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempts, RECONNECT_DELAYS_MS.length - 1)];
+    reconnectAttempts += 1;
+    elements.stageDescription.textContent =
+      `Room connection lost. Reconnecting… (attempt ${reconnectAttempts} of ${MAX_RECONNECT_ATTEMPTS})`;
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  };
+
+  function connect() {
+    clockSamples = [];
+    const socket = new WebSocket(friendWebSocketUrl(friendSession));
+    socket.addEventListener("open", () => {
+      reconnectAttempts = 0;
+      elements.matches.innerHTML = '<div class="run-empty">Your XI is locked. Waiting for the other manager…</div>';
+      [0, 140, 280, 420, 560].forEach((delayMs) => {
+        window.setTimeout(() => socket.send(JSON.stringify({ type: "ping", sentAt: Date.now() })), delayMs);
       });
-      serverOffsetMs = estimateServerClockOffset(clockSamples);
-      if (clockSamples.length >= 3) begin();
-      return;
-    }
-    if (message.type === "room-error") {
-      elements.stageDescription.textContent = message.message || "The room rejected this squad.";
-      return;
-    }
-    if (message.type !== "room-state") return;
-    const hostReady = Boolean(message.players?.host?.squadReady);
-    const guestReady = Boolean(message.players?.guest?.squadReady);
-    elements.stageDescription.textContent = hostReady && guestReady
-      ? "Both squads are locked. Synchronizing kickoff…"
-      : `Waiting for ${hostReady ? "the guest" : guestReady ? "the host" : "both squads"}…`;
-    if (message.match) {
-      pendingMatch = message.match;
-      begin();
-    }
-  });
-  socket.addEventListener("close", () => {
-    if (!matchStarted) elements.stageDescription.textContent = "Room connection lost. Return to the invitation and reconnect.";
-  });
-  socket.addEventListener("error", () => {
-    if (!matchStarted) elements.stageDescription.textContent = "Could not connect to the private match room.";
-  });
+      socket.send(JSON.stringify({ type: "submit-squad", squad: draftedTeam }));
+    });
+    socket.addEventListener("message", (event) => {
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (message.type === "pong") {
+        clockSamples.push({
+          sentAt: Number(message.sentAt),
+          serverNow: Number(message.serverNow),
+          receivedAt: Date.now(),
+        });
+        serverOffsetMs = estimateServerClockOffset(clockSamples);
+        if (clockSamples.length >= 3) begin();
+        return;
+      }
+      if (message.type === "room-error") {
+        elements.stageDescription.textContent = message.message || "The room rejected this squad.";
+        return;
+      }
+      if (message.type !== "room-state") return;
+      const hostReady = Boolean(message.players?.host?.squadReady);
+      const guestReady = Boolean(message.players?.guest?.squadReady);
+      elements.stageDescription.textContent = hostReady && guestReady
+        ? "Both squads are locked. Synchronizing kickoff…"
+        : `Waiting for ${hostReady ? "the guest" : guestReady ? "the host" : "both squads"}…`;
+      if (message.match) {
+        pendingMatch = message.match;
+        begin();
+      }
+    });
+    socket.addEventListener("close", scheduleReconnect);
+    socket.addEventListener("error", scheduleReconnect);
+  }
+
+  connect();
 }
 
 elements.nextButton.addEventListener("click", playNext);

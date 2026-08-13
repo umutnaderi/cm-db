@@ -1,4 +1,4 @@
-export const MATCH_TIMELINE_VERSION = 2;
+export const MATCH_TIMELINE_VERSION = 3;
 
 const clamp = (minimum, maximum, value) =>
   Math.max(minimum, Math.min(maximum, Number(value) || 0));
@@ -77,6 +77,20 @@ function appendPeriod(timeline, {
       matchSecond: eventSecond,
       event: { ...event, matchSecond: eventSecond },
     });
+    if (event.goal) {
+      timeline.events.push({
+        id: `${phase}-goal-${timeline.events.length + 1}`,
+        type: "suspense",
+        kind: "goal",
+        phase,
+        atMs: Math.round(cursor),
+        endAtMs: Math.round(cursor + 1_250),
+        label: "GOAL!",
+        side: event.side,
+        matchSecond: eventSecond,
+      });
+      cursor += 1_250;
+    }
 
     const actionEndSecond = Math.min(
       endSecond,

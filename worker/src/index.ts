@@ -185,7 +185,7 @@ function storeEdgeCache(
 
 function edgeCacheKey(request: Request | string): Request {
   const url = new URL(typeof request === "string" ? request : request.url);
-  url.searchParams.set("__cacheVersion", "35");
+  url.searchParams.set("__cacheVersion", "43");
   return new Request(url, typeof request === "string" ? undefined : request);
 }
 
@@ -1873,7 +1873,8 @@ export default {
       );
 
       if (playerMatch) {
-        const [, database, sourcePersonId] = playerMatch;
+        const database = decodeURIComponent(playerMatch[1]);
+        const sourcePersonId = decodeURIComponent(playerMatch[2]);
 
         const cached = await matchEdgeCache(request);
         if (cached) return cached;
@@ -1922,6 +1923,7 @@ export default {
                 nullif(c.back_colour3, '') AS back_colour3,
                 colours.background_colour,
                 colours.foreground_colour,
+                colours.third_colour,
                 colours.canonical_club_id,
                 colours.colour_canonical_club_id,
                 colours.colour_source_database_slug,
@@ -1961,6 +1963,7 @@ export default {
                 SELECT
                   colours.background_colour,
                   colours.foreground_colour,
+                  colours.third_colour,
                   colours.canonical_club_id,
                   colours.colour_canonical_club_id,
                   colours.colour_source_database_slug,
@@ -1997,6 +2000,7 @@ export default {
                 back_colour3: club?.back_colour3,
                 background_colour: canonicalColour?.background_colour,
                 foreground_colour: canonicalColour?.foreground_colour,
+                third_colour: canonicalColour?.third_colour,
                 canonical_club_id: canonicalColour?.canonical_club_id,
                 colour_canonical_club_id: canonicalColour?.colour_canonical_club_id,
                 colour_source_database_slug: canonicalColour?.colour_source_database_slug,
@@ -2080,7 +2084,8 @@ export default {
       );
 
       if (historyMatch) {
-        const [, database, sourcePersonId] = historyMatch;
+        const database = decodeURIComponent(historyMatch[1]);
+        const sourcePersonId = decodeURIComponent(historyMatch[2]);
 
         const cached = await matchEdgeCache(request);
         if (cached) return cached;

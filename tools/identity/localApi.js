@@ -220,10 +220,12 @@ function canonicalClubColourOverride(publicId) {
   if (!override) return null;
   const background = decodeClubColour(override.background);
   const foreground = decodeClubColour(override.foreground);
+  const third = override.third ? decodeClubColour(override.third) : "";
   return background && foreground && background !== foreground
     ? {
         background_colour: background,
         foreground_colour: foreground,
+        third_colour: third || null,
         colour_source_database_slug: "canonical_override",
         colour_source_club_id: String(publicId),
         colour_slot: 0

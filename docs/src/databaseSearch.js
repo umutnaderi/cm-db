@@ -1184,6 +1184,41 @@ function clubColour(value) {
   return CLUB_COLOUR_PALETTE[directIndex] || "";
 }
 
+function relativeLuminance(hexColour) {
+  const channels = hexColour
+    .slice(1)
+    .match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16) / 255)
+    .map((channel) =>
+      channel <= 0.04045
+        ? channel / 12.92
+        : ((channel + 0.055) / 1.055) ** 2.4,
+    );
+
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function colourContrastRatio(first, second) {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function readableBannerSubtext(background, preferred, fallback) {
+  const minimumContrast = 4.5;
+  if (preferred && colourContrastRatio(preferred, background) >= minimumContrast) {
+    return preferred;
+  }
+  if (fallback && colourContrastRatio(fallback, background) >= minimumContrast) {
+    return fallback;
+  }
+
+  return colourContrastRatio("#000000", background) >=
+    colourContrastRatio("#ffffff", background)
+    ? "#000000"
+    : "#ffffff";
+}
+
 function profileBannerTheme(player, profile) {
   const colours = profile?.clubColors || player?.club_colors;
   if (!colours) return { className: "", style: "" };
@@ -1213,10 +1248,11 @@ function profileBannerTheme(player, profile) {
 
   const third = clubColour(colours.third_colour);
   const thirdDeclaration = third ? `;--club-banner-third:${third}` : "";
+  const subtext = readableBannerSubtext(background, third, foreground);
 
   return {
     className: " has-club-colours",
-    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground}${thirdDeclaration}"`,
+    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground};--club-banner-subtext:${subtext}${thirdDeclaration}"`,
   };
 }
 

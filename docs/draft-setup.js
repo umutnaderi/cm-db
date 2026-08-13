@@ -1,4 +1,10 @@
 import { getDraftCandidates } from "./src/lib/retroballApi.js?v=20260801-68";
+import {
+  hashString,
+  mulberry32,
+  resolvePotentialAbility,
+  rollGenerativeTargetAbility,
+} from "./src/lib/attributeGeneration.js?v=20260809-01";
 
 const FRIEND_SESSION_KEY = "retroball-friend-session-v1";
 
@@ -278,6 +284,7 @@ const state = {
   databasesUsedForCurrentPick: new Set(),
   scenario: "ucl0304",
   classicScenario: "ucl0304",
+  generationSeed: null,
 };
 
 const formationChoices = document.querySelector("#formationChoices");
@@ -294,6 +301,7 @@ const suggestionsPanel = document.querySelector(".draft-suggestions-panel");
 const captainPrompt = document.querySelector("#draftCaptainPrompt");
 const suggestionHelp = document.querySelector("#draftSuggestionHelp");
 const modeKicker = document.querySelector("#draftModeKicker");
+const modeDescription = document.querySelector("#draftModeDescription");
 const progress = document.querySelector("#draftProgress");
 const squadList = document.querySelector("#draftSquadList");
 const teamNameInput = document.querySelector("#draftTeamName");
@@ -308,6 +316,7 @@ const scenarioPicker = document.querySelector("#draftScenarioPicker");
 const scenarioLegend = document.querySelector("#draftScenarioLegend");
 const scenarioDescription = document.querySelector("#draftScenarioDescription");
 const DRAFT_TEAM_STORAGE_KEY = "retroball-draft-team-v1";
+const DRAFT_PROGRESS_STORAGE_KEY = "retroball-draft-progress-v1";
 const MOBILE_DRAFT_MEDIA = "(max-width: 760px)";
 
 function scrollMobileDraftTo(target, block = "start") {
@@ -318,8 +327,12 @@ function scrollMobileDraftTo(target, block = "start") {
 }
 
 function isDatabaseDraftMode() {
-  return state.mode === "Classic" || state.mode === "Titan Fight";
+  return state.mode === "Classic" || state.mode === "Titan Fight" || state.mode === "Generative";
 }
+
+const MODE_DESCRIPTIONS = {
+  Generative: "Each player will be randomly given a rating up to their own Potential Ability.",
+};
 
 function minimumDraftAbility() {
   return state.mode === "Titan Fight" ? 165 : 100;
@@ -506,6 +519,28 @@ function averageOverall(values) {
     : 0;
 }
 
+function generativePlayerSnapshot(candidate) {
+  if (state.mode !== "Generative") return candidate;
+  if (!Number.isFinite(state.generationSeed)) {
+    state.generationSeed = Math.floor(Math.random() * 2 ** 31);
+  }
+  const rng = mulberry32(
+    hashString(`${state.generationSeed}:${candidate.database_slug}:${candidate.source_person_id}`),
+  );
+  const resolvedPotentialAbility = resolvePotentialAbility(
+    candidate.current_ability,
+    candidate.potential_ability,
+    candidate.database_slug,
+    rng,
+  );
+  const generatedTargetAbility = rollGenerativeTargetAbility(
+    candidate.current_ability,
+    resolvedPotentialAbility,
+    rng,
+  );
+  return { ...candidate, generatedTargetAbility };
+}
+
 function squadSnapshot() {
   const slots = currentSlots();
   const players = slots
@@ -532,7 +567,7 @@ function squadSnapshot() {
         positionFit: positionFit(candidate, item.effectiveRole).level,
         effectiveOverall: gameplayOverall * (isCaptain ? 2 : 1),
         effective_current_ability: gameplayCurrentAbility * (isCaptain ? 2 : 1),
-        player: candidate,
+        player: generativePlayerSnapshot(candidate),
       };
     });
   const lineValues = (line, key) =>
@@ -579,6 +614,99 @@ function clearPersistedSquad() {
   } catch {
     // Ignore storage restrictions.
   }
+}
+
+function clearPersistedProgress() {
+  try {
+    localStorage.removeItem(DRAFT_PROGRESS_STORAGE_KEY);
+  } catch {
+    // Ignore storage restrictions.
+  }
+}
+
+function persistProgress() {
+  try {
+    if (!state.drafted.size) {
+      clearPersistedProgress();
+      return;
+    }
+    localStorage.setItem(
+      DRAFT_PROGRESS_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        teamName: teamNameInput.value,
+        formation: state.formation,
+        style: state.style,
+        mode: state.mode,
+        scenario: state.scenario,
+        classicScenario: state.classicScenario,
+        captainSlotId: state.captainSlotId,
+        rollNumber: state.rollNumber,
+        rerollsRemaining: state.rerollsRemaining,
+        qualityDrought: state.qualityDrought,
+        premiumDrought: state.premiumDrought,
+        offeredPlayerIds: [...state.offeredPlayerIds],
+        drafted: [...state.drafted.entries()],
+      }),
+    );
+  } catch {
+    // The draft remains usable in-memory when browser storage is unavailable.
+  }
+}
+
+function restoreProgress() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(DRAFT_PROGRESS_STORAGE_KEY) || "null");
+  } catch {
+    saved = null;
+  }
+  if (!saved || saved.version !== 1 || !formations[saved.formation]) return;
+  const slotIds = new Set(
+    formations[saved.formation].map((_, index) => `slot-${index}`),
+  );
+  const restoredEntries = Array.isArray(saved.drafted)
+    ? saved.drafted.filter(
+        ([slotId, candidate]) => slotIds.has(slotId) && candidate?.database_slug,
+      )
+    : [];
+  if (!restoredEntries.length) return;
+
+  state.formation = saved.formation;
+  state.style = ["Defensive", "Balanced", "Attacking"].includes(saved.style)
+    ? saved.style
+    : "Balanced";
+  state.mode = saved.mode || state.mode;
+  state.scenario = saved.scenario || state.scenario;
+  state.classicScenario = saved.classicScenario || state.classicScenario;
+  state.drafted = new Map(restoredEntries);
+  state.captainSlotId = slotIds.has(saved.captainSlotId) ? saved.captainSlotId : "";
+  state.rollNumber = Number(saved.rollNumber) || 0;
+  state.rerollsRemaining = Number.isFinite(saved.rerollsRemaining)
+    ? saved.rerollsRemaining
+    : 3;
+  state.qualityDrought = Number(saved.qualityDrought) || 0;
+  state.premiumDrought = Number(saved.premiumDrought) || 0;
+  state.offeredPlayerIds = new Set(
+    Array.isArray(saved.offeredPlayerIds) ? saved.offeredPlayerIds : [],
+  );
+  if (saved.teamName) teamNameInput.value = saved.teamName;
+
+  for (const [container, key] of [
+    [formationChoices, "formation"],
+    [styleChoices, "style"],
+    [modeChoices, "mode"],
+  ]) {
+    container.querySelectorAll("button[data-value]").forEach((button) => {
+      button.classList.toggle("is-selected", button.dataset.value === state[key]);
+    });
+  }
+  rollIntro.textContent = "Resumed your in-progress draft.";
+  suggestionHelp.textContent =
+    state.drafted.size >= 11
+      ? "Choose your captain on the pitch."
+      : "Roll again to sign the next player.";
+  renderScenarioPicker();
 }
 
 function renderScenarioPicker() {
@@ -1015,10 +1143,9 @@ function abilityDropTier(candidate) {
   );
 }
 
-function selectRollDatabases(pool, seed) {
-  const openSlots = remainingSlots();
+function draftableCandidates(pool, openSlots) {
   const draftedIds = draftedCanonicalIds();
-  const eligible = pool.filter((candidate) => {
+  return pool.filter((candidate) => {
     const identity = candidateIdentity(candidate);
     return (
       Number(candidate.current_ability || 0) >= minimumDraftAbility() &&
@@ -1033,6 +1160,11 @@ function selectRollDatabases(pool, seed) {
       )
     );
   });
+}
+
+function selectRollDatabases(pool, seed) {
+  const openSlots = remainingSlots();
+  const eligible = draftableCandidates(pool, openSlots);
   const grouped = new Map();
   for (const candidate of eligible) {
     const database = candidate.database_slug;
@@ -1114,22 +1246,7 @@ function selectRollDatabases(pool, seed) {
 
 function chooseSuggestions(pool, seed) {
   const openSlots = remainingSlots();
-  const draftedIds = draftedCanonicalIds();
-  const eligible = pool.filter((candidate) => {
-    const identity = candidateIdentity(candidate);
-    return (
-      Number(candidate.current_ability || 0) >= minimumDraftAbility() &&
-      !draftedIds.has(identity) &&
-      !state.offeredPlayerIds.has(identity) &&
-      openSlots.some((slotItem) =>
-        isTargetPositionMatch(
-          candidate,
-          slotItem.effectiveRole,
-          openSlots.length,
-        ),
-      )
-    );
-  });
+  const eligible = draftableCandidates(pool, openSlots);
   const random = seededRandom(seed);
   const selected = [];
   const databaseCounts = new Map();
@@ -1232,32 +1349,11 @@ function chooseSuggestions(pool, seed) {
     addCandidate(weightedPick(available));
   }
 
-  const replaceWith = (candidate, maximumReplacementAbility = Infinity) => {
-    const candidateFits = fitsOpenSlot(candidate);
-    const sameFitIndexes = selected
-      .map((item, index) => ({ item, index }))
-      .filter(
-        ({ item }) =>
-          fitsOpenSlot(item) === candidateFits &&
-          Number(item.current_ability || 0) <= maximumReplacementAbility,
-      );
-    sameFitIndexes.sort(
-      (left, right) =>
-        Number(left.item.current_ability || 0) -
-        Number(right.item.current_ability || 0),
-    );
-    const sameDatabase = sameFitIndexes.find(
-      ({ item }) => item.database_slug === candidate.database_slug,
-    );
-    const replacement =
-      sameDatabase ||
-      ((databaseCounts.get(candidate.database_slug) || 0) <
-      maximumChoicesPerDatabase()
-        ? sameFitIndexes.at(-1)
-        : null);
-    if (!replacement) return false;
-    const replaced = replacement.item;
-    selected.splice(replacement.index, 1, candidate);
+  // Swaps `candidate` into `selected[index]`, keeping usedPlayers/databaseCounts in sync.
+  // Shared by every "ensure X" pass below so they don't each reimplement this bookkeeping.
+  const applyReplacement = (index, candidate) => {
+    const replaced = selected[index];
+    selected.splice(index, 1, candidate);
     usedPlayers.delete(candidateIdentity(replaced));
     usedPlayers.add(candidateIdentity(candidate));
     if (replaced.database_slug !== candidate.database_slug) {
@@ -1270,6 +1366,48 @@ function chooseSuggestions(pool, seed) {
         (databaseCounts.get(candidate.database_slug) || 0) + 1,
       );
     }
+    return replaced;
+  };
+
+  // Indexes in `selected` that `candidate` is allowed to replace purely on the per-database
+  // cap (ignores position fit) — used by ensureRemainingSlotCoverage, which picks by coverage
+  // gain instead. `replaceWith` below has its own fit-aware selection and doesn't use this.
+  const eligibleReplacementIndexes = (candidate) => {
+    const sameDatabaseIndexes = selected
+      .map((item, index) => index)
+      .filter((index) => selected[index].database_slug === candidate.database_slug);
+    if (sameDatabaseIndexes.length) return sameDatabaseIndexes;
+    return (databaseCounts.get(candidate.database_slug) || 0) <
+      maximumChoicesPerDatabase()
+      ? selected.map((_, index) => index)
+      : [];
+  };
+
+  const replaceWith = (candidate, maximumReplacementAbility = Infinity) => {
+    const candidateFits = fitsOpenSlot(candidate);
+    const sameFitIndexes = selected
+      .map((item, index) => ({ item, index }))
+      .filter(
+        ({ item }) =>
+          fitsOpenSlot(item) === candidateFits &&
+          Number(item.current_ability || 0) <= maximumReplacementAbility,
+      )
+      .sort(
+        (left, right) =>
+          Number(left.item.current_ability || 0) -
+          Number(right.item.current_ability || 0),
+      );
+    const sameDatabase = sameFitIndexes.find(
+      ({ item }) => item.database_slug === candidate.database_slug,
+    );
+    const replacement =
+      sameDatabase ||
+      ((databaseCounts.get(candidate.database_slug) || 0) <
+      maximumChoicesPerDatabase()
+        ? sameFitIndexes.at(-1)
+        : null);
+    if (!replacement) return false;
+    applyReplacement(replacement.index, candidate);
     return true;
   };
 
@@ -1295,20 +1433,8 @@ function chooseSuggestions(pool, seed) {
     while (coverageCount(selected) < openSlots.length) {
       const currentCoverage = coverageCount(selected);
       const options = seededShuffle(
-        availableCandidates().flatMap((candidate) => {
-          const sameDatabaseIndexes = selected
-            .map((item, index) => ({ item, index }))
-            .filter(
-              ({ item }) => item.database_slug === candidate.database_slug,
-            )
-            .map(({ index }) => index);
-          const replacementIndexes = sameDatabaseIndexes.length
-            ? sameDatabaseIndexes
-            : (databaseCounts.get(candidate.database_slug) || 0) <
-                maximumChoicesPerDatabase()
-              ? selected.map((_, index) => index)
-              : [];
-          return replacementIndexes
+        availableCandidates().flatMap((candidate) =>
+          eligibleReplacementIndexes(candidate)
             .map((index) => {
               const trial = selected.slice();
               trial[index] = candidate;
@@ -1319,8 +1445,8 @@ function chooseSuggestions(pool, seed) {
                 replacedAbility: Number(selected[index].current_ability || 0),
               };
             })
-            .filter((option) => option.coverage > currentCoverage);
-        }),
+            .filter((option) => option.coverage > currentCoverage),
+        ),
         seed + 2501 + currentCoverage,
       ).sort(
         (left, right) =>
@@ -1329,20 +1455,7 @@ function chooseSuggestions(pool, seed) {
       );
       const option = options[0];
       if (!option) break;
-      const replaced = selected[option.index];
-      selected.splice(option.index, 1, option.candidate);
-      usedPlayers.delete(candidateIdentity(replaced));
-      usedPlayers.add(candidateIdentity(option.candidate));
-      if (replaced.database_slug !== option.candidate.database_slug) {
-        databaseCounts.set(
-          replaced.database_slug,
-          Math.max(0, (databaseCounts.get(replaced.database_slug) || 1) - 1),
-        );
-        databaseCounts.set(
-          option.candidate.database_slug,
-          (databaseCounts.get(option.candidate.database_slug) || 0) + 1,
-        );
-      }
+      applyReplacement(option.index, option.candidate);
     }
   };
 
@@ -1621,6 +1734,7 @@ function renderPitch() {
     ? Boolean(state.captainSlotId)
     : rollDisabled;
   renderSquadSummary();
+  persistProgress();
 }
 
 function renderSuggestions(message = "", reveal = false) {
@@ -1829,6 +1943,11 @@ Object.keys(formations).forEach((formation) => {
   formationChoices.append(button);
 });
 
+function renderModeDescription() {
+  if (!modeDescription) return;
+  modeDescription.textContent = MODE_DESCRIPTIONS[state.mode] || "";
+}
+
 function bindChoiceGroup(container, key) {
   container.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-value]");
@@ -1845,6 +1964,7 @@ function bindChoiceGroup(container, key) {
     container.querySelectorAll("button").forEach((item) => {
       item.classList.toggle("is-selected", item === button);
     });
+    if (key === "mode") renderModeDescription();
 
     if (key === "mode" && state.mode === "From memory") {
       resetDraft(
@@ -1860,6 +1980,12 @@ function bindChoiceGroup(container, key) {
       );
       return;
     }
+    if (key === "mode" && state.mode === "Generative") {
+      resetDraft(
+        "Generative selected. Rolled players may perform above their real ability, up to their recorded Potential Ability.",
+      );
+      return;
+    }
     resetDraft(
       `${key === "formation" ? "Formation" : key === "style" ? "Style" : "Mode"} changed. Roll a fresh set of players.`,
     );
@@ -1869,6 +1995,7 @@ function bindChoiceGroup(container, key) {
 bindChoiceGroup(formationChoices, "formation");
 bindChoiceGroup(styleChoices, "style");
 bindChoiceGroup(modeChoices, "mode");
+renderModeDescription();
 
 suggestions.addEventListener("click", (event) => {
   const card = event.target.closest("[data-candidate-key]");
@@ -1974,7 +2101,10 @@ mobileRollButton.addEventListener("click", () => {
   }
   rollPlayers();
 });
-teamNameInput.addEventListener("input", persistSquad);
+teamNameInput.addEventListener("input", () => {
+  persistProgress();
+  persistSquad();
+});
 scenarioChoices.addEventListener("click", (event) => {
   const button = event.target.closest("[data-scenario]");
   if (!button || button.dataset.scenario === state.scenario) return;
@@ -1987,10 +2117,12 @@ scenarioChoices.addEventListener("click", (event) => {
 });
 simulateButton.addEventListener("click", () => {
   persistSquad();
+  clearPersistedProgress();
   window.location.href = friendSession
     ? `draft-run.html${window.location.hash}`
     : "draft-run.html";
 });
 
+restoreProgress();
 renderSuggestions();
 renderPitch();

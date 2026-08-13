@@ -70,8 +70,25 @@ def canonical(connection,name,nation_id,team_type,public_id,identity_cache,id_ca
         return public_match
     old=identity_cache.get((normalized,nation_id,team_type))
     if old:
-        if public_id and public_id!=old[1]: raise RuntimeError(f"Stable club public ID conflict for {name}")
+        # Only a manual-override rule's explicit canonical_public_id may legitimately
+        # contest an established identity (a real misconfiguration worth failing on).
+        # An auto-computed proposal from the heuristic grouping pass is not authoritative
+        # over history -- an already-established identity always wins over a fresh guess.
+        if allow_existing_public and public_id and public_id!=old[1]:
+            raise RuntimeError(f"Stable club public ID conflict for {name}")
         return old[0]
+    # Enrichment: a same-name/team-type club previously recorded with no resolved
+    # nation is the same real-world club, not a distinct one. Adopt the more
+    # complete nation info onto the existing canonical entry (keeping its stable
+    # id/public_id) instead of minting a colliding identity for it.
+    if nation_id is not None:
+        unresolved_old=identity_cache.get((normalized,None,team_type))
+        if unresolved_old:
+            integer,existing_public_id=unresolved_old
+            connection.execute("UPDATE canonical_clubs SET canonical_nation_id=? WHERE id=?",(nation_id,integer))
+            identity_cache[(normalized,nation_id,team_type)]=(integer,existing_public_id)
+            id_cache[integer]=existing_public_id;public_cache[existing_public_id]=integer
+            return integer
     integer=stable_id(public_id); collision=id_cache.get(integer) or public_cache.get(public_id)
     if collision: raise RuntimeError(f"Club ID collision: {public_id} / {collision}")
     connection.execute("INSERT INTO canonical_clubs(id,public_id,preferred_name,normalized_name,canonical_nation_id,team_type) VALUES(?,?,?,?,?,?)",(integer,public_id,name,normalized,nation_id,team_type))
@@ -89,12 +106,32 @@ def link(registry_path:Path,overrides_path:Path,alias_groups_path:Path)->dict[st
         for r in con.execute("SELECT s.normalized_name,l.canonical_nation_id,c.public_id FROM source_nations s JOIN nation_identity_links l USING(database_slug,source_nation_id) JOIN canonical_nations c ON c.id=l.canonical_nation_id WHERE s.active=1"):
             by_name[r["normalized_name"]].add((r["canonical_nation_id"],r["public_id"]))
         rows=[dict(r) for r in con.execute("SELECT * FROM source_clubs WHERE active=1 ORDER BY database_slug,source_club_id")]
+        # Clubs already canonicalized with no resolved nation (common for smaller/lower-league
+        # clubs in older packs) must keep grouping under that same unresolved identity even when
+        # a newer pack finally resolves their nation -- otherwise the stable-id/base-slug
+        # computation below treats them as a second, colliding identity. The nation itself is
+        # still adopted onto the canonical row afterward (see enrichment below); only the
+        # *grouping signature* is held back here. If a resolved sibling for the true nation
+        # already exists too (a pre-existing duplicate-canonicalization case), skip the downgrade
+        # entirely and link straight to that resolved entry instead.
+        existing_club_rows=list(con.execute("SELECT id,public_id,normalized_name,canonical_nation_id,team_type FROM canonical_clubs"))
+        existing_club_signatures={(r["normalized_name"],r["canonical_nation_id"],r["team_type"]) for r in existing_club_rows}
+        null_nation_identities={
+            (r["normalized_name"],r["team_type"]) for r in existing_club_rows if r["canonical_nation_id"] is None
+        }
         for row in rows:
             nation=direct.get((row["database_slug"],row["source_nation_id"]))
             if nation is None:
                 candidates=by_name.get(normalize_name(row["nation_name"]),set())
                 nation=next(iter(candidates)) if len(candidates)==1 else None
             row["canonical_nation_id"]=nation[0] if nation else None;row["nation_public_id"]=nation[1] if nation else None
+            row["true_nation_id"]=row["canonical_nation_id"]
+            if (
+                row["canonical_nation_id"] is not None
+                and (row["normalized_name"],row["team_type"]) in null_nation_identities
+                and (row["normalized_name"],row["canonical_nation_id"],row["team_type"]) not in existing_club_signatures
+            ):
+                row["canonical_nation_id"]=None;row["nation_public_id"]=None
             row["context"] = row["nation_public_id"] or f"unresolved_{slug_part(row['nation_name'] or 'unknown')}"
         unknown_groups=defaultdict(list)
         for row in rows:
@@ -180,12 +217,18 @@ def link(registry_path:Path,overrides_path:Path,alias_groups_path:Path)->dict[st
                 public_cache,
                 bool(rule and rule["canonical_public_id"]),
             )
+            if row["true_nation_id"] is not None and row["true_nation_id"]!=row["canonical_nation_id"]:
+                # This row's nation was held back to keep the stable-id grouping intact
+                # (see above); adopt the true, more complete nation onto the canonical
+                # club now that linking for this identity has succeeded without conflict.
+                con.execute("UPDATE canonical_clubs SET canonical_nation_id=? WHERE id=? AND canonical_nation_id IS NULL",(row["true_nation_id"],target))
+            link_nation_id=row["true_nation_id"] if row["true_nation_id"] is not None else row["canonical_nation_id"]
             method="exact_context" if not rule else ("keep_separate" if rule["action"]=="keep_separate" else "manual_override")
             review="auto_accepted" if not rule else "manual_override"
-            evidence=json.dumps({"canonical_nation_id":row["canonical_nation_id"],"city":row["city"],"source_name":row["source_name"],"stadium":row["stadium"],"team_type":kind},ensure_ascii=False,sort_keys=True,separators=(",",":"))
+            evidence=json.dumps({"canonical_nation_id":link_nation_id,"city":row["city"],"source_name":row["source_name"],"stadium":row["stadium"],"team_type":kind},ensure_ascii=False,sort_keys=True,separators=(",",":"))
             con.execute("""INSERT INTO club_identity_links(database_slug,source_club_id,canonical_club_id,canonical_nation_id,match_method,confidence,review_status,evidence_json)
                 VALUES(?,?,?,?,?,1.0,?,?) ON CONFLICT(database_slug,source_club_id) DO UPDATE SET canonical_club_id=excluded.canonical_club_id,canonical_nation_id=excluded.canonical_nation_id,match_method=excluded.match_method,confidence=excluded.confidence,review_status=excluded.review_status,evidence_json=excluded.evidence_json,
-                linked_at=CASE WHEN club_identity_links.canonical_club_id<>excluded.canonical_club_id OR club_identity_links.evidence_json<>excluded.evidence_json THEN CURRENT_TIMESTAMP ELSE club_identity_links.linked_at END""",(*key,target,row["canonical_nation_id"],method,review,evidence))
+                linked_at=CASE WHEN club_identity_links.canonical_club_id<>excluded.canonical_club_id OR club_identity_links.evidence_json<>excluded.evidence_json THEN CURRENT_TIMESTAMP ELSE club_identity_links.linked_at END""",(*key,target,link_nation_id,method,review,evidence))
         con.commit()
         return {"source":len(rows),"canonical":con.execute("SELECT COUNT(*) FROM canonical_clubs").fetchone()[0],"linked":con.execute("SELECT COUNT(*) FROM club_identity_links").fetchone()[0],"unresolved":unresolved,"nation_resolved":sum(r["canonical_nation_id"] is not None for r in rows)}
     except Exception: con.rollback();raise

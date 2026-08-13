@@ -723,11 +723,11 @@ function pitchRatingLevel(value) {
 }
 
 function usesLegacyPositionScale() {
-  return /^cm(?:9697|9798)_/i.test(state.selectedDatabase);
+  return /^cm(?:9596|9697|9798)_/i.test(state.selectedDatabase);
 }
 
 function inheritsWingBacksFromFullBacks() {
-  return /^cm(?:9697|9798)_/i.test(state.selectedDatabase);
+  return /^cm(?:9596|9697|9798)_/i.test(state.selectedDatabase);
 }
 
 function buildPitchRoles(ratings) {
@@ -931,7 +931,7 @@ function renderPositionPanel(profile) {
                   `<div class="position-marker ghost" style="--x:${slot.x}%;--y:${slot.y}%" title="${escapeHtml(PITCH_ROLE_NAMES[slot.label])}"></div>`,
               )
               .join("")}
-            ${roles.map((role, index) => `<div class="position-marker position-tooltip ${role.level}${role.sideUnspecified ? " side-unspecified" : ""}${index === 0 ? " is-primary" : ""}${role.x <= 20 ? " tooltip-align-left" : ""}${role.x >= 80 ? " tooltip-align-right" : ""}${role.y >= 68 ? " tooltip-above" : ""}" style="--x:${role.x}%;--y:${role.y}%" data-info="${escapeHtml(`${role.longLabel} · ${role.levelLabel} · ${role.displayValue}`)}" aria-label="${escapeHtml(`${role.longLabel}: ${role.levelLabel} (${role.displayValue})`)}" tabindex="0"></div>`).join("")}
+            ${roles.map((role, index) => `<div class="position-marker position-tooltip ${role.level}${role.sideUnspecified ? " side-unspecified" : ""}${index === 0 ? " is-primary" : ""}${role.x <= 20 ? " tooltip-align-left" : ""}${role.x >= 80 ? " tooltip-align-right" : ""}${role.y >= 68 ? " tooltip-above" : ""}" style="--x:${role.x}%;--y:${role.y}%" data-info="${escapeHtml(`${role.longLabel} · ${role.levelLabel} · ${role.displayValue}`)}" aria-label="${escapeHtml(`${role.longLabel}: ${role.levelLabel} (${role.displayValue})`)}" tabindex="0">${index === 0 ? '<span class="marker-halo" aria-hidden="true"></span>' : ""}</div>`).join("")}
           </div>
           <div class="pitch-caption"><strong>${escapeHtml(primary?.longLabel || "No recognised position")}</strong></div>
           <div class="position-legend">${
@@ -1184,6 +1184,41 @@ function clubColour(value) {
   return CLUB_COLOUR_PALETTE[directIndex] || "";
 }
 
+function relativeLuminance(hexColour) {
+  const channels = hexColour
+    .slice(1)
+    .match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16) / 255)
+    .map((channel) =>
+      channel <= 0.04045
+        ? channel / 12.92
+        : ((channel + 0.055) / 1.055) ** 2.4,
+    );
+
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function colourContrastRatio(first, second) {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function readableBannerSubtext(background, preferred, fallback) {
+  const minimumContrast = 4.5;
+  if (preferred && colourContrastRatio(preferred, background) >= minimumContrast) {
+    return preferred;
+  }
+  if (fallback && colourContrastRatio(fallback, background) >= minimumContrast) {
+    return fallback;
+  }
+
+  return colourContrastRatio("#000000", background) >=
+    colourContrastRatio("#ffffff", background)
+    ? "#000000"
+    : "#ffffff";
+}
+
 function profileBannerTheme(player, profile) {
   const colours = profile?.clubColors || player?.club_colors;
   if (!colours) return { className: "", style: "" };
@@ -1211,9 +1246,13 @@ function profileBannerTheme(player, profile) {
 
   if (!background || !foreground) return { className: "", style: "" };
 
+  const third = clubColour(colours.third_colour);
+  const thirdDeclaration = third ? `;--club-banner-third:${third}` : "";
+  const subtext = readableBannerSubtext(background, third, foreground);
+
   return {
     className: " has-club-colours",
-    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground}"`,
+    style: ` style="--club-banner-bg:${background};--club-banner-fg:${foreground};--club-banner-subtext:${subtext}${thirdDeclaration}"`,
   };
 }
 
@@ -1233,7 +1272,7 @@ function renderProfile() {
     <div class="profile-banner${bannerTheme.className}"${bannerTheme.style}>
       <button type="button" class="mobile-profile-back" data-mobile-back>Back to results</button>
       <div class="profile-title">
-        <h2 class="profile-player-name">${escapeHtml(playerName(player))}</h2>
+        <h2 class="profile-player-name" data-text="${escapeHtml(playerName(player))}">${escapeHtml(playerName(player))}</h2>
       </div>
       ${fullName ? `<p class="profile-full-name">${escapeHtml(fullName)}</p>` : ""}
       <p class="profile-summary">

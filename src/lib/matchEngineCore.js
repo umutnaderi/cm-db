@@ -734,14 +734,35 @@ export function resolveFreeKickAttempt(shotType, taker, random, contextMultiplie
 // deflection is the same idea as F.DEFLECT (a wall block is mechanically
 // the same as a defender's blocking touch on an open-play shot).
 export function resolveWall(taker, wallDefenders, random) {
+  // No wall means no wall contact -- there's nothing there to hit. The old
+  // formula gave an explicitly empty wall a flat 0.3 "phantom" coverage
+  // (confirmed via browser testing: ~18% of attempts hit a wall that
+  // wasn't there), which this replaces with the only coherent answer.
+  if (!wallDefenders.length) return { hit: false, code: "FK.WALL.NONE" };
   const takerSkill = (
     playerAttribute(taker, "Free Kick Taking", "Set Pieces") + playerAttribute(taker, "Technique")
   ) / 40;
-  const wallCoverage = wallDefenders.length
-    ? average(wallDefenders.map((defender) =>
-        playerAttribute(defender, "Jumping") + playerAttribute(defender, "Positioning"))) / 40
-    : 0.3;
-  const hitChance = clamp(0.1, 0.55, wallCoverage - takerSkill * 0.3 + 0.15);
+  // Average quality still matters (a wall of tall, well-positioned
+  // defenders covers more of the frame than a wall of the same size with
+  // poor ones), but average() alone made wall SIZE invisible -- a 1-man and
+  // a 5-man wall of identical players produced identical coverage
+  // (confirmed via browser testing: ~55-57% for both). sizeFactor adds a
+  // diminishing-returns boost for each additional body (a second/third
+  // defender covers meaningfully more frame; a sixth barely does, since
+  // there's only so much goal a wall can physically block).
+  const avgQuality = average(wallDefenders.map((defender) =>
+    playerAttribute(defender, "Jumping") + playerAttribute(defender, "Positioning"))) / 40;
+  const sizeFactor = 1 - Math.exp(-wallDefenders.length / 2);
+  const wallCoverage = avgQuality * sizeFactor;
+  // Taker skill's weight and the ceiling both moved: the old 0.55 ceiling
+  // was reached by almost any single decent defender regardless of taker
+  // quality (Roberto Carlos vs. one CB: ~56%, a mediocre taker vs. the same
+  // CB: ~57%), so elite technique could barely escape a modest wall. A
+  // stronger coefficient lets a genuinely elite taker cut hit chance close
+  // to zero against a small wall, while a raised ceiling lets a large,
+  // well-composed wall meaningfully punish a poor taker -- both were
+  // structurally impossible before.
+  const hitChance = clamp(0, 0.65, wallCoverage - takerSkill * 0.45 + 0.12);
   if (random() >= hitChance) return { hit: false, code: "FK.WALL.PAST" };
   const outcome = weightedChoice([
     { value: "loose", weight: 3 },

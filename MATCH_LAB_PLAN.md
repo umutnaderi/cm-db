@@ -723,6 +723,102 @@ engine doesn't have. The 69.5%/44.3% verification proves defender quality
 now matters in the upstream duel; it doesn't prove "Dribble" resolves as a
 dribbling-skill contest, because in production it never did.
 
+**Two more real bugs, fixed (Live Signals inspector, pitch markers), one
+correct design confirmed via code reading, not by trusting the retest.**
+A follow-up browser round reported "Pressure near Jaap Stam" while action
+availability said "no opponent engaging" for the same setup. Confirmed:
+`updateInspector()` read `grouped.defender[0]` -- the first roster entry
+with role "defender," full stop, ignoring team and engagement distance --
+while Free Play's own `actionAvailability()` correctly filters both via
+`engagingOpponent()`. A later retest reported these agreeing again, but
+that was because the specific retest's defender happened to satisfy both
+the naive and the correct filter, not because the code had changed; fixed
+properly by making the inspector reuse `engagingOpponent()` in Free Play
+mode. Also confirmed and fixed: pitch markers had zero visual team
+distinction (`marker.dataset.role` drove the dot's fill color; nothing
+drove team), so a same-team "Defender" looked identical to an away one on
+the pitch itself -- only the roster list's off-pitch Home/Away dropdown
+showed it. Added `marker.dataset.team` and a border-color cue for away
+markers. Scenario Probe also gained an explicit hint that assigned roles
+are forced participants regardless of marker distance/team, unlike Free
+Play -- documentation only, confirmed as intentional probe behavior, not
+a bug to fix.
+
+### Free-kick chain audit (2026-08-13)
+
+User-reported: 13 goals from 1,000 direct free kicks with Roberto Carlos
+against a single wall defender and Barthez in goal -- implausibly low for
+an elite specialist. Traced the complete chain
+(`resolveWall`→`selectFreeKickShotType`→`resolveFreeKickAttempt`→
+`resolveKeeperSave`) stage by stage before changing anything.
+
+**Fixed, shared/live formula: `resolveWall()`'s wall-size blindness and
+empty-wall phantom coverage (already confirmed the previous round), plus a
+taker-skill ceiling too low to let elite technique matter.** Redesigned:
+an empty wall (`wallDefenders.length === 0`) now returns `{ hit: false,
+code: "FK.WALL.NONE" }` directly -- zero coverage, not a flat 0.3 baseline.
+A non-empty wall's coverage is `avgQuality * sizeFactor`, where
+`sizeFactor = 1 - Math.exp(-wallDefenders.length / 2)` gives each
+additional body diminishing-returns coverage (a 1-man wall barely covers
+anything; a 5-man wall covers most of what it's going to). The taker-skill
+coefficient moved from `0.3` to `0.45` and the ceiling from `0.55` to
+`0.65`, so an elite taker can meaningfully escape a thin wall and a large,
+well-composed wall can meaningfully punish a poor one -- both were
+structurally impossible under the old formula regardless of skill,
+confirmed via the review's own required comparison matrix
+(`test-wall-recalibration.mjs`): elite taker vs. a 3-man decent wall gives
+1/3/5-defender rates of 0.8%/30.9%/40.8% (clear size effect, diminishing
+returns); the same 3-man wall against elite/average/weak takers gives
+30.2%/44.2%/56.6% (clear taker-skill effect); weak/decent/elite 3-man
+walls against an average taker give 15.3%/45.2%/55.0% (clear wall-quality
+effect); every taker against an empty wall gives exactly 0.00%.
+
+**Fixed, Match-Lab-only: the Free Kick probe never modeled the
+rebound-scramble phase.** Same gap already fixed elsewhere (Cross &
+Header, Free Play's cross/shoot) but missed here -- `resolveKeeperSave()`
+returning `rebound: true` (codes K.SAVE.2/5/6) was treated as a flat "no
+goal," when the real tick loop picks a poacher from the whole attacking
+pool and runs a second contested race plus a shot chance. Fixed by reusing
+the same `resolveReboundScramble()` helper, with the taker standing in for
+the poacher (Match Lab has no separate poacher pool for a free kick) and a
+placed wall defender standing in for the contesting defender when one
+exists, uncontested otherwise -- same "real players, not fabricated" rule
+as everywhere else in this file. Matches the real tick loop's own free-kick
+rebound duel exactly, including its hardcoded zone `1`.
+
+**Confirmed, deliberately NOT fixed: neither `resolveWall()` nor
+`resolveFreeKickAttempt()` take a distance/angle input at all, and
+`resolveKeeperSave()`'s free-kick call hardcodes zone `1`.** Verified this
+is not a Match Lab gap -- `draft-run.js`'s real tick loop calls all three
+functions with the exact same shape (no zone args on the first two,
+literal `1` on the third), so Match Lab's Free Kick probe is faithful to
+production, not incomplete relative to it. A taker's Zone 4 placement on
+the pitch has never affected a free kick's outcome in the live match
+engine, only in the sense that farther-out free kicks were never modeled
+as harder to begin with. Fixing this for real means threading a genuine
+distance/angle concept through the live tick loop and all three functions
+-- new engine design work, not a calibration pass, and explicitly out of
+scope for this round. Documented rather than silently built around.
+
+Stage-by-stage verification, Roberto Carlos vs. Barthez, 1,000 runs each
+(`test-freekick-pipeline.mjs` before, `test-freekick-after.mjs` after):
+
+| | 1 wall defender, before | 1 wall defender, after | empty wall, after | 5 identical defenders, after |
+|---|---|---|---|---|
+| Wall hit | 559 (55.9%) | 12 (1.2%) | 0 (0.0%) | 399 (39.9%) |
+| On target (of cleared) | 245/441 (55.6%) | 535/988 (54.2%) | 536/1000 (53.6%) | 328/601 (54.6%) |
+| Direct goal | 20 | 48 | 51 | 38 |
+| Rebound goal | 0 (not modeled) | 8 | 0 | 2 |
+| **Total goals** | **20 (2.0%)** | **56 (5.6%)** | **51 (5.1%)** | **40 (4.0%)** |
+
+Live-match telemetry (`scenario_telemetry.mjs`, 400 matches) after the
+change: `FK.WALL.HIT` at 9/400 (0.022/match), identical to the
+already-documented pre-existing baseline (`test-draft-game.mjs`'s own
+comment: "~9/400") -- realistic matches mostly use 3-5 man walls rather
+than the 1-defender edge case above, so overall match balance is
+unaffected even though behavior at the extremes changed substantially.
+Full regression suite (`test-draft-game.mjs`) passes.
+
 ### Next up, in order
 
 1. Ball -- done (Phase 2 v1).
@@ -741,11 +837,19 @@ dribbling-skill contest, because in production it never did.
 8. Upstream progression duel for Dribble / Tackle & Foul -- done
    (second browser round, 2026-08-13).
 9. `resolveWall()` recalibration (wall-size blindness, empty-wall phantom
-   0.3 baseline, taker-skill ceiling) -- real, confirmed, shared-engine
-   work. Not started; needs explicit go-ahead before touching live free-kick
-   calibration.
-10. Empty-net accuracy context boost (separate, higher ceiling for a
+   0.3 baseline, taker-skill ceiling) -- done (free-kick chain audit,
+   2026-08-13).
+10. Free Kick probe's missing rebound-scramble phase -- done (free-kick
+    chain audit, 2026-08-13).
+11. Live Signals inspector team/distance filter, pitch marker team color --
+    done (second browser round, 2026-08-13).
+12. Empty-net accuracy context boost (separate, higher ceiling for a
     genuinely open net, not just guaranteeing on-target = goal) -- real,
     smaller follow-up. Not started.
-11. Scenario Probe UI hint clarifying ball position/ownership has no effect
-    outside Free Play -- documentation-only. Not started.
+13. Scenario Probe UI hint clarifying ball position/ownership has no effect
+    outside Free Play -- done (second browser round, 2026-08-13).
+14. Real distance/angle modeling for free kicks (resolveWall,
+    resolveFreeKickAttempt, resolveKeeperSave's hardcoded zone 1) --
+    confirmed genuine, but new engine design work spanning the live tick
+    loop and all three functions, not a calibration pass. Not started; not
+    yet asked for.

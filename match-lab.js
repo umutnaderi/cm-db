@@ -250,7 +250,7 @@ const SCENARIOS = [
   {
     id: "free-kick",
     label: "Free Kick",
-    description: "Wall contact first, then the shot if it gets past. Calls resolveWall(), then selectFreeKickShotType()/resolveFreeKickAttempt()/resolveKeeperSave().",
+    description: "Wall contact, the shot if it gets past, and a rebound scramble if the keeper spills it. Calls resolveWall(), selectFreeKickShotType()/resolveFreeKickAttempt()/resolveKeeperSave() -- same as the real tick loop, including its fixed Zone 1 keeper-save call. resolveWall() and resolveFreeKickAttempt() have no distance/angle input at all in production, so the taker's placement on the pitch doesn't change this probe's math; that's not a Match Lab omission, it's faithful to what the live engine does today.",
     roles: [
       { key: "attacker", count: 1 },
       { key: "keeper", count: 1 },
@@ -260,11 +260,14 @@ const SCENARIOS = [
     run(byRole, ctx, random, trace) {
       const taker = byRole.attacker[0];
       const keeper = byRole.keeper[0];
-      const wallPlayers = (byRole.wall || []).map((entry) => entry.player);
+      const wallEntries = byRole.wall || [];
+      const wallPlayers = wallEntries.map((entry) => entry.player);
       const wall = resolveWall(taker.player, wallPlayers, random);
       trace.push({
         code: wall.code,
-        label: wall.hit ? `Blocked by the wall (${wall.outcome})` : "Clears the wall",
+        label: wall.hit
+          ? `Blocked by the wall (${wall.outcome})`
+          : wallPlayers.length ? "Clears the wall" : "No wall placed -- nothing to clear",
       });
       if (wall.hit) return { outcome: `WALL/${wall.outcome.toUpperCase()}`, code: wall.code };
       const shotType = selectFreeKickShotType(taker.player, random);
@@ -278,7 +281,26 @@ const SCENARIOS = [
         code: save.code,
         label: save.goal ? `${playerName(taker.player)} scores direct` : `${playerName(keeper.player)} saves it`,
       });
-      return { outcome: save.goal ? "GOAL" : "NO GOAL", code: save.code };
+      if (save.goal) return { outcome: "GOAL", code: save.code };
+      if (!save.rebound) return { outcome: "NO GOAL", code: save.code };
+      // The real tick loop doesn't stop at a spilled save -- it picks a
+      // poacher from the whole attacking pool for the loose-ball scramble
+      // (localizedDuel at zone 1, same as the save call above). Match Lab
+      // has no separate poacher pool for a free kick (only the taker is
+      // placed as attacker), so this reuses the taker for the scramble
+      // too, and reuses a placed wall defender as the contesting defender
+      // if one exists -- uncontested otherwise, same "real players, not
+      // fabricated" rule used everywhere else in this file.
+      const reboundDefenderEntry = wallEntries[0] || null;
+      if (!reboundDefenderEntry) {
+        const scored = random() < transitionShotChance(taker.player, keeper.player, FIXED_MINUTE, 0.32, poacherScore);
+        trace.push({
+          code: scored ? "REBOUND.GOAL" : "REBOUND.MISS",
+          label: scored ? `${playerName(taker.player)} scrambles the rebound in, unchallenged` : "The rebound drifts away, unchallenged",
+        });
+        return { outcome: scored ? "GOAL" : "NO GOAL", code: scored ? "REBOUND.GOAL" : "REBOUND.MISS" };
+      }
+      return resolveReboundScramble(taker, reboundDefenderEntry, keeper, 1, random, trace);
     },
   },
 ];

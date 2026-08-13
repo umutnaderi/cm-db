@@ -11,6 +11,7 @@ import {
   average,
   clamp,
   computePressure,
+  conditionedScore,
   conditionMultiplier,
   CONGESTED_ZONES,
   contestedRace,
@@ -21,7 +22,9 @@ import {
   engineAttributeDetail,
   FINISH_TYPE_LABELS,
   FREE_KICK_SHOT_LABELS,
+  goalkeeperScore,
   hashString,
+  headerScore,
   isAttacker,
   isDefender,
   isGoalkeeper,
@@ -33,9 +36,11 @@ import {
   MIRRORED_ZONE,
   normalizedAttributeLabel,
   normalizedEngineRatings,
+  playerAbility,
   playerAttribute,
   playerName,
   playerPreferredColumn,
+  poacherScore,
   receiveOrientation,
   resolveDelivery,
   resolveEngagement,
@@ -55,7 +60,9 @@ import {
   selectFreeKickShotType,
   selectReceiver,
   traceScenario,
+  transitionShotChance,
   weightedChoice,
+  weightedPlayer,
   ZONE_CENTERS,
   ZONE_TRANSITION_MATRIX,
 } from "./src/lib/matchEngineCore.js?v=20260811-01";
@@ -844,10 +851,6 @@ function boostedSquadOverall() {
   })));
 }
 
-function playerAbility(player) {
-  return clamp(30, 99, (Number(player?.current_ability) || 100) / 2);
-}
-
 function attackerScore(player) {
   const technique = average([
     playerAttribute(player, "Finishing", "Shooting"),
@@ -886,18 +889,6 @@ function defenderScore(player) {
     playerAttribute(player, "Strength"),
   ]) * 5;
   return clamp(30, 99, playerAbility(player) * 0.44 + attributes * 0.56);
-}
-
-function goalkeeperScore(player) {
-  const attributes = average([
-    playerAttribute(player, "Handling"),
-    playerAttribute(player, "Reflexes"),
-    playerAttribute(player, "One On Ones"),
-    playerAttribute(player, "Positioning"),
-    playerAttribute(player, "Agility"),
-    playerAttribute(player, "Jumping"),
-  ]) * 5;
-  return clamp(25, 99, playerAbility(player) * 0.38 + attributes * 0.62);
 }
 
 function strongest(players, score, count) {
@@ -955,16 +946,6 @@ function teamConditionAt(model, minute) {
     .map((player) => conditionMultiplier(player, minute)));
 }
 
-function weightedPlayer(players, random, preferredLine = "", score = attackerScore) {
-  if (!players.length) return null;
-  const weighted = players.flatMap((player) => {
-    const lineBoost = !preferredLine || player.line === preferredLine ? 3 : 1;
-    const weight = clamp(1, 18, Math.round((score(player) - 38) / 4)) * lineBoost;
-    return Array.from({ length: weight }, () => player);
-  });
-  return weighted[Math.floor(random() * weighted.length)] || players[0];
-}
-
 function setPieceScore(player, delivery = "corner") {
   const specialist = delivery === "corner"
     ? playerAttribute(player, "Corners", "Set Pieces")
@@ -976,17 +957,6 @@ function setPieceTaker(players, delivery = "corner") {
   const outfield = players.filter((player) => !isGoalkeeper(player));
   return strongest(outfield.length ? outfield : players, (player) =>
     setPieceScore(player, delivery), 1)[0] || players[0];
-}
-
-function headerScore(player) {
-  const attributes = average([
-    playerAttribute(player, "Heading"),
-    playerAttribute(player, "Jumping"),
-    playerAttribute(player, "Off the Ball"),
-    playerAttribute(player, "Strength"),
-    playerAttribute(player, "Anticipation"),
-  ]) * 5;
-  return clamp(25, 99, attributes * 0.78 + playerAbility(player) * 0.22);
 }
 
 function volleyScore(player) {
@@ -1101,10 +1071,6 @@ function counterRunnerScore(player) {
   return clamp(25, 99, attributes * 0.74 + playerAbility(player) * 0.26 + wideBonus);
 }
 
-function conditionedScore(player, score, minute) {
-  return score(player) * conditionMultiplier(player, minute);
-}
-
 function defenderForColumn(opponents, column, minute, random) {
   const defenders = opponents.filter((player) => !isGoalkeeper(player) && isDefender(player));
   const source = defenders.length
@@ -1138,16 +1104,6 @@ function pressingScore(player) {
     playerAttribute(player, "Anticipation"),
     playerAttribute(player, "Tackling"),
     playerAttribute(player, "Acceleration"),
-  ]) * 5;
-  return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
-}
-
-function poacherScore(player) {
-  const attributes = average([
-    playerAttribute(player, "Anticipation"),
-    playerAttribute(player, "Acceleration"),
-    playerAttribute(player, "Off the Ball"),
-    playerAttribute(player, "Finishing", "Shooting"),
   ]) * 5;
   return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
 }
@@ -1640,13 +1596,6 @@ function buildTimeline({
     }, actor, random));
   }
   return { events, disciplinary };
-}
-
-function transitionShotChance(shooter, keeper, minute, baseChance, score = attackerScore) {
-  const attackPower = conditionedScore(shooter, score, minute) / 100;
-  const keeperPower = conditionedScore(keeper, goalkeeperScore, minute) / 100;
-  const share = attackPower / Math.max(0.01, attackPower + keeperPower);
-  return clamp(0.008, 0.32, baseChance * (0.45 + share * 1.1) * 0.4);
 }
 
 function buildTransitionTimeline({

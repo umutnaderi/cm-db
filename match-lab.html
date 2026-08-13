@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Match Lab · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260811-01">
+    <link rel="stylesheet" href="styles.css?v=20260812-01">
   </head>
   <body class="match-lab-page">
     <main class="match-lab-shell">
@@ -57,19 +57,44 @@
         </div>
 
         <div class="match-lab-column">
-          <h2 class="match-lab-panel-title">Scenario Probe</h2>
-          <p class="match-lab-hint">
-            Each probe resolves the <em>outcome</em> of an action you've
-            already picked below — a cross that's already been delivered, a
-            pass that's already arrived. It doesn't yet ask the engine to
-            choose the action itself (would it even cross here at all?) —
-            that's a separate, larger piece, tracked in MATCH_LAB_PLAN.md.
-          </p>
-          <select id="labScenarioSelect" aria-label="Scenario"></select>
-          <p class="match-lab-hint" id="labScenarioDescription"></p>
-          <div class="match-lab-role-requirements" id="labRoleRequirements"></div>
+          <div class="match-lab-mode-toggle" role="tablist">
+            <button type="button" id="labFreePlayModeButton" role="tab" aria-selected="true">Free Play</button>
+            <button type="button" id="labProbeModeButton" role="tab" aria-selected="false">Scenario Probe</button>
+          </div>
 
-          <div class="match-lab-context" id="labContextControls"></div>
+          <div id="labFreePlayPanel">
+            <p class="match-lab-hint">
+              Give a placed player the ball, then ask the engine what it would
+              attempt. The <strong>choice</strong> of action (pass vs. cross vs.
+              dribble vs. shoot) is new, Match-Lab-only logic — there's no
+              callable "what would the engine try" function to call, so this
+              can't reuse one (see MATCH_LAB_PLAN.md, Phase 3). Once an action
+              is chosen, its <strong>resolution</strong> always calls the real,
+              unmodified match engine.
+            </p>
+            <p class="match-lab-hint" id="labBallOwnerStatus">No ball owner assigned yet.</p>
+            <div class="match-lab-action-table" id="labActionTable"></div>
+          </div>
+
+          <div id="labProbePanel" hidden>
+            <p class="match-lab-hint">
+              Each probe resolves the <em>outcome</em> of an action you've
+              already picked below — a cross that's already been delivered, a
+              pass that's already arrived. It doesn't ask the engine to choose
+              the action itself; that's what Free Play does.
+            </p>
+            <p class="match-lab-hint">
+              Whoever you assign to a role here is a forced participant in
+              the probe, regardless of where you place them on the pitch or
+              which team they're on — unlike Free Play, marker distance and
+              team don't remove or add anyone. Zone comes from the relevant
+              role's position; ball position/ownership has no effect here.
+            </p>
+            <select id="labScenarioSelect" aria-label="Scenario"></select>
+            <p class="match-lab-hint" id="labScenarioDescription"></p>
+            <div class="match-lab-role-requirements" id="labRoleRequirements"></div>
+            <div class="match-lab-context" id="labContextControls"></div>
+          </div>
 
           <div class="match-lab-controls">
             <button type="button" id="labPlayButton" class="match-lab-primary-button">▶ Roll</button>
@@ -93,7 +118,7 @@
           </div>
 
           <div class="match-lab-trace" id="labTrace" hidden>
-            <h3>Event trace</h3>
+            <h3>Event trace <span class="match-lab-trace-source" id="labTraceSource"></span></h3>
             <ol id="labTraceList"></ol>
           </div>
 

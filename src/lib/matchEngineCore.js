@@ -933,3 +933,78 @@ export function resolveReceive(receiver, defender, passQuality, pressure, bypass
         context: { code, duel: race, won: false, orientation },
       };
 }
+
+// ---------------------------------------------------------------------------
+// Player scoring -- used by the tick loop to weight *which* player takes an
+// action, and (added later, see MATCH_LAB_PLAN.md) by Match Lab's rebound-
+// scramble follow-up after a rebound-flagged delivery/keeper save. A
+// resolveDelivery()/resolveKeeperSave() call with `rebound: true` is not the
+// end of the phase in the real engine -- the tick loop always continues into
+// a second contested race for the loose ball plus a shot chance, which is
+// where a real share of "eventual goals from a cross" actually come from.
+// Match Lab's Scenario Probe and Free Play both missed this at first
+// (reported "no goal" the moment a delivery came back rebound-flagged),
+// which is exactly the kind of gap this tool exists to surface.
+// ---------------------------------------------------------------------------
+
+export function playerAbility(player) {
+  return clamp(30, 99, (Number(player?.current_ability) || 100) / 2);
+}
+
+export function goalkeeperScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Handling"),
+    playerAttribute(player, "Reflexes"),
+    playerAttribute(player, "One On Ones"),
+    playerAttribute(player, "Positioning"),
+    playerAttribute(player, "Agility"),
+    playerAttribute(player, "Jumping"),
+  ]) * 5;
+  return clamp(25, 99, playerAbility(player) * 0.38 + attributes * 0.62);
+}
+
+export function poacherScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Anticipation"),
+    playerAttribute(player, "Acceleration"),
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Finishing", "Shooting"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.8 + playerAbility(player) * 0.2);
+}
+
+export function conditionedScore(player, score, minute) {
+  return score(player) * conditionMultiplier(player, minute);
+}
+
+export function transitionShotChance(shooter, keeper, minute, baseChance, score) {
+  const attackPower = conditionedScore(shooter, score, minute) / 100;
+  const keeperPower = conditionedScore(keeper, goalkeeperScore, minute) / 100;
+  const share = attackPower / Math.max(0.01, attackPower + keeperPower);
+  return clamp(0.008, 0.32, baseChance * (0.45 + share * 1.1) * 0.4);
+}
+
+// Generic weighted player selection from a pool -- used by the tick loop to
+// pick *which* player takes an action (added here, see MATCH_LAB_PLAN.md
+// Phase 4, so Match Lab can reuse the exact same delivery/cross-target
+// selection the real engine uses instead of a bespoke formula).
+export function weightedPlayer(players, random, preferredLine, score) {
+  if (!players.length) return null;
+  const weighted = players.flatMap((player) => {
+    const lineBoost = !preferredLine || player.line === preferredLine ? 3 : 1;
+    const weight = clamp(1, 18, Math.round((score(player) - 38) / 4)) * lineBoost;
+    return Array.from({ length: weight }, () => player);
+  });
+  return weighted[Math.floor(random() * weighted.length)] || players[0];
+}
+
+export function headerScore(player) {
+  const attributes = average([
+    playerAttribute(player, "Heading"),
+    playerAttribute(player, "Jumping"),
+    playerAttribute(player, "Off the Ball"),
+    playerAttribute(player, "Strength"),
+    playerAttribute(player, "Anticipation"),
+  ]) * 5;
+  return clamp(25, 99, attributes * 0.78 + playerAbility(player) * 0.22);
+}

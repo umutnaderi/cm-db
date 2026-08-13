@@ -305,29 +305,447 @@ for what was kept, changed, or rejected and why.
    so the gap is visible to whoever uses the page next, not just whoever
    reads this doc.
 
-   **Not committed yet.** The reviewer's own sequencing ties committing
-   "Match Lab v1: Scenario Probe" to a manual browser pass, which this
-   environment cannot perform -- that gate stands until a human checks it
-   in an actual browser.
+   **Committed** as `feat: add Match Lab scenario probe` once the page was
+   confirmed rendering and interactive (search, placement, and scenario
+   selection all reached in the browser -- the friction the user hit next
+   was a real scope boundary, not a rendering/console error, so treated as
+   the gate being satisfied).
 
-### Next up (per review, in this exact order -- no more scenario probes first)
+## Phase 3 -- Free Play (2026-08-11, review round 5)
 
-1. Ball -- done above.
-2. A real passer/crosser role, so the live receiver-weight panel (and,
-   later, Cross & Header) can use a placed player's actual Vision/
-   Crossing/Technique instead of the current hardcoded `passerVision = 14`
-   placeholder.
-3. `runConstructedPossession()` -- **one possession, not a full match** --
-   as the actual entry point for an `AUTO`/Free Play mode: given a
-   constructed roster + ball state, let `P.SELECT` (and whatever it
-   chooses -- pass, cross, dribble, shoot) decide the action itself,
-   instead of the user picking a Scenario Probe in advance. This is the
-   piece that turns "test this resolver" into "given this football
-   situation, what does the engine decide" -- the actual original ask.
-   Real, separate engineering work: the tick loop inside
-   `buildTransitionTimeline` is still one large inline block, not already
-   factored into a callable single-possession unit (unchanged from the
-   Phase 2 planning note above).
-4. Store the full run as `lastRun = { seed, setupSnapshot, result, trace }`
-   rather than only `lastTrace`, once Free Play exists -- cleaner grounds
-   for any future 2D playback than the current trace-only shape.
+User feedback after using v1: "can't I just put one attacker with the ball
+and see what he does? Why do I always need a defender? What does Step even
+do? Are these all the scenarios?" -- confirms the real-world friction
+predicted when Scenario Probe was scoped as a stepping stone, not the
+answer to the original ask. Review response: make Free Play the primary
+mode, Scenario Probe secondary/debug; actors other than the ball owner
+should be optional, with missing actors making specific actions
+*unavailable* (and saying why) rather than blocking Play or getting
+fabricated to satisfy a resolver's argument list; hide Step for
+single-event traces; ball ownership (`ball.ownerId`) should be the actual
+mechanic, not decorative.
+
+Agreed, with one correction grounded in the real code rather than assumed:
+**there is no existing `P.SELECT` function to wire up.** Grepped
+`buildTransitionTimeline` -- the "what does the ball carrier attempt"
+decision isn't a resolver sitting off to the side, it's woven through
+roughly 1,200 lines of the tick loop's control flow (row/column gates,
+`weightedPlayer(attackingPool, ...)` picking secondary actors -- poacher,
+target, receiver, presser -- from the full squad pool at a dozen-plus
+separate points). "A narrow entry point that orchestrates the
+already-extracted resolvers" accurately describes the *outcome* layer
+(genuinely just calling `resolveDelivery`/`resolveReceive`/
+`resolveEngagement`/etc., already extracted in Phase 1). It does not
+describe the *choice* layer -- pass vs. cross vs. dribble vs. shoot --
+which doesn't exist as a callable, roster-agnostic function anywhere.
+It's inseparable from the calibrated tree everyone already agreed not to
+touch (see "Engineering hygiene" in `MATCH_ENGINE_SCENARIOS.md`).
+
+**Resolution:** `runConstructedPossession()` needs a genuinely **new**
+action-choice function -- not extracted from the tick loop (impossible
+without the exact refactor everyone's avoided all session), not a
+duplicate of it either, since it answers a different question than the
+tick loop does (what's structurally available given a *sparse,
+user-built* roster, vs. the tick loop's standing assumption of a full
+squad).
+
+**Refined once more (review round 6): separate "can this state exist"
+from "can this chosen action fully resolve."** The former is always yes,
+even for one player and a ball -- that's not a degraded case to apologize
+for, it's genuinely useful diagnostic output on its own. The latter can
+legitimately be "no, and here's exactly why" without blocking anything or
+fabricating an opponent to make a resolver's argument list happy. Worked
+out action by action, grounded in which real functions need which actors:
+
+| Action | Structural availability | With full cast | With actors missing |
+|---|---|---|---|
+| **Pass** | Needs a receiver placed | `localizedDuel` with the *exact* labels the tick loop uses (`Passing/Technique/Decisions/Teamwork` vs `Positioning/Anticipation/Tackling/Decisions`) -- same formula, called directly, not reimplemented | No defender placed → uncontested (genuinely true, not fabricated); no receiver → unavailable, not attempted |
+| **Cross** | Needs a receiver placed | Existing `resolveDelivery()` chain, unchanged | No defender → skip the aerial contest (nobody to contest it), call `resolveFinishAttempt("header", ...)` directly; on target with no keeper → `unresolved: no goalkeeper placed`, not a fabricated keeper |
+| **Dribble** | Needs a defender placed -- structurally meaningless without one, not partially resolvable | Same `selectEngagement`→`resolveEngagement`→`resolveFoul` chain the Tackle & Foul probe already uses | Unavailable: "no opponent engaging" |
+| **Shoot** | Always available (shooter + ball only) | `selectFinishType`→`resolveFinishAttempt` need nobody else; a placed defender adds a real `resolveShotBlock` step first, matching the actual engine's chain | On target with no keeper → `unresolved: no goalkeeper placed` |
+| **Carry** | Always unavailable | -- | Reason: "not implemented in the engine yet" -- a real gap surfaced by this exercise (the engine's only "dribble" concept is fundamentally a duel against a defender; there's no move-into-open-space mechanic), not invented ahead of time. Goes on the deferred backlog in `MATCH_ENGINE_SCENARIOS.md` alongside the other `P.SELECT`-adjacent items. |
+
+The one genuinely new piece is the *weighting* among whichever actions
+are available -- no unified "which action" function exists anywhere to
+call, so this is new, Match-Lab-specific logic using the ball owner's
+real attributes (Passing/Crossing/Dribbling/Finishing/Composure) and
+pressure. Every place this shows up -- code comments and the UI itself --
+labels it explicitly as illustrative weighting, not a calibrated engine
+formula, split visibly from the outcome layer:
+- **ACTION CHOICE** -- Match Lab sparse-roster model (new, illustrative)
+- **ACTION RESOLUTION** -- production match engine (real, unmodified)
+
+**Phase 3B (aspirational, not scheduled):** if the action-choice
+interface proves useful, the production engine could eventually converge
+toward the *same* shared chooser (`selectPossessionAction(context,
+random)`) rather than permanently maintaining two independent football
+decision models -- migrated incrementally, one portion of the tree at a
+time, each step validated against a telemetry baseline before/after
+(same discipline as every other change to the calibrated tree this
+session). Not started; recorded here so the destination isn't lost.
+
+### Built
+
+All of items 1-4 below are done. Free Play is now the default mode;
+Scenario Probe is a secondary tab. Ball ownership (`ball.ownerId`) drives
+Free Play -- clicking "⚽" on a placed player assigns it (snapping the ball
+to them), dragging a ball-owner carries the ball along, manually dragging
+the ball away detaches it (loose ball, `ownerId = null`). Roster entries
+gained a `team` (home/away) field alongside their existing role, so Free
+Play can derive teammates/opponents/keeper relative to the ball owner
+without needing scenario-specific role names.
+
+`actionAvailability()`/`actionWeight()`/`selectPossessionAction()`
+implement the structural-availability-always-computable design from the
+table above, using `weightedChoice()` (real, reused) for the actual draw.
+`resolvePass()`/`resolveCross()`/`resolveDribble()`/`resolveShoot()`
+implement the per-action partial-resolution logic exactly as scoped --
+notably, Cross deliberately does *not* call `resolveDelivery()` (the
+corner/set-piece wrapper with inswing/outswing texture); it decomposes
+into `contestedRace()` (aerial, skipped if no defender) →
+`resolveFinishAttempt("header")` → `resolveKeeperSave()` (reported
+`unresolved` if no keeper), matching the real engine's open-play X1
+mechanic more faithfully than the wrapper would have. The receiver-weight
+inspector panel now uses the real ball owner's Vision once one's assigned,
+falling back to the placeholder only when nobody has the ball yet.
+
+**Verification:** all the same static checks as Phase 2 v1 (syntax,
+real-import resolution for the 21 `matchEngineCore` names now in use,
+DOM-id/CSS-class cross-checks, server smoke test, full engine-suite
+regression, clean). Additionally, since this round's logic is genuinely
+new (not just wiring), extracted the pure Free Play functions into a
+scratchpad script and ran them against the real `matchEngineCore` module
+directly in Node (not the browser, not the VM sandbox) across four cases:
+a lone ball owner (only Shoot available, reported correctly, resolves to
+`unresolved: no goalkeeper placed` rather than fabricating one), a ball
+owner plus one teammate and nothing else (Pass/Cross available and
+correctly uncontested, Dribble correctly unavailable), a full cast
+(real duels/engagements/fouls/saves firing, all recognizable engine
+codes), and a 500-run distribution off the full-cast case (plausible
+shape -- NO GOAL dominant, GOAL a small single-digit percentage, sensible
+spread across TURNOVER/WON/ADVANCE/LOOSE/HOLD/FOUL/BLOCKED variants). No
+exceptions in any case.
+
+**What this still does not verify: actual browser behavior**, same
+caveat as Phase 2 v1 and for the same reason -- no browser in this
+environment. The mode toggle, ball-ownership clicking/dragging, team
+selection, and the action table's live updates are all unverified beyond
+static analysis and the logic-only dry run above. Not committed yet.
+
+### Bug found via actual use: the rebound-scramble phase was missing entirely
+
+User report: placed a strong receiver, a weak wing-back as the defender,
+and a genuinely bad outfielder as the keeper, and the attacker still could
+not score no matter how many rerolls -- exactly the kind of thing this
+tool exists to surface, and it worked.
+
+**Diagnosis, grounded in the real tick loop, not assumed:** `resolveDelivery()`/
+`resolveKeeperSave()` flag certain outcomes (`K.SAVE.2`/`.5`/`.6`,
+`K.ONEONONE.3`) with `rebound: true`. In the real engine, that flag is
+never the end of the phase -- `buildTransitionTimeline` always continues
+into a second contested race for the loose ball (`localizedDuel` with
+`Anticipation`/`Acceleration`/`Off the Ball` vs. `Positioning`/
+`Anticipation`/`Strength`) plus a shot-chance roll (`transitionShotChance`
+with `poacherScore`), confirmed by reading the actual corner/delivery/shot
+handling in `draft-run.js` directly (three separate call sites, all the
+same pattern). Both the Cross & Header probe and Free Play's cross/shoot
+resolution stopped the moment they saw a rebound-flagged result and
+reported "no goal" -- silently discarding a real share of how the engine
+actually produces goals from crosses and shots. A weak keeper's main
+effect is producing *more rebounds*, not more direct "beaten clean"
+goals, so this gap disproportionately hid exactly the case the user was
+testing.
+
+**Fix:** exported `playerAbility`, `goalkeeperScore`, `poacherScore`,
+`conditionedScore`, and `transitionShotChance` from `matchEngineCore.js`
+(pure code motion from `draft-run.js`, same discipline as Phase 1 --
+verified behavior-identical via the regression suite and a telemetry
+spot-check) so Match Lab could call the exact same rebound-resolution
+formula the tick loop uses, instead of approximating it. Added a shared
+`resolveReboundScramble()` helper (Match Lab-side, since there's no
+attacking/defending *pool* here to reuse `weightedPlayer`/
+`defenderForColumn` from -- reuses the same attacker/defender already
+placed, a simplification, not a fabrication) and wired it into the Cross
+& Header probe, Shot Resolution probe (which gained an optional `defender`
+role it didn't need before, for exactly this), Free Play's cross, and
+Free Play's shoot. When no defender is placed at all, the rebound is
+correctly treated as uncontested rather than fabricating one.
+
+**Verified the fix actually closes the gap, not just that it runs:**
+extended the scratchpad dry-run with the user's exact matchup (strong
+receiver, weak defender, weak-baseline keeper) and ran it 1000 times.
+Every single scored goal came via the rebound path -- confirming that
+before this fix, this exact matchup would have scored zero goals no
+matter how many times it was rolled, regardless of how weak the keeper
+was, which is precisely the symptom reported. Full regression suite
+clean across 3 runs; telemetry spot-check confirms the underlying
+function relocation didn't shift live-match rates.
+
+### Phase 4 -- Spatial Intelligence Lite (2026-08-12, review round 7)
+
+Free Play's action weights had no zone/pressure/distance term at all, pass
+and cross both targeted `teammates[0]` regardless of who else was placed,
+and the "engaging defender" was just whoever was nearest -- with only one
+opponent placed, that opponent counted as engaging no matter how far away
+they actually were. All three confirmed real by reading the actual code,
+not assumed.
+
+One claim in the review was wrong and worth correcting rather than quietly
+acting on: it said `selectReceiver()` was "already preserved" for pass
+targeting. Checked -- it wasn't. `selectReceiver()` was only ever used in
+the unrelated receiver-suitability inspector panel; `actionAvailability()`'s
+real pass/cross targeting was genuinely `teammates[0]`, nothing more. Fixed
+now, not previously.
+
+Also found a better fix than what was proposed for cross targeting: rather
+than inventing a new poacher-weighted formula, the real tick loop already
+has a target-selection function for exactly this -- `weightedPlayer(pool,
+random, "attack", (player) => conditionedScore(player, headerScore, minute))`,
+used for real corner/delivery targets. Both `weightedPlayer` and
+`headerScore` were pure and easily exportable (same pattern as every prior
+extraction), so cross targeting reuses the *real* mechanism instead of a
+bespoke one -- pass targeting uses `selectReceiver()` (also real, now
+actually wired in), a deliberately different real function, since who
+you'd lay a short pass off to and who you'd aim a cross at are different
+questions in the real engine too.
+
+**Built:**
+- `ENGAGEMENT_DISTANCE = 22` (pitch-percentage radius) + `engagingOpponent()`:
+  the nearest opponent only counts as able to contest anything if actually
+  within range; beyond it, treated identically to no opponent being placed
+  (uncontested pass/cross, Dribble unavailable, lower Shoot pressure) --
+  not fabricated, genuinely absent from the contest.
+- `selectTeammateTarget()`: when 2+ teammates are placed, pass targeting
+  calls real `selectReceiver()`, cross targeting calls real
+  `weightedPlayer()` + `headerScore()`. With exactly one teammate, no
+  selection is needed at all.
+- Zone/pressure multipliers on `actionWeight()` -- wide final-third zones
+  favor Cross, deep zones sharply dampen Shoot, pressure dampens Cross/
+  Dribble. Still explicitly labeled Match-Lab-only/illustrative in the code
+  comments, same discipline as the base weights already had; a real
+  geometric model (Action Geometry, still on the deferred backlog) is the
+  eventual proper fix, not this.
+
+**Verified with a dedicated dry-run** (`test-freeplay-phase4.mjs`, real
+`matchEngineCore` functions, not approximated): an opponent 5.4 units away
+correctly engages, one 63.6 units away correctly doesn't -- the exact bug:
+pass-target selection over 300 draws skewed 258/42 toward the
+better-off-the-ball teammate rather than a flat split; cross-target
+selection skewed 283/17 toward the stronger header; shoot weight came out
+~48x higher in the box than deep in the own third, cross weight ~3x higher
+wide than central. Full regression suite clean across 3 runs (one via a
+backgrounded run after a local timeout, still exit 0 both passes). Not
+committed -- same browser-verification gate as every round since Phase 2.
+
+### Bugs and questions found via actual browser use (2026-08-12)
+
+First real browser session. Four things came back, three real findings and
+one honest "not built yet."
+
+**Bug: "no goalkeeper" resolved as `UNRESOLVED` instead of an empty net.**
+A lone 181 CA player with the ball and nobody else placed showed a
+51%/49% `UNRESOLVED`/`NO GOAL` split -- zero goals, no matter how good the
+player. Diagnosis: `resolveShoot()`/`resolveCross()` treated "no keeper
+placed" as an ambiguous state needing more information. It isn't -- if the
+user chooses not to place a keeper, that's a complete, valid state (an
+actually empty net), and an on-target, unblocked effort against an empty
+net is a goal, not something left hanging. Fixed both call sites: on
+target + no keeper now resolves `GOAL` (`EMPTY_NET` code) directly, no
+`resolveKeeperSave()` call at all (there's nothing for it to resolve
+against). Verified: an 181 CA player finishes on target into an empty net
+~49% of the time -- matches the calibrated on-target rate for a "calm"
+finish (0.28-0.62 floor/ceiling), which already accounts for scuffed/
+wayward efforts that would miss regardless of a keeper. Not "always a
+goal" by design -- an on-target roll already represents "would this
+particular effort trouble the goal at all," and misses stay misses.
+
+**Not a bug, exactly the gap this tool is designed to surface: "he should
+be able to dribble or carry it too."** With no opponent placed at all,
+Dribble is correctly unavailable ("no opponent engaging") -- Dribble
+specifically means beating a defender, which needs one to exist. What the
+user actually wants there is `P.CARRY` (advancing into open space, no
+engagement) -- already identified as a real engine gap during Phase 3
+(the real engine's only "dribble" concept is a duel against a defender,
+full stop) and already on the deferred backlog. Match Lab reporting
+"Carry: not implemented in the engine yet" here is the tool working
+correctly, not a bug to quietly patch around.
+
+**Real finding, not a bug, but worth stating plainly: Cross & Header's ~5%
+conversion for a 140 CA forward vs. 135 CA defender vs. 95 CA keeper is
+what the calibrated formula actually produces, and the reason is
+non-obvious.** Broke it down with a dedicated scratchpad test
+(`test-header-conversion.mjs`) using CA-appropriate attribute sets and
+`resolveDelivery()`/`contestedRace()`/`resolveFinishAttempt()`/
+`resolveKeeperSave()` directly: aerial race won 46.9% of the time, 48.9%
+of those on target, 19.8% of those beat the keeper cleanly -- 0.469 x
+0.489 x 0.198 ≈ 4.5% direct, landing at 5.8% once rebound-scramble goals
+are included, matching what was observed almost exactly.
+
+The non-obvious part: `contestedRace()`'s *attacker* labels are
+`Pace`/`Acceleration`/`Anticipation`/`Off the Ball` even when
+`aerial: true` -- only the *defender's* labels swap in `Marking` for
+aerial contests. A receiver's Heading/Jumping do nothing to help them win
+the aerial position battle; they only matter afterward, for the header's
+on-target accuracy (`resolveFinishAttempt`'s config). A "target man" type
+forward with strong heading but ordinary pace, like the one tested, wins
+the race close to a coin flip regardless of how good their heading is.
+This is pre-existing calibrated behavior from the X1 mechanic built
+earlier this session, not something Match Lab introduced or changed --
+flagging it here because it's the kind of thing this tool exists to
+surface, but a deliberate recalibration of `contestedRace`'s aerial labels
+is real engine-tuning work, not a Match Lab fix, and not started.
+
+**Honest answer, not yet built: ball position currently has no mechanical
+effect beyond who owns it.** `state.ball.x/y` drives the marker's visual
+position and, via the "⚽" button, which player is the current owner --
+nothing currently checks proximity to determine anything else. Dragging
+the ball closer to a player only matters once you explicitly give it to
+them; a loose ball (`ownerId: null`) has no "who reaches it first"
+mechanic at all. Real, sensible gap, not a bug -- a genuine "race to a
+loose ball" mechanic (reusing `contestedRace()` again, real function, not
+new logic) is a reasonable next addition but wasn't asked for yet and
+isn't started.
+
+### Second browser round + external review (2026-08-13)
+
+More real browser testing (Hagi empty-net, Jardel/Stam/Barthez Cross &
+Header, Pass Reception, two Tackle Engagement & Foul runs, two free-kick
+wall runs with Roberto Carlos), followed by an external review of the
+results. Four real findings, one corrected mid-stream, one deferred.
+
+**Bug, fixed: Tackle Engagement & Foul and Free Play's Dribble skipped the
+real engine's upstream progression duel, which is where defender skill
+actually differentiates outcomes.** First pass at this (isolated
+`selectEngagement()`/`resolveEngagement()` testing, `test-engagement-skill.mjs`)
+found a 175 CA defender and a 90 CA scrub produced statistically
+indistinguishable win rates (~67-70% both) and concluded this was a raw
+engine calibration gap. That conclusion was wrong, or at least incomplete
+— `resolveEngagement`'s own comment in `matchEngineCore.js` (line 555) says
+plainly it's "called only once the ball carrier's broader progression duel
+has already gone the defender's way; this decides the *flavor* of that
+win, not whether it happens." Reading `draft-run.js`'s tick loop (line
+2833) confirmed it: `selectEngagement`/`resolveEngagement` never fire on
+their own — a `localizedDuel()` call (`transitionDuel`, attacker labels
+`Passing`/`Technique`/`Decisions`/`Teamwork`, defender labels
+`Positioning`/`Anticipation`/`Tackling`/`Decisions`) has to be lost by the
+attacker first. Both Match Lab's Dribble action and the Tackle & Foul
+probe called `selectEngagement`/`resolveEngagement` directly, meaning the
+elite-vs-scrub test above was really testing "given the defender has
+already won the broader duel, how skill-sensitive is the *flavor* of that
+win" — a narrower, and correctly less skill-sensitive, question than "does
+a bad defender concede more." Fixed both call sites to run the real
+`localizedDuel()` first (same labels, same `raceWasClose = probability >
+0.4` the tick loop uses), only falling through to engagement when the
+attacker loses it; the probe gained a required `attacker` role and lost
+its manual "race was close" checkbox (now a real computed value). The
+Tackle & Foul probe now answers "can this player beat this defender," not
+just "given a beaten defender, how does the tackle look." Verified with a
+fresh scratchpad test (`test-dribble-upstream-duel.mjs`): the same
+attacker now advances past a scrub defender 69.5% of the time vs. 44.3%
+against an elite defender — a 25-point swing where the old isolated
+formula showed none.
+
+**Real, confirmed, not fixed: `resolveWall()`'s coverage formula ignores
+wall size entirely, and gives an empty wall a flat "phantom" baseline
+coverage.** `wallCoverage` is `average(wallDefenders.map(...))` — the
+average of N identical defenders equals one defender's value regardless of
+N, so a 1-man wall and a 5-man wall of identical players produce exactly
+the same hit chance. Separately, `wallDefenders.length === 0` doesn't give
+0 coverage, it gives a flat `0.3` (`resolveWall`, `matchEngineCore.js` line
+740-743) — not derived from any placed entity. Combined with the
+already-confirmed taker-skill ceiling (`test-wall-blockrate.mjs`: Roberto
+Carlos vs. a mediocre taker against the same single defender, 56% vs.
+57.4% wall-contact — the `takerSkill * 0.3` term isn't strong enough to
+escape the formula's 0.55 clamp once a decent single defender's coverage
+already nears it), this is a real, two-part calibration problem in an
+already-live, already-shared formula (`matchEngineCore.js`, used by the
+actual match engine, not Match-Lab-only code). Deliberately **not**
+touched yet — recalibrating it needs the full discipline already used for
+every other shared-engine change this session (constructed tests,
+telemetry before/after, confirming it doesn't shift live free-kick goal
+rates), not a quick Match Lab-driven tweak. Flagged as its own piece of
+work, not started.
+
+**Clarified, not a bug: Scenario Probe's Cross & Header never reads ball
+ownership, a crosser, or any delivery-quality attribute at all.** Its
+`roles` are only `receiver`/`defender`/`keeper`; `run()` calls
+`resolveDelivery()` directly with no fourth "who delivered this" argument.
+This is accurate to what `resolveDelivery()` itself does — the real X1/
+set-piece delivery mechanic doesn't have a separate "crossing accuracy"
+gate to be missing; delivery quality isn't modeled as its own duel
+anywhere in the real engine, only the aerial contest and finish are. So
+the probe is a faithful match for what `resolveDelivery()` computes, but
+the earlier framing ("ball is tied to Jardel") overstated what that
+means: in Scenario Probe, ball ownership is decorative — every probe
+derives its working zone from the placed roles' own positions, never from
+`state.ball`. That's Free-Play-only. Worth being explicit about in the UI
+at some point (a hint under the scenario description) so placing the ball
+on a specific player doesn't imply it does anything for Scenario Probe —
+not done yet, low priority since it's a documentation gap, not a logic
+one.
+
+**Deferred, legitimate future idea: empty-net accuracy could eventually be
+context-boosted rather than left at the plain on-target ceiling.** The
+current empty-net fix (previous round) is mechanically correct — an
+on-target effort with no keeper is a goal — but a real player facing an
+open net would reasonably convert a higher fraction of their efforts than
+the same on-target roll used against a keeper, since "on target" already
+represents everything that would miss regardless. Implementing this
+honestly needs new logic (a genuinely separate, higher ceiling for the
+empty-net case specifically, since `resolveFinishAttempt`'s existing
+`contextMultiplier` is capped by the same ceiling it would need to
+exceed), not a tweak to the existing formula. Not started; flagged as a
+distinct, smaller follow-up from the wall/duel work above.
+
+**Two caveats on the upstream-duel fix itself, both real, one fixed.**
+
+Bug, fixed: the Tackle & Foul probe sourced its working zone from
+`defender.zone`. Harmless before the probe had an attacker (nothing else
+to source it from), but inconsistent once it did -- every other probe in
+this file (Cross & Header, Pass Reception, Shot Resolution) canonically
+uses the *attacking*-side actor's zone, and so does Free Play's
+`resolveDribble` (`owner.zone`). Fixed to `attacker.zone`, matching that
+convention -- also the more meaningful choice for the in-box foul-severity
+modifier, since a foul in the box benefits the attacker who's fouled, not
+the defender who commits it.
+
+Not a bug, an honest limitation worth stating plainly: the upstream duel
+reuses the real engine's only generic progression contest
+(`Passing`/`Technique`/`Decisions`/`Teamwork` vs defensive attributes) --
+faithful to production, but the live engine has no dribble-specific
+contest at all, so `Dribbling`/`Flair`/`Acceleration`/`Balance` are never
+read by the resolution. They ARE read by `actionWeight()`'s "dribble" case
+in Free Play, which decides whether the action gets *chosen* -- so
+choosing to dribble is skill-weighted, but the resolution of that choice
+isn't. That mismatch is real, in the live engine as much as in Match Lab,
+and not something to paper over by inventing a formula the production
+engine doesn't have. The 69.5%/44.3% verification proves defender quality
+now matters in the upstream duel; it doesn't prove "Dribble" resolves as a
+dribbling-skill contest, because in production it never did.
+
+### Next up, in order
+
+1. Ball -- done (Phase 2 v1).
+2. Real passer/ball-owner role -- done (Phase 3).
+3. Action-choice + partial-resolution + `runConstructedPossession()` --
+   done (Phase 3).
+4. Free Play as default mode, Scenario Probe demoted, Step hidden for
+   single-event traces -- done (Phase 3).
+5. Rebound-scramble follow-up (the missing phase found via actual use) --
+   done (post-Phase-3 fix).
+6. Spatial Intelligence Lite (engagement threshold, real target selection,
+   zone/pressure weighting) -- done (Phase 4).
+7. Store the full run as `lastRun = { seed, setupSnapshot, result, trace }`
+   rather than only `lastTrace` -- cleaner grounds for any future 2D
+   playback than the current trace-only shape. Not started.
+8. Upstream progression duel for Dribble / Tackle & Foul -- done
+   (second browser round, 2026-08-13).
+9. `resolveWall()` recalibration (wall-size blindness, empty-wall phantom
+   0.3 baseline, taker-skill ceiling) -- real, confirmed, shared-engine
+   work. Not started; needs explicit go-ahead before touching live free-kick
+   calibration.
+10. Empty-net accuracy context boost (separate, higher ceiling for a
+    genuinely open net, not just guaranteeing on-target = goal) -- real,
+    smaller follow-up. Not started.
+11. Scenario Probe UI hint clarifying ball position/ownership has no effect
+    outside Free Play -- documentation-only. Not started.

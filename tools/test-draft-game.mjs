@@ -41,6 +41,40 @@ import * as matchEngineCore from "../src/lib/matchEngineCore.js";
   assert.equal(composureDetail.value, 14);
   assert.equal(composureDetail.source, "direct");
   assert.equal(matchEngineCore.MIRRORED_ZONE[0], 11);
+
+  // Free-kick shot-conversion calibration exports (see MATCH_LAB_PLAN.md) --
+  // real module resolution, not just node --check, since a missing/
+  // misspelled export wouldn't be caught by syntax-checking alone.
+  assert.equal(typeof matchEngineCore.freeKickContextMultiplier, "function");
+  assert.ok(matchEngineCore.freeKickContextMultiplier(1) > matchEngineCore.freeKickContextMultiplier(10));
+  for (const key of ["fk-regular", "fk-hard", "fk-curl"]) {
+    assert.ok(matchEngineCore.KEEPER_DUEL_LABELS[key].attack.includes("Free Kick Taking"));
+  }
+  const fkTaker = {
+    current_ability: 177,
+    attributes: [{ label: "Free Kick Taking", value: 19 }, { label: "Technique", value: 18 }],
+  };
+  const fkKeeper = {
+    current_ability: 168,
+    attributes: [{ label: "Reflexes", value: 17 }, { label: "Positioning", value: 16 }],
+  };
+  const fkRandom = matchEngineCore.seededRandom(matchEngineCore.hashString("fk-save-sanity"));
+  const fkSave = matchEngineCore.resolveKeeperSave(fkTaker, fkKeeper, "fk-regular", 45, fkRandom, 1, 1);
+  assert.ok(typeof fkSave.goal === "boolean" && typeof fkSave.code === "string");
+  // Open-play/header finish types must be byte-for-byte unaffected by a
+  // non-1 contextMultiplier this pass -- confirms resolveKeeperSave()'s
+  // branch really is structurally incapable of touching those paths, not
+  // just "nobody currently passes anything else."
+  const openPlayShooter = {
+    current_ability: 150,
+    attributes: [{ label: "Composure", value: 14 }, { label: "Technique", value: 14 }, { label: "Finishing", value: 14 }],
+  };
+  const openPlayKeeper = { current_ability: 150, attributes: [{ label: "Reflexes", value: 13 }, { label: "Positioning", value: 13 }] };
+  const neutralRandom1 = matchEngineCore.seededRandom(matchEngineCore.hashString("open-play-context-neutral"));
+  const neutralRandom2 = matchEngineCore.seededRandom(matchEngineCore.hashString("open-play-context-neutral"));
+  const resultWithDefaultContext = matchEngineCore.resolveKeeperSave(openPlayShooter, openPlayKeeper, "calm", 45, neutralRandom1, 1);
+  const resultWithExplicitContext = matchEngineCore.resolveKeeperSave(openPlayShooter, openPlayKeeper, "calm", 45, neutralRandom2, 1, 2.5);
+  assert.deepEqual(resultWithDefaultContext, resultWithExplicitContext, "A non-1 contextMultiplier must not change open-play outcomes this pass");
 }
 
 const timelineResult = {
@@ -1391,6 +1425,45 @@ const runSource = matchEngineCoreSource + "\n"
         if (resolveWall(wallTaker, wallDefenders, wallRandom).code === "FK.WALL.HIT") wallHits += 1;
       }
       globalThis.assert.ok(wallHits > 0, "FK.WALL.HIT should be reachable in isolation");
+      // Constructed-state coverage for resolveKeeperSave()'s free-kick
+      // branch and its contextMultiplier/fk-* label wiring (see
+      // MATCH_LAB_PLAN.md, shot-conversion calibration) -- relative
+      // assertions (skill tiers must separate in the right order) rather
+      // than pinned absolute rates, so this survives future constant
+      // nudges without becoming exactly the kind of brittle, RNG-order-
+      // sensitive assertion the K.SAVE.7 comment above already warns
+      // about; isolates the keeper-beating stage only (not the full
+      // wall+on-target chain, which belongs in tools/keeper_save_audit.mjs).
+      // (No template literals in this block: it's itself embedded inside
+      // an outer template literal that builds the sandboxed script.)
+      const fkKeeperSaveRate = (label, takerAttrs, keeperAttrs, runs) => {
+        const taker = { current_ability: 160, attributes: eliteAttributes(takerAttrs) };
+        const keeper = { current_ability: 160, attributes: eliteAttributes(keeperAttrs) };
+        const random = seededRandom(hashString("fk-keeper-save-tier:" + label));
+        let goals = 0;
+        for (let i = 0; i < runs; i += 1) {
+          if (resolveKeeperSave(taker, keeper, "fk-regular", 45, random, 1, freeKickContextMultiplier(4)).goal) goals += 1;
+        }
+        return goals / runs;
+      };
+      const ordinaryKeeperAttrs = { Reflexes: 12, Positioning: 12 };
+      const weakTakerRate = fkKeeperSaveRate("weak-vs-ordinary", { "Free Kick Taking": 8, Technique: 10 }, ordinaryKeeperAttrs, 4000);
+      const ordinaryTakerRate = fkKeeperSaveRate("ordinary-vs-ordinary", { "Free Kick Taking": 13, Technique: 13 }, ordinaryKeeperAttrs, 4000);
+      const eliteTakerRate = fkKeeperSaveRate("elite-vs-ordinary", { "Free Kick Taking": 19, Technique: 17 }, ordinaryKeeperAttrs, 4000);
+      globalThis.assert.ok(
+        eliteTakerRate > ordinaryTakerRate && ordinaryTakerRate > weakTakerRate,
+        "Free-kick specialist skill should separate the keeper-beating rate: weak=" + weakTakerRate + " ordinary=" + ordinaryTakerRate + " elite=" + eliteTakerRate,
+      );
+      const eliteTakerVsWeakKeeper = fkKeeperSaveRate("elite-vs-weak-keeper", { "Free Kick Taking": 19, Technique: 17 }, { Reflexes: 7, Positioning: 7 }, 4000);
+      const eliteTakerVsEliteKeeper = fkKeeperSaveRate("elite-vs-elite-keeper", { "Free Kick Taking": 19, Technique: 17 }, { Reflexes: 18, Positioning: 17 }, 4000);
+      globalThis.assert.ok(
+        eliteTakerVsWeakKeeper > eliteTakerVsEliteKeeper,
+        "Keeper quality should still suppress an elite taker's rate: vs-weak=" + eliteTakerVsWeakKeeper + " vs-elite=" + eliteTakerVsEliteKeeper,
+      );
+      globalThis.assert.ok(
+        eliteTakerRate > 0.04 && eliteTakerRate < 0.35,
+        "Elite specialist's isolated keeper-beating rate should be plausible, not near-zero or near-certain: got " + eliteTakerRate,
+      );
       // Constructed-state coverage for P.RECEIVE (see MATCH_ENGINE_SCENARIOS.md,
       // "Promoted: P.RECEIVE") -- confirms all five outcomes are reachable
       // and that a clearly-mismatched pairing (elite receiver, low pressure,

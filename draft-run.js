@@ -21,6 +21,7 @@ import {
   engineAttribute,
   engineAttributeDetail,
   FINISH_TYPE_LABELS,
+  freeKickContextMultiplier,
   FREE_KICK_SHOT_LABELS,
   goalkeeperScore,
   hashString,
@@ -65,7 +66,7 @@ import {
   weightedPlayer,
   ZONE_CENTERS,
   ZONE_TRANSITION_MATRIX,
-} from "./src/lib/matchEngineCore.js?v=20260811-01";
+} from "./src/lib/matchEngineCore.js?v=20260814-01";
 import {
   createDraftSquad,
   formatDraftSquadText,
@@ -2009,8 +2010,8 @@ function buildTransitionTimeline({
           zone = 7;
           return;
         }
-        const keeperFinishType = { regular: "calm", hard: "blast", curl: "finesse" }[shotType] || "calm";
-        const save = resolveKeeperSave(taker, keeper, keeperFinishType, minute, random, 1);
+        const keeperFinishType = { regular: "fk-regular", hard: "fk-hard", curl: "fk-curl" }[shotType] || "fk-regular";
+        const save = resolveKeeperSave(taker, keeper, keeperFinishType, minute, random, 1, freeKickContextMultiplier(zone));
         if (save.goal) {
           addGoal("direct-free-kick", players, opponents, { scorer: taker, scenarioType: save.code });
           return;

@@ -477,27 +477,60 @@ export const KEEPER_DUEL_LABELS = {
   blast: { attack: ["Finishing", "Technique"], keeper: ["Reflexes"] },
   finesse: { attack: ["Technique", "Finishing"], keeper: ["Positioning", "Anticipation"] },
   header: { attack: ["Heading", "Jumping", "Off the Ball"], keeper: ["Jumping", "Positioning", "Reflexes"] },
+  // Free-kick-specific: mirrors FREE_KICK_SHOT_LABELS' own attack split
+  // (Technique for placed strikes, Long Shots for power) so Free Kick
+  // Taking stays load-bearing at the keeper-beating stage too, instead of
+  // disappearing the moment a free kick reaches the keeper and reverting
+  // to the same generic labels a regular open-play shot uses. Scoped to
+  // direct free kicks only this pass -- see MATCH_LAB_PLAN.md, shot-
+  // conversion calibration -- open-play and header paths are untouched.
+  "fk-regular": { attack: ["Free Kick Taking", "Technique"], keeper: ["Reflexes", "Positioning"] },
+  "fk-hard": { attack: ["Free Kick Taking", "Long Shots"], keeper: ["Reflexes"] },
+  "fk-curl": { attack: ["Free Kick Taking", "Technique"], keeper: ["Positioning", "Anticipation"] },
 };
+
+const FREE_KICK_FINISH_TYPES = new Set(["fk-regular", "fk-hard", "fk-curl"]);
+
+// Dead-ball distance/angle proxy for free kicks, from the existing 12-zone
+// grid -- the zone a free kick was actually awarded in (the same zone
+// resolveFoul uses), not a fabricated value. Scoped to direct free kicks
+// only; not used by any open-play or header call site this pass.
+export function freeKickContextMultiplier(zone) {
+  const row = Math.floor(clamp(0, 11, Number(zone) ?? 1) / 3);
+  return [1.1, 1.0, 0.85, 0.7][row] ?? 0.85;
+}
 
 // K.SAVE — keeper resolves an on-target shot. `finishType` shapes both the
 // shooter/keeper duel labels and the outcome weighting (power shots skew
 // toward parries over clean catches; corner-seeking finishes — calm/finesse
-// — are the only ones that can clip the frame).
-export function resolveKeeperSave(shooter, keeper, finishType, minute, random, zone = 1) {
+// — are the only ones that can clip the frame). `contextMultiplier` only
+// affects the free-kick branch this pass (see below) -- every other
+// finishType's formula is byte-for-byte the original, regardless of what's
+// passed, so open-play/header behavior can't be affected even accidentally.
+export function resolveKeeperSave(shooter, keeper, finishType, minute, random, zone = 1, contextMultiplier = 1) {
   const labels = KEEPER_DUEL_LABELS[finishType] || KEEPER_DUEL_LABELS.calm;
   const duel = localizedDuel(shooter, keeper, labels.attack, labels.keeper, minute, random, zone);
   // duel.probability is a 0-1 ratio centered near 0.5 for evenly matched
   // players -- right for a contested tackle, far too generous for "beaten
   // with no save attempt at all," which is rare even against a weak keeper.
   // Dampened with a power curve rather than used as a direct coin flip.
-  const beatenCleanChance = clamp(0.02, 0.32, duel.probability ** 2.6 * 0.55);
+  // Free kicks get their own, gentler curve (hand-calibrated against
+  // real-world direct free-kick conversion bands, see MATCH_LAB_PLAN.md)
+  // since evenly-matched elite-vs-elite duels cluster near 0.5 and the
+  // shared open-play ^2.6 curve crushed that down to ~9-10% regardless of
+  // specialization -- open-play/header keep the untouched original.
+  const isFreeKick = FREE_KICK_FINISH_TYPES.has(finishType);
+  const beatenCleanChance = isFreeKick
+    ? clamp(0.015, 0.22, duel.probability ** 2.0 * 0.5 * contextMultiplier)
+    : clamp(0.02, 0.32, duel.probability ** 2.6 * 0.55);
   if (random() < beatenCleanChance) return { code: "K.SAVE.0", goal: true, rebound: false };
 
   const handling = playerAttribute(keeper, "Handling");
   const reflexes = playerAttribute(keeper, "Reflexes");
   const positioning = playerAttribute(keeper, "Positioning");
-  const power = finishType === "blast" ? 1.4 : 1;
-  const postProne = finishType !== "blast"; // corner-seeking finishes clip the frame more often
+  const isPower = finishType === "blast" || finishType === "fk-hard";
+  const power = isPower ? 1.4 : 1;
+  const postProne = !isPower; // corner-seeking finishes clip the frame more often
 
   const options = [
     { value: "K.SAVE.1", weight: handling * 2 },

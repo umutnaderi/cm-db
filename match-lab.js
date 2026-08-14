@@ -2,6 +2,7 @@ import { getDatabases, getPlayerMetrics, searchPlayers } from "./src/lib/retroba
 import {
   computePressure,
   contestedRace,
+  freeKickContextMultiplier,
   hashString,
   headerScore,
   localizedDuel,
@@ -26,7 +27,7 @@ import {
   transitionShotChance,
   weightedChoice,
   weightedPlayer,
-} from "./src/lib/matchEngineCore.js?v=20260811-01";
+} from "./src/lib/matchEngineCore.js?v=20260814-01";
 
 // Match Lab -- a probe for the real match engine (see MATCH_LAB_PLAN.md).
 // Every scenario/resolution below calls the exact resolver functions
@@ -250,7 +251,7 @@ const SCENARIOS = [
   {
     id: "free-kick",
     label: "Free Kick",
-    description: "Wall contact, the shot if it gets past, and a rebound scramble if the keeper spills it. Calls resolveWall(), selectFreeKickShotType()/resolveFreeKickAttempt()/resolveKeeperSave() -- same as the real tick loop, including its fixed Zone 1 keeper-save call. resolveWall() and resolveFreeKickAttempt() have no distance/angle input at all in production, so the taker's placement on the pitch doesn't change this probe's math; that's not a Match Lab omission, it's faithful to what the live engine does today.",
+    description: "Wall contact, the shot if it gets past, and a rebound scramble if the keeper spills it. Calls resolveWall(), selectFreeKickShotType()/resolveFreeKickAttempt()/resolveKeeperSave() -- same as the real tick loop, including its fixed Zone 1 keeper-save call (zone there only ever gates an unrelated central-congestion variance term, not distance -- see MATCH_LAB_PLAN.md). resolveWall() and resolveFreeKickAttempt() still have no distance/angle input in production, but the keeper-beating stage now retains Free Kick Taking (instead of reverting to generic open-play labels) and uses the taker's actual placement as a coarse dead-ball-distance signal.",
     roles: [
       { key: "attacker", count: 1 },
       { key: "keeper", count: 1 },
@@ -275,8 +276,8 @@ const SCENARIOS = [
       const attempt = resolveFreeKickAttempt(shotType, taker.player, random);
       trace.push({ code: attempt.code, label: attempt.onTarget ? "On target" : "Off target" });
       if (!attempt.onTarget) return { outcome: "NO GOAL", code: attempt.code };
-      const keeperFinishType = { regular: "calm", hard: "blast", curl: "finesse" }[shotType] || "calm";
-      const save = resolveKeeperSave(taker.player, keeper.player, keeperFinishType, FIXED_MINUTE, random, 1);
+      const keeperFinishType = { regular: "fk-regular", hard: "fk-hard", curl: "fk-curl" }[shotType] || "fk-regular";
+      const save = resolveKeeperSave(taker.player, keeper.player, keeperFinishType, FIXED_MINUTE, random, 1, freeKickContextMultiplier(taker.zone));
       trace.push({
         code: save.code,
         label: save.goal ? `${playerName(taker.player)} scores direct` : `${playerName(keeper.player)} saves it`,

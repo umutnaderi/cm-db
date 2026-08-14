@@ -819,6 +819,100 @@ than the 1-defender edge case above, so overall match balance is
 unaffected even though behavior at the extremes changed substantially.
 Full regression suite (`test-draft-game.mjs`) passes.
 
+### Shot-conversion calibration -- direct free kicks only, 2026-08-14
+
+Follow-up to the free-kick chain audit: the isolated keeper-beating rate
+(~9-10% for literally any taker) turned out to be a symptom of two real,
+separable defects. Planned via `EnterPlanMode` given the blast radius
+(`resolveKeeperSave` runs for every on-target shot in the live engine, not
+just free kicks) -- an Explore agent mapped every call site, a Plan agent
+produced the formula/wiring design, both verified against the actual code
+before implementing anything. A first implementation pass applied the fix
+broadly (open-play shots and every header path too); external review
+correctly flagged that as exceeding the agreed first-pass scope and asked
+for it to be isolated to direct free kicks only, with the broader version
+preserved separately for a later, independently-audited pass. That broader
+version is intact on `wip/broad-shot-context-multiplier`, not merged.
+
+**What's in this pass, and nowhere else:**
+- `resolveKeeperSave()` gained a 7th `contextMultiplier` parameter,
+  structured so it can only ever affect the free-kick branch --
+  `beatenCleanChance` is a hard `if (isFreeKick) { ...uses
+  contextMultiplier... } else { ...exact original formula, no
+  contextMultiplier reference at all... }`. Every non-fk `finishType`
+  (calm/blast/finesse/header) is byte-for-byte the original regardless of
+  what's passed, not just "nobody currently passes anything else" --
+  verified directly with a dedicated test:
+  `resolveKeeperSave(shooter, keeper, "calm", ..., contextMultiplier: 1)`
+  and `contextMultiplier: 2.5` produce `assert.deepEqual` identical results
+  (`tools/test-draft-game.mjs`).
+- Three new `KEEPER_DUEL_LABELS` entries (`fk-regular`/`fk-hard`/`fk-curl`)
+  keep Free Kick Taking load-bearing at the keeper-beating stage, instead
+  of free kicks remapping onto the same generic Composure/Technique/
+  Finishing labels a regular shot uses. Free kicks get their own curve
+  (`duel.probability ** 2.0 * 0.5 * contextMultiplier`, clamp
+  `[0.015, 0.22]`) instead of open play's untouched `** 2.6 * 0.55`.
+- `freeKickContextMultiplier(zone)` -- a coarse dead-ball-distance proxy
+  from the existing 12-zone grid, using the zone the foul was actually
+  awarded in (the same zone `resolveFoul` uses). `zone=1` (the box, where
+  a foul is a penalty, not a free kick) stays hardcoded at every
+  `resolveKeeperSave` call site, confirmed via
+  `localizedDuel`/`duelAttribute`/`zonalAttribute` to only gate
+  `CONGESTED_ZONES` (a central-midfield variance term unrelated to
+  distance) -- not a defect to fix, just not the free kick's own location.
+- `draft-run.js`/`match-lab.js`: exactly one `resolveKeeperSave` call site
+  each (the direct-free-kick shot). Open-play shot, open-play cross header
+  (X1), corner header, and FK-cross header call sites are untouched --
+  same signature, same arguments, as before this pass.
+- `tools/keeper_save_audit.mjs` rebuilt to match: Section A reports
+  open-play shot / all-header-flavored-saves / direct-free-kick buckets
+  (headers from open-play, corners, and FK-crosses are indistinguishable
+  in this bucket since none of those call sites changed -- fine for its
+  actual purpose, confirming header-flavored saves overall are
+  unaffected). Section B reports the **full stage breakdown** per skill-tier
+  pairing -- wall clearance, on-target rate, clean keeper-beaten rate,
+  rebound-scramble goals, and total final conversion -- instead of a single
+  collapsed number, plus a dedicated Roberto Carlos-tier/Barthez-tier
+  wall-size (0/1/3/5) sweep.
+
+**Verified, both empirically and structurally, before committing:**
+Section A before -> after (3000 matches): open-play shot g/shot 8.63% ->
+8.40%, header-flavored g/shot 9.29% -> 9.31% -- both within normal
+match-to-match sampling noise, not a formula effect (confirmed
+structurally by the deepEqual test above, not just inferred from this
+aggregate). Direct free kick went from **invisible** (0 shots logged,
+silently folded into other buckets since free kicks previously shared
+their labels) to a real, separately-measurable 123 shots.
+
+Section B, 3-man wall, 5000 attempts/pairing -- every requested monotonic
+relationship holds cleanly: stronger taker -> higher conversion at every
+keeper tier (vs. ordinary keeper: weak 2.34% -> ordinary 4.38% -> strong
+6.24% -> elite 7.60% -> exceptional 9.40%); stronger keeper -> lower
+conversion at every taker tier (elite specialist: 10.18% vs. weak keeper
+-> 7.60% vs. ordinary -> 5.96% vs. elite); larger/better wall -> lower
+conversion (Roberto Carlos-tier vs. Barthez-tier: 7.62% no wall -> 7.52%
+1-man -> 5.96% 3-man -> 4.96% 5-man); zero wall -> exactly zero
+wall-labeled outcomes (100.0% clearance at wall size 0, structural per
+`resolveWall`'s own design, not just this pairing). No sudden jumps
+between adjacent tiers anywhere in the matrix.
+
+**The Roberto Carlos-tier vs. Barthez-tier scenario (3-man wall) lands at
+5.96% total conversion** -- inside the "5.6-6.6%, treat as a plausible
+scenario target not a universal elite-specialist rate" band the review
+itself proposed for this exact matchup -- achieved purely by correctly
+counting rebound-scramble goals (previously excluded from this specific
+report), not by touching the reserved `0.50 -> 0.55` coefficient, which
+was never applied. Elite specialist vs. weak/ordinary keepers (10.18%,
+7.60%) and exceptional vs. weak/ordinary keepers (10.46%, 9.40%) land at
+or near their reference bands too; exceptional vs. an elite keeper
+specifically (6.18%, target 12-15%) remains the one case still short --
+flagged, not chased further this round.
+
+Full regression suite passes, including the new deterministic
+open-play-unaffected assertion and relative skill-tier-ordering
+assertions (not pinned absolute rates, so future constant nudges don't
+make the tests themselves brittle).
+
 ### Next up, in order
 
 1. Ball -- done (Phase 2 v1).
@@ -853,3 +947,27 @@ Full regression suite (`test-draft-game.mjs`) passes.
     confirmed genuine, but new engine design work spanning the live tick
     loop and all three functions, not a calibration pass. Not started; not
     yet asked for.
+15. `resolveKeeperSave()` free-kick-specific contextMultiplier + KEEPER_
+    DUEL_LABELS (fk-regular/fk-hard/fk-curl) -- done (shot-conversion
+    calibration, 2026-08-14), scoped to direct free kicks only per review.
+    `tools/keeper_save_audit.mjs` rebuilt as permanent tooling
+    (`npm run match:keeper-audit`) with a full stage breakdown (wall
+    clearance, on-target, clean keeper-beaten, rebound goals, total
+    conversion) per skill-tier pairing.
+16. Broader contextMultiplier for open-play shots and all header paths
+    (open-play cross, corner, FK-cross) -- built, verified (open-play
+    stayed flat in that pass' audit too), but deliberately NOT merged this
+    round per review: a first pass should isolate free kicks only so
+    cause-and-effect stays provable by construction, not just by
+    after-the-fact audit. Preserved intact on branch
+    `wip/broad-shot-context-multiplier`. Ready to resume as its own
+    separately-audited pass if wanted.
+17. Exceptional-tier taker vs. an elite keeper specifically still lands
+    below its real-world reference band (6.18% vs. target 12-15%) even
+    after correctly counting rebound goals -- every other tier/pairing in
+    the matrix now lands at or near band. Root cause not yet
+    re-investigated after the rebound-counting fix (the earlier
+    coefficient-vs-ceiling analysis was against the clean-only numbers, so
+    it may no longer be the accurate diagnosis). Not started; not chased
+    this round per the user's own instruction not to tune toward a
+    predetermined percentage.

@@ -1,0 +1,5 @@
+# Raw audio source library (146 WAV files, ~155MB, mostly uncompressed
+# PCM) -- never deployed. The actual game/tools reference only the small,
+# compressed, versioned output of tools/convert-sounds.mjs under
+# sounds/v1/, which this pattern does NOT exclude.
+sounds/*.wav

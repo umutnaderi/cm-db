@@ -13,7 +13,10 @@ const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".dat": "application/octet-stream"
+  ".dat": "application/octet-stream",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
+  ".wav": "audio/wav"
 };
 
 const requiredDatabaseFiles = [

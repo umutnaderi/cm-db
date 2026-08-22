@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Match Lab · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260812-01">
+    <link rel="stylesheet" href="styles.css?v=20260820-02">
   </head>
   <body class="match-lab-page">
     <main class="match-lab-shell">
@@ -47,11 +47,39 @@
             12 zones, so the exact drop point is bucketed into one — both are
             shown together, nothing here overstates precision the engine doesn't have.
           </p>
-          <div class="match-lab-pitch" id="labPitch">
-            <span class="pitch-halfway" aria-hidden="true"></span>
-            <span class="pitch-box pitch-box-top" aria-hidden="true"></span>
-            <span class="pitch-box pitch-box-bottom" aria-hidden="true"></span>
-            <span class="pitch-circle" aria-hidden="true"></span>
+          <div class="match-lab-pitch">
+            <div class="ml-pitch-field" id="labPitch">
+              <span class="ml-pitch-halfway" aria-hidden="true"></span>
+              <span class="ml-pitch-circle" aria-hidden="true"></span>
+              <span class="ml-pitch-spot ml-pitch-spot-center" aria-hidden="true"></span>
+              <span class="ml-pitch-box ml-pitch-box-top" aria-hidden="true"></span>
+              <span class="ml-pitch-box ml-pitch-box-bottom" aria-hidden="true"></span>
+              <span class="ml-pitch-goal-box ml-pitch-goal-box-top" aria-hidden="true"></span>
+              <span class="ml-pitch-goal-box ml-pitch-goal-box-bottom" aria-hidden="true"></span>
+              <span class="ml-pitch-arc ml-pitch-arc-top" aria-hidden="true"></span>
+              <span class="ml-pitch-arc ml-pitch-arc-bottom" aria-hidden="true"></span>
+              <span class="ml-pitch-spot ml-pitch-spot-top" aria-hidden="true"></span>
+              <span class="ml-pitch-spot ml-pitch-spot-bottom" aria-hidden="true"></span>
+              <span class="ml-pitch-goal ml-pitch-goal-top" aria-hidden="true"></span>
+              <span class="ml-pitch-goal ml-pitch-goal-bottom" aria-hidden="true"></span>
+              <span class="ml-pitch-corner ml-pitch-corner-tl" aria-hidden="true"></span>
+              <span class="ml-pitch-corner ml-pitch-corner-tr" aria-hidden="true"></span>
+              <span class="ml-pitch-corner ml-pitch-corner-bl" aria-hidden="true"></span>
+              <span class="ml-pitch-corner ml-pitch-corner-br" aria-hidden="true"></span>
+              <svg class="ml-pitch-trail-layer" viewBox="0 0 75 120" preserveAspectRatio="none" aria-hidden="true">
+                <path class="ml-pitch-trail-path" id="labTrailPath"></path>
+              </svg>
+              <svg class="ml-pitch-touch-layer" id="labTouchLayer" viewBox="0 0 75 120" preserveAspectRatio="none" aria-hidden="true" data-visible="false">
+                <path class="ml-pitch-touch-line" id="labTouchLine"></path>
+                <g id="labTouchMarks"></g>
+              </svg>
+              <svg class="ml-pitch-vision-layer" id="labVisionLayer" viewBox="0 0 75 120" preserveAspectRatio="none" aria-hidden="true" data-visible="false">
+                <path class="ml-pitch-vision-cone" id="labVisionConeFading"></path>
+                <path class="ml-pitch-vision-cone ml-pitch-vision-cone-anticipating" id="labVisionConeAnticipating"></path>
+                <path class="ml-pitch-vision-cone" id="labVisionConeCurrent"></path>
+              </svg>
+              <div class="ml-pitch-badge" id="labResultBadge" aria-hidden="true"></div>
+            </div>
           </div>
           <ol class="match-lab-roster" id="labRoster"></ol>
         </div>
@@ -65,12 +93,15 @@
           <div id="labFreePlayPanel">
             <p class="match-lab-hint">
               Give a placed player the ball, then ask the engine what it would
-              attempt. The <strong>choice</strong> of action (pass vs. cross vs.
-              dribble vs. shoot) is new, Match-Lab-only logic — there's no
-              callable "what would the engine try" function to call, so this
-              can't reuse one (see MATCH_LAB_PLAN.md, Phase 3). Once an action
-              is chosen, its <strong>resolution</strong> always calls the real,
-              unmodified match engine.
+              attempt. The <strong>choice</strong> of action (pass vs. through
+              ball vs. cross vs. dribble vs. carry vs. shoot vs. hold-up play)
+              is new, Match-Lab-only logic — there's
+              no callable "what would the engine try" function to call, so this
+              can't reuse one (see MATCH_LAB_PLAN.md — Spatial Decision
+              Intelligence v1 scores concrete candidates by real geometry:
+              distance, pressure, lane obstruction). Once an action is chosen,
+              its <strong>resolution</strong> always calls the real, unmodified
+              match engine.
             </p>
             <p class="match-lab-hint" id="labBallOwnerStatus">No ball owner assigned yet.</p>
             <div class="match-lab-action-table" id="labActionTable"></div>
@@ -87,22 +118,80 @@
               Whoever you assign to a role here is a forced participant in
               the probe, regardless of where you place them on the pitch or
               which team they're on — unlike Free Play, marker distance and
-              team don't remove or add anyone. Zone comes from the relevant
-              role's position; ball position/ownership has no effect here.
+              team don't remove or add anyone. Free Play's ball-ownership
+              controls are hidden in this mode because they don't mean
+              anything here: the ball is drawn at whichever placed player
+              fills the scenario's own primary role below.
             </p>
+            <p class="match-lab-hint" id="labProbeShooterStatus"></p>
             <select id="labScenarioSelect" aria-label="Scenario"></select>
             <p class="match-lab-hint" id="labScenarioDescription"></p>
             <div class="match-lab-role-requirements" id="labRoleRequirements"></div>
             <div class="match-lab-context" id="labContextControls"></div>
           </div>
 
-          <div class="match-lab-controls">
-            <button type="button" id="labPlayButton" class="match-lab-primary-button">▶ Roll</button>
-            <button type="button" id="labReplayButton">↻ Replay</button>
-            <button type="button" id="labRerollButton">🎲 Reroll</button>
-            <button type="button" id="labStepButton">›| Step</button>
-            <button type="button" id="labResetButton">■ Reset</button>
+          <div class="match-lab-quick-setup">
+            <h3 class="match-lab-section-title">Quick Setup</h3>
+            <div class="match-lab-quick-setup-buttons">
+              <button type="button" data-quick-setup="3">3v3</button>
+              <button type="button" data-quick-setup="5">5v5</button>
+              <button type="button" data-quick-setup="7">7v7</button>
+              <button type="button" data-quick-setup="11">11v11</button>
+            </div>
+            <span class="match-lab-hint" id="labQuickSetupStatus"></span>
           </div>
+
+          <label class="match-lab-switch" title="Traces the ball owner's own path across this possession -- a yellow line with an X at every real touch on the ball, so real touch frequency is visible rather than implied">
+            <input type="checkbox" id="labShowTouchesCheckbox">
+            <span class="match-lab-switch-track"></span>
+            <span class="match-lab-switch-label">Show ball touches</span>
+          </label>
+
+          <label class="match-lab-switch" title="Off by default: only the current ball owner's name label is shown, fading out the instant possession moves on -- checking this keeps every player's label visible all the time, for setting up or reviewing a crowded roster">
+            <input type="checkbox" id="labShowLabelsCheckbox">
+            <span class="match-lab-switch-track"></span>
+            <span class="match-lab-switch-label">Show all player labels</span>
+          </label>
+
+          <label class="match-lab-switch" title="Off by default: a field-of-view cone for the CURRENT ball owner, scaled by their own Vision rating (wider/further for a higher rating). When possession changes, the previous owner's cone lingers at their last position and fades out over time instead of vanishing instantly -- how fast it fades also scales with THEIR Vision (a sharper player's mental picture of the pitch lingers longer)">
+            <input type="checkbox" id="labShowVisionCheckbox">
+            <span class="match-lab-switch-track"></span>
+            <span class="match-lab-switch-label">Show ball owner's vision cone</span>
+          </label>
+
+          <div class="match-lab-controls">
+            <button type="button" id="labPlayButton" class="match-lab-primary-button" title="Resolve the current authored setup and autoplay it">▶ Resolve &amp; Play</button>
+            <button type="button" id="labPlayPauseButton" disabled title="Play/pause the current trace">▶ Play</button>
+            <button type="button" id="labReplayButton" title="Replay the identical seed and result">↻ Replay</button>
+            <button type="button" id="labRerollButton" title="New seed, same authored setup">🎲 New Outcome</button>
+            <button type="button" id="labStepButton" title="Advance one trace event">›| Step</button>
+            <button type="button" id="labResetButton" title="Stop and restore the authored setup">⏮ Back to Setup</button>
+          </div>
+          <div class="match-lab-speed">
+            <label class="match-lab-speed-control">
+              Speed
+              <input id="labSpeedSelect" type="range" min="0" max="2" step="1" value="1">
+              <span id="labSpeedValue" class="match-lab-speed-value">1×</span>
+            </label>
+            <div class="match-lab-sound-row">
+              <label class="match-lab-switch">
+                <input type="checkbox" id="labSoundCheckbox" checked>
+                <span class="match-lab-switch-track"></span>
+                <span class="match-lab-switch-label">Sound</span>
+              </label>
+              <label class="match-lab-volume-control">
+                Volume
+                <input id="labVolumeInput" type="range" min="0" max="1" step="0.05" value="1">
+              </label>
+            </div>
+          </div>
+          <label class="match-lab-attacking-direction" title="Explicit, not inferred from position -- which end each team is attacking, for the Free Play possession runner's progression/goal-target logic">
+            Home attacks
+            <select id="labAttackingDirectionSelect">
+              <option value="down">↓ (away attacks ↑)</option>
+              <option value="up">↑ (away attacks ↓)</option>
+            </select>
+          </label>
           <div class="match-lab-run-n">
             <label>
               Run
@@ -118,7 +207,7 @@
           </div>
 
           <div class="match-lab-trace" id="labTrace" hidden>
-            <h3>Event trace <span class="match-lab-trace-source" id="labTraceSource"></span></h3>
+            <h3>Event trace <span class="match-lab-trace-source" id="labTraceSource"></span> <span class="match-lab-trace-status" id="labTraceStatus"></span></h3>
             <ol id="labTraceList"></ol>
           </div>
 
@@ -126,9 +215,37 @@
             <h3>Distribution (<span id="labDistributionCount"></span> runs)</h3>
             <ol id="labDistributionList"></ol>
           </div>
+
+          <div class="match-lab-one-on-one" id="labOneOnOneDiagnostic" hidden>
+            <h3>⚠ Experimental -- not yet animated, isolated from production</h3>
+            <p class="match-lab-hint">
+              Stage 1 (<code>src/lib/oneOnOneDecision.js</code>) chooses an action from the
+              striker's perceived situation; Stage 2 (<code>matchEngineCore.js</code>'s
+              <code>resolvePlacedFinish</code>/<code>resolveChipAttempt</code>/
+              <code>resolveRoundKeeper</code>/<code>resolveSquarePass</code> +
+              <code>resolveTargetedKeeperResponse</code>) actually resolves it. New
+              <code>ONE_V_ONE.*</code> code namespace throughout -- never
+              <code>resolveOneOnOne()</code>/<code>K.ONEONONE.*</code>, which stay untouched.
+            </p>
+            <p class="match-lab-hint"><strong>Selected:</strong> <span id="labOneOnOneSelected"></span></p>
+            <p class="match-lab-hint"><strong>Reasons:</strong> <span id="labOneOnOneReasons"></span></p>
+            <ol class="match-lab-one-on-one-candidates" id="labOneOnOneCandidates"></ol>
+            <p class="match-lab-hint"><strong>Result:</strong> <span id="labOneOnOneResult"></span></p>
+            <dl id="labOneOnOneExecution" class="match-lab-one-on-one-execution"></dl>
+            <div class="match-lab-one-on-one-states">
+              <div>
+                <h4>Actual keeper state</h4>
+                <dl id="labOneOnOneActualState"></dl>
+              </div>
+              <div>
+                <h4>Perceived by striker</h4>
+                <dl id="labOneOnOnePerceivedState"></dl>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
-    <script src="match-lab.js?v=20260811-01" type="module"></script>
+    <script src="match-lab.js?v=20260821-02" type="module"></script>
   </body>
 </html>

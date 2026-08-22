@@ -477,27 +477,60 @@ export const KEEPER_DUEL_LABELS = {
   blast: { attack: ["Finishing", "Technique"], keeper: ["Reflexes"] },
   finesse: { attack: ["Technique", "Finishing"], keeper: ["Positioning", "Anticipation"] },
   header: { attack: ["Heading", "Jumping", "Off the Ball"], keeper: ["Jumping", "Positioning", "Reflexes"] },
+  // Free-kick-specific: mirrors FREE_KICK_SHOT_LABELS' own attack split
+  // (Technique for placed strikes, Long Shots for power) so Free Kick
+  // Taking stays load-bearing at the keeper-beating stage too, instead of
+  // disappearing the moment a free kick reaches the keeper and reverting
+  // to the same generic labels a regular open-play shot uses. Scoped to
+  // direct free kicks only this pass -- see MATCH_LAB_PLAN.md, shot-
+  // conversion calibration -- open-play and header paths are untouched.
+  "fk-regular": { attack: ["Free Kick Taking", "Technique"], keeper: ["Reflexes", "Positioning"] },
+  "fk-hard": { attack: ["Free Kick Taking", "Long Shots"], keeper: ["Reflexes"] },
+  "fk-curl": { attack: ["Free Kick Taking", "Technique"], keeper: ["Positioning", "Anticipation"] },
 };
+
+const FREE_KICK_FINISH_TYPES = new Set(["fk-regular", "fk-hard", "fk-curl"]);
+
+// Dead-ball distance/angle proxy for free kicks, from the existing 12-zone
+// grid -- the zone a free kick was actually awarded in (the same zone
+// resolveFoul uses), not a fabricated value. Scoped to direct free kicks
+// only; not used by any open-play or header call site this pass.
+export function freeKickContextMultiplier(zone) {
+  const row = Math.floor(clamp(0, 11, Number(zone) ?? 1) / 3);
+  return [1.1, 1.0, 0.85, 0.7][row] ?? 0.85;
+}
 
 // K.SAVE — keeper resolves an on-target shot. `finishType` shapes both the
 // shooter/keeper duel labels and the outcome weighting (power shots skew
 // toward parries over clean catches; corner-seeking finishes — calm/finesse
-// — are the only ones that can clip the frame).
-export function resolveKeeperSave(shooter, keeper, finishType, minute, random, zone = 1) {
+// — are the only ones that can clip the frame). `contextMultiplier` only
+// affects the free-kick branch this pass (see below) -- every other
+// finishType's formula is byte-for-byte the original, regardless of what's
+// passed, so open-play/header behavior can't be affected even accidentally.
+export function resolveKeeperSave(shooter, keeper, finishType, minute, random, zone = 1, contextMultiplier = 1) {
   const labels = KEEPER_DUEL_LABELS[finishType] || KEEPER_DUEL_LABELS.calm;
   const duel = localizedDuel(shooter, keeper, labels.attack, labels.keeper, minute, random, zone);
   // duel.probability is a 0-1 ratio centered near 0.5 for evenly matched
   // players -- right for a contested tackle, far too generous for "beaten
   // with no save attempt at all," which is rare even against a weak keeper.
   // Dampened with a power curve rather than used as a direct coin flip.
-  const beatenCleanChance = clamp(0.02, 0.32, duel.probability ** 2.6 * 0.55);
+  // Free kicks get their own, gentler curve (hand-calibrated against
+  // real-world direct free-kick conversion bands, see MATCH_LAB_PLAN.md)
+  // since evenly-matched elite-vs-elite duels cluster near 0.5 and the
+  // shared open-play ^2.6 curve crushed that down to ~9-10% regardless of
+  // specialization -- open-play/header keep the untouched original.
+  const isFreeKick = FREE_KICK_FINISH_TYPES.has(finishType);
+  const beatenCleanChance = isFreeKick
+    ? clamp(0.015, 0.22, duel.probability ** 2.0 * 0.5 * contextMultiplier)
+    : clamp(0.02, 0.32, duel.probability ** 2.6 * 0.55);
   if (random() < beatenCleanChance) return { code: "K.SAVE.0", goal: true, rebound: false };
 
   const handling = playerAttribute(keeper, "Handling");
   const reflexes = playerAttribute(keeper, "Reflexes");
   const positioning = playerAttribute(keeper, "Positioning");
-  const power = finishType === "blast" ? 1.4 : 1;
-  const postProne = finishType !== "blast"; // corner-seeking finishes clip the frame more often
+  const isPower = finishType === "blast" || finishType === "fk-hard";
+  const power = isPower ? 1.4 : 1;
+  const postProne = !isPower; // corner-seeking finishes clip the frame more often
 
   const options = [
     { value: "K.SAVE.1", weight: handling * 2 },
@@ -550,6 +583,302 @@ export function resolveOneOnOne(shooter, keeper, minute, random, zone = 1) {
     { value: "K.ONEONONE.6", weight: 0.15 }, // brought down before he can finish -- rare, but real
   ], random);
   return { code, goal: false, rebound: code === "K.ONEONONE.3" };
+}
+
+// --- One-on-one Stage 2: action-specific execution --------------------
+// Stage 1 (src/lib/oneOnOneDecision.js) only decides WHICH action a
+// striker attempts, from that striker's PERCEIVED situation and its own
+// separately-seeded decision stream. Everything below resolves whether
+// the chosen action actually works, using ground truth (actualKeeperState,
+// real attributes) and its own execution/keeper-response streams -- never
+// decisionRandom, and never each other's stream (see MATCH_LAB_PLAN.md's
+// Stage 2 review for why: changing Stage 1's scoring must never silently
+// change what an unrelated execution roll produces for an otherwise
+// identical selected action).
+//
+// New namespace (ONE_V_ONE.*) -- resolveOneOnOne()/K.ONEONONE.* above stay
+// untouched for the production match engine. Match Lab Free Play now routes
+// genuine isolated chances through this action-specific path; draft-run's
+// production match simulation has not been migrated.
+//
+// Two layers, not one outcome table per action: resolvePlacedFinish() (and
+// blast, which is the same function with power:true) produce a SHOT
+// DESCRIPTOR -- did it go where intended, how fast, how high -- and a
+// single shared resolveTargetedKeeperResponse() turns that descriptor into
+// the actual goal/save/post/rebound ending. This is what keeps catches,
+// parries, posts and rebounds from drifting into several subtly
+// inconsistent versions of the same idea across different actions. Chip
+// and round-keeper are deliberately NOT built on this shared layer -- a
+// chip's failure mode is aerial (recovered by a sprint back, not a dive),
+// and round-keeper is a dribble duel, not a shot at all.
+
+const GOAL_HALF_WIDTH_YARDS = 4;
+
+function placedFinishTargetX(targetSide) {
+  if (targetSide === "left") return -GOAL_HALF_WIDTH_YARDS;
+  if (targetSide === "right") return GOAL_HALF_WIDTH_YARDS;
+  return 0;
+}
+
+// Placed left/right and blast (power:true) share this -- mechanically the
+// same shape (aim, strike, keeper reacts after), just traded off
+// differently: blast has a lower ceiling and a real "overhit it" failure
+// mode a placed effort doesn't have. Returns a shot descriptor, not an
+// outcome -- resolveTargetedKeeperResponse() decides what happens to it.
+export function resolvePlacedFinish({ shooter, targetSide, power = false, pressure = 0, random }) {
+  const skill = average(["Finishing", "Technique", "Composure"].map((label) => playerAttribute(shooter, label))) / 20;
+  const floor = power ? 0.35 : 0.55;
+  const ceiling = power ? 0.62 : 0.82;
+  const executionChance = clamp(
+    floor * 0.5,
+    ceiling,
+    (floor + skill * (ceiling - floor)) * (1 - pressure * 0.2),
+  );
+  const onTarget = random() < executionChance;
+
+  if (!onTarget) {
+    // Power's failure mode is going over; a placed effort's is drifting
+    // wide/central -- distinct enough to matter for the miss badge later.
+    const wentOver = power && random() < 0.55;
+    return {
+      onTarget: false,
+      intendedTarget: targetSide,
+      actualTarget: wentOver ? "over" : "wide",
+      targetHeight: wentOver ? "high" : "low",
+      elevation: wentOver ? "high" : "low",
+      executionQuality: executionChance,
+      shooterAbility: Number(shooter?.current_ability) || 100,
+      speed: power ? "power" : "placed",
+    };
+  }
+  // On target -- but did it actually land on the intended side, or drift
+  // more central than meant? Power widens this spread a lot further.
+  const driftChance = power ? 0.4 : 0.18;
+  const drifted = targetSide !== "center" && random() < driftChance;
+  return {
+    onTarget: true,
+    intendedTarget: targetSide,
+    actualTarget: drifted ? "center" : targetSide,
+    targetHeight: "low",
+    elevation: "low",
+    executionQuality: executionChance,
+    shooterAbility: Number(shooter?.current_ability) || 100,
+    speed: power ? "power" : "placed",
+  };
+}
+
+// The shared keeper-response layer for any on-target shot descriptor
+// (placed/blast direct, or a square-pass's follow-up -- see
+// resolveSquarePass()). keeperAction/ballResult reuse the same vocabulary
+// Match Lab's outcome-presentation adapter already established for
+// K.SAVE.* (beaten/catch/parry/tip, goal/held/rebound-in-play/corner/
+// post-rebound/post-goal) so the two systems read consistently, even
+// though this one lives in the engine, not match-lab.js.
+const TARGETED_RESPONSE_OUTCOMES = {
+  "ONE_V_ONE.BEATEN": { keeperAction: "beaten", ballResult: "goal", goal: true, rebound: false },
+  "ONE_V_ONE.CAUGHT": { keeperAction: "catch", ballResult: "held", goal: false, rebound: false },
+  "ONE_V_ONE.PARRIED": { keeperAction: "parry", ballResult: "rebound-in-play", goal: false, rebound: true },
+  "ONE_V_ONE.CLEARED": { keeperAction: "tip", ballResult: "corner", goal: false, rebound: false },
+  "ONE_V_ONE.POST_REBOUND": { keeperAction: "tip", ballResult: "post-rebound", goal: false, rebound: true },
+  "ONE_V_ONE.POST_GOAL": { keeperAction: "tip", ballResult: "post-goal", goal: true, rebound: false },
+};
+
+export function resolveTargetedKeeperResponse({
+  shot,
+  keeper,
+  actualKeeperState,
+  chanceContext = null,
+  random,
+}) {
+  if (!shot.onTarget) {
+    return {
+      code: "ONE_V_ONE.OFF_TARGET", goal: false, rebound: false,
+      keeperAction: null, ballResult: shot.elevation === "high" ? "over" : "wide",
+      keeperTravelYards: 0,
+    };
+  }
+  // Ground truth, not perceived: how far the keeper ACTUALLY has to
+  // travel to reach where the shot ACTUALLY ended up. A shot aimed
+  // (rightly or wrongly) at the side the keeper genuinely isn't covering
+  // forces a long save; one that lands back near the keeper's real
+  // position is close to routine, regardless of how good Stage 1's read
+  // was -- this is the mechanism that makes a wrong read cost something.
+  const keeperX = actualKeeperState.lateralOffsetYards || 0;
+  const targetX = placedFinishTargetX(shot.actualTarget === "over" || shot.actualTarget === "wide" ? "center" : shot.actualTarget);
+  const keeperTravelYards = Math.abs(keeperX - targetX);
+
+  const reflexScore = average([
+    "Reflexes",
+    "Positioning",
+    "One On Ones",
+  ].map((label) => playerAttribute(keeper, label))) / 20;
+  const speedFactor = shot.speed === "power" ? 1.25 : 1;
+  const difficulty = clamp(0.05, 0.85, (keeperTravelYards / 8) * speedFactor * (1 - reflexScore * 0.5));
+  // A genuine isolated chance cannot use the generic save model's
+  // `duelProbability ** 2.6` dampening: that curve was designed for an
+  // ordinary shot through a defended box and reduces an even matchup to
+  // roughly nine percent. Here the shot has already beaten the first
+  // execution gate (`shot.onTarget`) and the keeper is the only remaining
+  // obstacle. The conditional chance therefore combines shot execution,
+  // keeper quality, actual travel, distance/angle and real defender
+  // pressure. This is deliberately conditional on being on target; the
+  // striker's finishing quality still pays once in resolvePlacedFinish().
+  const distanceYards = Number(chanceContext?.distanceYards);
+  const angleDegrees = Number(chanceContext?.shotAngleDegrees);
+  const defenderPressure = clamp(
+    0,
+    1,
+    Number(chanceContext?.defenderPressure) || 0,
+  );
+  const closeRange = Number.isFinite(distanceYards)
+    ? clamp(0, 1, (22 - distanceYards) / 14)
+    : 0.55;
+  const openAngle = Number.isFinite(angleDegrees)
+    ? clamp(0, 1, (angleDegrees - 14) / 34)
+    : 0.55;
+  const travelDemand = clamp(0, 1, keeperTravelYards / 8);
+  const executionQuality = clamp(0, 1, Number(shot.executionQuality) || 0.5);
+  const abilityAdvantage = clamp(
+    -1,
+    1,
+    ((Number(shot.shooterAbility) || 100)
+      - (Number(keeper?.current_ability) || 100)) / 60,
+  );
+  const beatenCleanChance = clamp(
+    0.08,
+    0.82,
+    0.5
+      + executionQuality * 0.32
+      + travelDemand * 0.26
+      + closeRange * 0.18
+      + openAngle * 0.08
+      + abilityAdvantage * 0.19
+      - reflexScore * 0.55
+      - defenderPressure * 0.22,
+  );
+  if (random() < beatenCleanChance) {
+    return { code: "ONE_V_ONE.BEATEN", ...TARGETED_RESPONSE_OUTCOMES["ONE_V_ONE.BEATEN"], keeperTravelYards };
+  }
+  const handling = playerAttribute(keeper, "Handling");
+  const options = [
+    { value: "ONE_V_ONE.CAUGHT", weight: Math.max(1, handling * 2 * (1 - difficulty)) },
+    { value: "ONE_V_ONE.PARRIED", weight: Math.max(1, 20 - handling) * (0.6 + difficulty) },
+    { value: "ONE_V_ONE.CLEARED", weight: Math.max(0.5, difficulty * 6) },
+    { value: "ONE_V_ONE.POST_REBOUND", weight: Math.max(0.3, difficulty * 2.5) },
+    { value: "ONE_V_ONE.POST_GOAL", weight: Math.max(0.15, difficulty * 1.2) },
+  ];
+  const code = weightedChoice(options, random);
+  return { code, ...TARGETED_RESPONSE_OUTCOMES[code], keeperTravelYards };
+}
+
+// Chip: deliberately NOT built on the shared shot/keeper-response layer --
+// a mishit chip fails in the air (too weak, too high), and a well-struck
+// one is beaten by a sprint back to the line, not a dive. Both rolls use
+// the SAME stream (this function's own `random`) since they're one
+// continuous physical action, not two independently-timed events.
+export function resolveChipAttempt({ shooter, keeper, actualKeeperDepthYards, random }) {
+  const skill = average(["Technique", "Flair", "Composure"].map((label) => playerAttribute(shooter, label))) / 20;
+  const executionChance = clamp(0.15, 0.62, 0.2 + skill * 0.42);
+  if (random() >= executionChance) {
+    // Poor technique: either drifts over, or never had enough height/pace
+    // to clear the keeper at all.
+    const wentOver = random() < 0.5;
+    return {
+      code: wentOver ? "ONE_V_ONE.CHIP.OVER" : "ONE_V_ONE.CHIP.CHARGED_DOWN",
+      goal: false, rebound: !wentOver,
+      keeperAction: wentOver ? null : "catch",
+      ballResult: wentOver ? "over" : "held",
+      executionQuality: executionChance, keeperTravelYards: 0,
+    };
+  }
+  // Well-struck -- can the keeper actually get back to it? Scaled by
+  // ACTUAL depth, not perceived: a keeper who wasn't really that advanced
+  // (a Stage 1 misread) recovers easily regardless of chip quality.
+  const recoveryScore = average(["Reflexes", "Agility", "One On Ones", "Anticipation"].map((label) => playerAttribute(keeper, label))) / 20;
+  const recoveryChance = clamp(0.05, 0.85, (1 - Math.min(1, actualKeeperDepthYards / 9)) * (0.5 + recoveryScore * 0.5));
+  if (random() < recoveryChance) {
+    const scrambled = random() < 0.5;
+    return {
+      code: scrambled ? "ONE_V_ONE.CHIP.SCRAMBLED" : "ONE_V_ONE.CHIP.RECOVERED",
+      goal: false, rebound: scrambled,
+      keeperAction: "catch", ballResult: scrambled ? "rebound-in-play" : "held",
+      executionQuality: executionChance, keeperTravelYards: actualKeeperDepthYards,
+    };
+  }
+  return {
+    code: "ONE_V_ONE.CHIP.GOAL", goal: true, rebound: false,
+    keeperAction: "beaten", ballResult: "goal",
+    executionQuality: executionChance, keeperTravelYards: actualKeeperDepthYards,
+  };
+}
+
+// Round-keeper: a dribble duel, not a shot -- the one action where the
+// keeper's own attributes genuinely gate the outcome (One On Ones/
+// Agility/Positioning), because the striker has already committed to
+// beating the keeper physically before finding out whether they can.
+export function resolveRoundKeeper({ shooter, keeper, defender, actualDistanceYards, minute = 45, zone = 1, random }) {
+  const duel = localizedDuel(
+    shooter, keeper,
+    ["Dribbling", "Flair", "Acceleration", "Agility", "Balance"],
+    ["One On Ones", "Agility", "Positioning"],
+    minute, random, zone,
+  );
+  // Being genuinely close (the very thing that made this attractive in
+  // Stage 1) cuts both ways at execution: less room to actually get the
+  // first touch right. Real distance, not perceived -- a striker who
+  // misjudged it in Stage 1 pays for that here, not in the decision.
+  const proximityPenalty = clamp(0, 0.15, (4 - Math.min(4, actualDistanceYards)) * 0.04);
+  const won = random() < clamp(0.1, 0.85, duel.probability - proximityPenalty);
+  if (!won) {
+    const fouled = Boolean(defender) && random() < 0.12;
+    return {
+      code: fouled ? "ONE_V_ONE.ROUND.FOUL" : "ONE_V_ONE.ROUND.DISPOSSESSED",
+      goal: false, rebound: false, won,
+      keeperAction: "smother", ballResult: "held",
+      keeperTravelYards: actualDistanceYards,
+    };
+  }
+  // Beaten the keeper -- an open finish into a goal that's now empty.
+  // Still not automatic: a tight angle, a heavy final touch.
+  const finishSkill = average(["Finishing", "Composure", "Technique"].map((label) => playerAttribute(shooter, label))) / 20;
+  const scored = random() < clamp(0.55, 0.92, 0.6 + finishSkill * 0.3);
+  return {
+    code: scored ? "ONE_V_ONE.ROUND.GOAL" : "ONE_V_ONE.ROUND.MISS",
+    goal: scored, rebound: false, won,
+    keeperAction: "beaten", ballResult: scored ? "goal" : "wide",
+    keeperTravelYards: actualDistanceYards,
+  };
+}
+
+// Square pass: not a shot at all. Resolves pass completion first; on
+// completion, the RECEIVING teammate's finish reuses the exact same
+// resolvePlacedFinish()/resolveTargetedKeeperResponse() pair a direct
+// attempt uses -- not a separate inline goal formula, per the review.
+// Takes BOTH an execution stream (pass completion + the follow-up shot's
+// own creation -- one continuous attacking sequence) and a keeperResponse
+// stream (the follow-up shot's keeper reaction), the same two-stream split
+// a direct placed-finish attempt uses, instead of collapsing everything
+// into one `random` -- keeps this consistent with the shared layer it
+// reuses rather than a special case.
+export function resolveSquarePass({ shooter, teammate, keeper, defender, actualKeeperState, random, keeperResponseRandom }) {
+  const passSkill = average(["Passing", "Decisions", "Teamwork"].map((label) => playerAttribute(shooter, label))) / 20;
+  const interceptionRisk = defender
+    ? clamp(0.03, 0.4, average(["Anticipation", "Positioning", "Tackling"].map((label) => playerAttribute(defender, label))) / 20 * 0.5)
+    : 0.03;
+  const passSuccessChance = clamp(0.15, 0.95, (0.55 + passSkill * 0.35) - interceptionRisk);
+  if (random() >= passSuccessChance) {
+    return {
+      code: "ONE_V_ONE.SQUARE.INTERCEPTED", goal: false, rebound: false,
+      keeperAction: null, ballResult: "turnover", keeperTravelYards: 0, passCompleted: false,
+    };
+  }
+  // A favorable follow-up context: the pass itself already pulled the
+  // keeper/defense one way, so the receiving teammate's attempt targets
+  // whatever side is left exposed, under low pressure.
+  const teammateTargetSide = actualKeeperState.exposedSide === "balanced" ? "center" : actualKeeperState.exposedSide;
+  const shot = resolvePlacedFinish({ shooter: teammate, targetSide: teammateTargetSide, power: false, pressure: 0.05, random });
+  const response = resolveTargetedKeeperResponse({ shot, keeper, actualKeeperState, random: keeperResponseRandom });
+  return { ...response, passCompleted: true, shot };
 }
 
 // D.* -- defender's engagement choice (see MATCH_ENGINE_SCENARIOS.md). Called
@@ -796,6 +1125,146 @@ export function resolveShotBlock(defender, finishType, minute, random) {
     { value: "safe", weight: 2 },   // blocked straight back, no danger
   ], random);
   return { blocked: true, outcome, code: "D.BLOCK" };
+}
+
+// ---------------------------------------------------------------------------
+// Cross Resolution -- Pass A: source contest and delivery (see
+// MATCH_LAB_PLAN.md, "Cross Resolution and Dynamic Off-Ball Movement").
+// New CROSS.SOURCE.*/CROSS.DELIVERY codes, deliberately separate from the
+// existing X1/X1.D/X1.R codes (the AERIAL contest at the receiving end,
+// untouched by this pass -- Pass B's own scope) and from DELIVERY.* (the
+// set-piece corner/wide-free-kick wrapper, a structurally different
+// mechanic with its own inswing/outswing texture that doesn't apply to
+// open-play crossing). Same template as resolveShotBlock() immediately
+// above: a nearby defender's own attributes decide whether they affect
+// the action at all before rolling a specific outcome -- WHETHER a
+// defender is even eligible to attempt this (real position AND a
+// reachable path to the delivery, not just proximity) is a geometric
+// question these functions never answer themselves; the caller decides
+// that first (see spatialDecision.js's crossSourceContestDefender()) and
+// only calls this once a real contester has already been identified.
+// ---------------------------------------------------------------------------
+
+// Five real outcomes, not a binary blocked/not-blocked: a defender who
+// gets there in time can win it outright (TACKLED -- the cross never
+// happens at all), get a body/leg to the ball after it's struck
+// (BLOCKED_BEHIND/BLOCKED_LOOSE, same "behind = dead, loose = still
+// contestable" distinction resolveShotBlock() already uses), disrupt the
+// striker's technique without stopping the ball (PRESSURED -- the
+// delivery still escapes, but resolveCrossDelivery() below reads the
+// resulting pressureFactor), or simply fail to affect it at all (CLEAN --
+// a real defender was close enough to try and still didn't manage it,
+// same honest "proximity isn't destiny" property resolveShotBlock() has).
+export function resolveCrossSourceContest(crosser, defender, minute, random) {
+  const tackling = playerAttribute(defender, "Tackling");
+  const positioning = playerAttribute(defender, "Positioning");
+  const anticipation = playerAttribute(defender, "Anticipation");
+  const aggression = playerAttribute(defender, "Aggression");
+  const bravery = playerAttribute(defender, "Bravery");
+  const defenderSkill = (tackling * 0.35 + positioning * 0.25 + anticipation * 0.2 + aggression * 0.1 + bravery * 0.1) / 20;
+
+  const technique = playerAttribute(crosser, "Technique");
+  const balance = playerAttribute(crosser, "Balance");
+  const composure = playerAttribute(crosser, "Composure");
+  const crossing = playerAttribute(crosser, "Crossing");
+  const crosserResistance = (technique * 0.3 + balance * 0.3 + composure * 0.2 + crossing * 0.2) / 20;
+
+  const condition = conditionMultiplier(defender, minute);
+  const contestIntensity = clamp(0.05, 0.85, defenderSkill * 0.65 * condition * (1 - crosserResistance * 0.35));
+
+  const roll = random();
+  if (roll < contestIntensity * 0.16) {
+    return { code: "CROSS.SOURCE.TACKLED", outcome: "tackled", delivered: false, pressureFactor: 0 };
+  }
+  if (roll < contestIntensity * 0.4) {
+    const blockOutcome = weightedChoice([
+      { value: "behind", weight: 2 }, // clean block, ball goes out
+      { value: "loose", weight: 3 },  // deflects, still a contestable loose ball
+    ], random);
+    return {
+      code: blockOutcome === "behind" ? "CROSS.SOURCE.BLOCKED_BEHIND" : "CROSS.SOURCE.BLOCKED_LOOSE",
+      outcome: `blocked-${blockOutcome}`, delivered: false, blockOutcome, pressureFactor: 0,
+    };
+  }
+  if (roll < contestIntensity) {
+    return { code: "CROSS.SOURCE.PRESSURED", outcome: "pressured", delivered: true, pressureFactor: clamp(0.15, 0.65, contestIntensity) };
+  }
+  return { code: "CROSS.SOURCE.CLEAN", outcome: "clean", delivered: true, pressureFactor: 0 };
+}
+
+// Delivery quality (0..1, used downstream by whatever consumes the
+// delivery -- e.g. a future aerial-contest quality term, Pass B's own
+// scope) and how far the ball actually drifts from its intended target,
+// in real yards -- the caller turns that error into an actual landing
+// point (a spatial question, kept out of this attribute-only function).
+// distanceYards makes a genuinely long ball harder to deliver accurately
+// than a short one, independent of pressure. "Foot used" is deliberately
+// NOT an input here: like selectStrikeMechanics()'s striking-foot
+// selection for shots, foot preference isn't currently plumbed into
+// match players at all (see resolveDelivery()'s own comment on
+// DELIVERY.SWING) -- match-lab.js may still select a foot/curl direction
+// for presentation purposes, same as it already does for shots, but that
+// is deliberately never treated as a real quality input here, since
+// there's no real data behind it to honestly read.
+export function resolveCrossDelivery(crosser, { pressureFactor = 0, distanceYards = 20 } = {}, random) {
+  const crossing = playerAttribute(crosser, "Crossing");
+  const technique = playerAttribute(crosser, "Technique");
+  const decisions = playerAttribute(crosser, "Decisions");
+  const composure = playerAttribute(crosser, "Composure");
+  const skill = (crossing * 0.45 + technique * 0.25 + decisions * 0.15 + composure * 0.15) / 20;
+  const distancePenalty = clamp(0, 0.3, (distanceYards - 18) / 90);
+  const pressurePenalty = clamp(0, 0.4, pressureFactor * 0.55);
+  const quality = clamp(0.05, 0.98, skill - distancePenalty - pressurePenalty);
+  const accuracyErrorYards = clamp(0, 14, (1 - quality) * 14 * (0.5 + random() * 0.5));
+  return { code: "CROSS.DELIVERY", quality, accuracyErrorYards, pressureFactor };
+}
+
+// ---------------------------------------------------------------------------
+// Defensive Aerial Continuation -- see MATCH_LAB_PLAN.md, "Contact,
+// Ownership & Continuation" (2026-08-18). What a defender who has just WON
+// an aerial contest actually does with it, instead of the ball simply
+// stopping dead at their feet. One resolver, six actions -- they share the
+// same shape (a handful of the defender's own attributes, pressure/
+// distance context, one random() roll) closely enough that six separate
+// exported functions would just be the same formula repeated with
+// different attribute weights; `action` picks which weights apply. The
+// CALLER (match-lab.js's own decision layer, spatialDecision.js's
+// generateClearanceCandidates()) decides WHICH action is even attempted --
+// this only resolves whether the attempted one comes off clean.
+// ---------------------------------------------------------------------------
+export function resolveClearanceAttempt(defender, action, { pressureFactor = 0, distanceYards = 20 } = {}, random) {
+  const heading = playerAttribute(defender, "Heading");
+  const composure = playerAttribute(defender, "Composure");
+  const anticipation = playerAttribute(defender, "Anticipation");
+  const passing = playerAttribute(defender, "Passing");
+  const technique = playerAttribute(defender, "Technique");
+
+  if (action === "clear-behind") {
+    // A deliberate, low-risk choice by definition -- putting the ball out
+    // for a corner doesn't have a "fail" state the way a pass or a long
+    // clearance upfield does. Nothing to roll.
+    return { code: "CLEAR.BEHIND", outcome: "behind", clean: true };
+  }
+  if (action === "clear-long" || action === "clear-touchline") {
+    const quality = clamp(0.15, 0.95,
+      (heading * 0.5 + composure * 0.3 + anticipation * 0.2) / 20
+      - pressureFactor * 0.25 - clamp(0, 0.15, (distanceYards - 30) / 120));
+    const clean = random() < quality;
+    return { code: action === "clear-long" ? "CLEAR.LONG" : "CLEAR.TOUCHLINE", outcome: clean ? "cleared" : "short", clean };
+  }
+  if (action === "pass-teammate" || action === "pass-keeper") {
+    const skill = (passing * 0.4 + technique * 0.3 + composure * 0.3) / 20;
+    const quality = clamp(0.2, 0.95, skill - pressureFactor * 0.35 - clamp(0, 0.2, (distanceYards - 15) / 80));
+    const complete = random() < quality;
+    return {
+      code: action === "pass-teammate" ? "CLEAR.PASS.TEAMMATE" : "CLEAR.PASS.KEEPER",
+      outcome: complete ? "complete" : "intercepted", complete,
+    };
+  }
+  // control
+  const quality = clamp(0.2, 0.95, (technique * 0.4 + composure * 0.35 + anticipation * 0.25) / 20 - pressureFactor * 0.4);
+  const controlled = random() < quality;
+  return { code: "CLEAR.CONTROL", outcome: controlled ? "controlled" : "dispossessed", controlled };
 }
 
 // Pressure -- a unified 0..1 signal consolidating what used to be several

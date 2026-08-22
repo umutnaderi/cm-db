@@ -1063,12 +1063,21 @@ const workerConfig = fs.readFileSync(new URL("../worker/wrangler.jsonc", import.
 assert.ok(sharedSquadHtml.includes('id="sharedSquadList"'));
 assert.ok(sharedSquadSource.includes("getDraftSquad(seed)"));
 assert.ok(workerSource.includes("ps.current_ability BETWEEN 100 AND 200"));
-assert.ok(workerSource.includes("ps.current_ability BETWEEN 140 AND 200"));
-assert.ok(workerSource.includes("qualityQueries"));
+// /api/draft-candidates' quality tier (2026-08-21 rewrite, see
+// MATCH_LAB_PLAN.md's "Follow-up 2"): no longer a dedicated SQL query
+// ("BETWEEN 140 AND 200" / qualityQueries) -- it's filtered in JS from
+// the same cached, index-friendly ability-banded pool every other tier
+// draws from (fetchCandidatePool()'s own comment has the full story on
+// why the old per-seed SQL ORDER BY forced a full table sort).
+assert.ok(workerSource.includes("Number(row.current_ability) >= 140"));
+assert.ok(workerSource.includes("qualityPool"));
 assert.ok(workerSource.includes("draftPositionPatterns"));
 assert.ok(workerSource.includes('url.searchParams.get("minAbility")'));
 assert.ok(workerSource.includes("mode = excluded.mode"));
-assert.ok(workerSource.includes("LIMIT 4"));
+// The position-filtered ("targeted") tier's own top-4 pick, now a JS
+// pickBySeed() call over the position-filtered pool rather than a raw
+// SQL "LIMIT 4".
+assert.ok(workerSource.includes("pickBySeed(targetedPool, targetedSeed, 4)"));
 assert.ok(workerSource.includes('url.pathname === "/api/draft-squads"'));
 assert.ok(workerSource.includes("squad_seed = excluded.squad_seed"));
 assert.ok(workerSource.includes('url.pathname === "/api/friend-rooms"'));

@@ -4516,6 +4516,11 @@ select:focus {
   text-shadow: 0 0 12px rgba(35, 244, 123, 0.4);
 }
 
+.run-sound-button {
+  font-size: 0.72rem;
+  padding: 3px 10px;
+}
+
 .run-stage-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -6429,38 +6434,360 @@ body.is-hall-of-fame-open {
   color: #0b120d;
 }
 
+/* Real pitch proportions: a 75yd (wide) x 120yd (long) FIFA-regulation-
+   sized pitch (penalty area 18x44yd, goal area 6x20yd, center circle 10yd
+   radius, penalty arc 12yd radius from the spot, goal 8yd wide, corner arc
+   1yd radius). aspect-ratio locks width/height in the same yards-per-pixel
+   ratio, so every ml-pitch-* element below computes its own width/height
+   independently via calc(<yards>/75*100%) and calc(<yards>/120*100%) --
+   using the SAME percentage for both would draw an ellipse, not a circle,
+   on a non-square box.
+   Two layers: .match-lab-pitch is just the "stand"/margin background so
+   the touchlines don't sit flush against the panel edge; .ml-pitch-field
+   is the actual playing surface AND the only positioning context for both
+   the line markings and the player/ball markers (renderPitch() in
+   match-lab.js appends markers into whatever has id="labPitch", which
+   lives on the field, not the outer wrapper) -- keeps marker drag
+   coordinates and drawn pitch lines perfectly aligned with zero JS
+   changes needed. */
 .match-lab-pitch {
   position: relative;
   width: 100%;
-  aspect-ratio: 68 / 105;
+  aspect-ratio: 75 / 120;
   margin: 0 auto;
-  overflow: hidden;
-  background:
-    repeating-linear-gradient(
-      0deg,
-      rgba(255, 255, 255, 0.035) 0,
-      rgba(255, 255, 255, 0.035) 12.5%,
-      transparent 12.5%,
-      transparent 25%
-    ),
-    #1c5c30;
+  background: #123a20;
   border-radius: 10px;
-  outline: 2px solid rgba(255, 255, 255, 0.7);
-  outline-offset: -10px;
-  --pitch-line-inset: 10px;
-  --pitch-line-color: rgba(255, 255, 255, 0.7);
-  --penalty-box-depth: 15.714%;
-  --pitch-circle-diameter: 22%;
+  overflow: hidden;
   touch-action: none;
 }
 
+.ml-pitch-field {
+  position: absolute;
+  inset: 4%;
+  /* No overflow:hidden here (the outer .match-lab-pitch already clips for
+     its own rounded corners) -- the goal frames deliberately sit outside
+     this box's own 0-100% bounds, in the margin, and would be invisible
+     if this element clipped its own children. Corner arcs are instead
+     each individually clipped to their own inward quadrant -- see
+     .ml-pitch-corner-*'s clip-path below. */
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.05) 0,
+      rgba(255, 255, 255, 0.05) 8.333%,
+      transparent 8.333%,
+      transparent 16.667%
+    ),
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04), transparent 65%),
+    #1c5c30;
+  border-radius: 0;
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+  outline-offset: -2px;
+  --ml-line: rgba(255, 255, 255, 0.75);
+}
+
+.ml-pitch-halfway {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  border-top: 2px solid var(--ml-line);
+}
+
+.ml-pitch-circle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(20 / 75 * 100%);
+  height: calc(20 / 120 * 100%);
+  border: 2px solid var(--ml-line);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.ml-pitch-box {
+  position: absolute;
+  left: 50%;
+  width: calc(44 / 75 * 100%);
+  height: calc(18 / 120 * 100%);
+  border: 2px solid var(--ml-line);
+  transform: translateX(-50%);
+}
+.ml-pitch-box-top { top: 0; border-top: 0; }
+.ml-pitch-box-bottom { bottom: 0; border-bottom: 0; }
+
+.ml-pitch-goal-box {
+  position: absolute;
+  left: 50%;
+  width: calc(20 / 75 * 100%);
+  height: calc(6 / 120 * 100%);
+  border: 2px solid var(--ml-line);
+  transform: translateX(-50%);
+}
+.ml-pitch-goal-box-top { top: 0; border-top: 0; }
+.ml-pitch-goal-box-bottom { bottom: 0; border-bottom: 0; }
+
+/* Penalty arc -- 9.15m (10yd) radius from the penalty spot, same radius
+   as the center circle (confirmed against a FIFA Laws of the Game
+   dimension diagram -- an earlier pass here used 12yd, mistaking the
+   penalty SPOT's distance from the goal line for the arc's own radius;
+   they're both "12yd" figures but different measurements). The visible
+   "D" is the slice of this 20yd-diameter circle that falls outside the
+   18yd box: circle spans 2-22yd from the goal line (spot at 12yd +/-
+   10yd radius); the box eats the first 16 of those 20 yards (2-18yd) ->
+   clip away 16/20 = 80% of the circle's own bounding box, keep the rest. */
+.ml-pitch-arc {
+  position: absolute;
+  left: 50%;
+  width: calc(20 / 75 * 100%);
+  height: calc(20 / 120 * 100%);
+  border: 2px solid var(--ml-line);
+  border-radius: 50%;
+}
+.ml-pitch-arc-top {
+  top: calc(12 / 120 * 100%);
+  transform: translate(-50%, -50%);
+  clip-path: inset(80% 0 0 0);
+}
+.ml-pitch-arc-bottom {
+  bottom: calc(12 / 120 * 100%);
+  transform: translate(-50%, 50%);
+  clip-path: inset(0 0 80% 0);
+}
+
+.ml-pitch-spot {
+  position: absolute;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  background: var(--ml-line);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+.ml-pitch-spot-center { top: 50%; }
+.ml-pitch-spot-top { top: calc(12 / 120 * 100%); }
+.ml-pitch-spot-bottom { bottom: calc(12 / 120 * 100%); transform: translate(-50%, 50%); }
+
+/* The goal itself -- the actual target the animation aims shots/crosses/
+   free kicks at (goalPointFor() in match-lab.js), drawn so that target is
+   a real, visible point rather than an implied pitch edge. 8yd regulation
+   width, sitting outside the goal line in the margin (a real goal, not one
+   drawn inside the field of play) -- needs .ml-pitch-field to NOT clip its
+   own overflow, see the note there. */
+.ml-pitch-goal {
+  position: absolute;
+  left: 50%;
+  width: calc(8 / 75 * 100%);
+  height: 10px;
+  border: 2px solid var(--ml-line);
+  background: rgba(255, 255, 255, 0.025);
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 9;
+  isolation: isolate;
+}
+.ml-pitch-goal::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.58) 0,
+      rgba(255, 255, 255, 0.58) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.26) 0,
+      rgba(255, 255, 255, 0.26) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+  transform-origin: var(--net-impact-x, 50%) 50%;
+  will-change: transform, filter;
+  z-index: 1;
+}
+/* bottom:100%/top:100% anchors this element's OWN bottom/top edge to the
+   field's goal line (0%/100%), so the fixed 10px height extends outward
+   past the touchline into the outer margin -- a real goal, not one drawn
+   inside the field of play. */
+.ml-pitch-goal-top { bottom: 100%; border-bottom: 0; border-radius: 3px 3px 0 0; }
+.ml-pitch-goal-bottom { top: 100%; border-top: 0; border-radius: 0 0 3px 3px; }
+
+@keyframes match-lab-net-ripple-top {
+  0%, 100% { transform: translateY(0) scaleX(1) scaleY(1) skewX(0deg); filter: brightness(1); }
+  22% { transform: translateY(-3px) scaleX(0.94) scaleY(var(--net-depth, 1.42)) skewX(var(--net-skew, 0deg)); filter: brightness(1.75); }
+  48% { transform: translateY(1px) scaleX(1.03) scaleY(0.9) skewX(var(--net-rebound-skew, 0deg)); filter: brightness(1.2); }
+  70% { transform: translateY(-1px) scaleX(0.98) scaleY(1.1) skewX(0deg); }
+}
+@keyframes match-lab-net-ripple-bottom {
+  0%, 100% { transform: translateY(0) scaleX(1) scaleY(1) skewX(0deg); filter: brightness(1); }
+  22% { transform: translateY(3px) scaleX(0.94) scaleY(var(--net-depth, 1.42)) skewX(var(--net-skew, 0deg)); filter: brightness(1.75); }
+  48% { transform: translateY(-1px) scaleX(1.03) scaleY(0.9) skewX(var(--net-rebound-skew, 0deg)); filter: brightness(1.2); }
+  70% { transform: translateY(1px) scaleX(0.98) scaleY(1.1) skewX(0deg); }
+}
+.ml-pitch-goal[data-impact-side="left"] { --net-skew: -7deg; --net-rebound-skew: 2.5deg; }
+.ml-pitch-goal[data-impact-side="right"] { --net-skew: 7deg; --net-rebound-skew: -2.5deg; }
+.ml-pitch-goal[data-impact-side="center"] { --net-skew: 0deg; }
+.ml-pitch-goal[data-impact-power="power"] { --net-depth: 1.68; }
+.ml-pitch-goal[data-impact-power="placed"] { --net-depth: 1.38; }
+.ml-pitch-goal-top[data-net-impact="true"]::before {
+  animation: match-lab-net-ripple-top 760ms cubic-bezier(0.18, 0.82, 0.24, 1) 1;
+}
+.ml-pitch-goal-bottom[data-net-impact="true"]::before {
+  animation: match-lab-net-ripple-bottom 760ms cubic-bezier(0.18, 0.82, 0.24, 1) 1;
+}
+
+.ml-pitch-corner {
+  position: absolute;
+  width: calc(3 / 75 * 100%);
+  height: calc(3 / 120 * 100%);
+  border: 2px solid var(--ml-line);
+  border-radius: 50%;
+}
+/* Box is centered exactly on the corner point (half hangs outside the
+   pitch) so the rounded corner curves the right way; hiding the two
+   OUTER-facing borders is what leaves only the inward corner arc drawn,
+   but an explicit clip-path masks the box to its own inward quadrant too
+   (top-left corner keeps only its bottom-right quadrant, etc.) so nothing
+   -- border join artifacts included -- ever paints outside the touchline,
+   regardless of border-radius rendering specifics at mixed border widths. */
+.ml-pitch-corner-tl { top: 0; left: 0; border-top: 0; border-left: 0; transform: translate(-50%, -50%); clip-path: inset(50% 0 0 50%); }
+.ml-pitch-corner-tr { top: 0; right: 0; border-top: 0; border-right: 0; transform: translate(50%, -50%); clip-path: inset(50% 50% 0 0); }
+.ml-pitch-corner-bl { bottom: 0; left: 0; border-bottom: 0; border-left: 0; transform: translate(-50%, 50%); clip-path: inset(0 0 50% 50%); }
+.ml-pitch-corner-br { bottom: 0; right: 0; border-bottom: 0; border-right: 0; transform: translate(50%, 50%); clip-path: inset(0 50% 50% 0); }
+
+/* Curved shot trail -- viewBox matches the field's own 75x120yd aspect
+   ratio exactly (unlike the 0-100 percentage grid every other pitch
+   marking uses), so a stroke-width in yards renders uniformly instead of
+   being stretched non-uniformly the way a square viewBox would be on this
+   non-square field. match-lab.js converts percentage coordinates to yards
+   when drawing into this layer. */
+.ml-pitch-trail-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.ml-pitch-trail-path {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 0.5;
+  stroke-linecap: round;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.ml-pitch-trail-path[data-visible="true"] {
+  opacity: 1;
+}
+
+/* Ball-owner touch path -- a SEPARATE layer from the curved shot trail
+   above (that one is cleared/redrawn per shot; this one accumulates
+   across an entire possession, toggled by #labShowTouchesCheckbox, not
+   by any single event). Same 75x120yd viewBox/coordinate convention. */
+.ml-pitch-touch-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.ml-pitch-touch-layer[data-visible="true"] {
+  opacity: 1;
+}
+.ml-pitch-touch-line {
+  fill: none;
+  stroke: #facc15;
+  stroke-width: 0.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.75;
+}
+.ml-pitch-touch-mark {
+  stroke: #facc15;
+  stroke-width: 0.4;
+  stroke-linecap: round;
+}
+
+/* Vision cone (2026-08-19) -- toggled by #labShowVisionCheckbox, off by
+   default. Same 75x120yd viewBox/coordinate convention as the touch/trail
+   layers above, so angles drawn here are geometrically correct rather than
+   stretched by the pitch's own non-square aspect ratio. Three path
+   elements: #labVisionConeCurrent always sits exactly on the present ball
+   owner, no fade; #labVisionConeFading is where the PREVIOUS owner's cone
+   gets parked the instant possession changes hands, so it visibly lingers
+   at the old owner's own last position/direction before fading out --
+   "the picture they had in their head, forgotten over time," not a cone
+   that teleports or snaps away the moment the ball moves on. Its own
+   fade-out duration is a per-transition CSS variable
+   (--vision-fade-ms, match-lab.js's own visionFadeDurationMs()) --
+   scaled by THAT outgoing player's own Vision rating, never a fixed
+   constant, so a higher-Vision player's mental picture genuinely lingers
+   longer than a lower-Vision one's. #labVisionConeAnticipating (a
+   distinct dashed style, see .ml-pitch-vision-cone-anticipating below) is
+   "scanning before the ball even arrives" -- a real, named trait of a
+   specific caliber of player (Riquelme/Ronaldinho/Pirlo were the explicit
+   reference), gated entirely by scanQuality(), not shown for every
+   receiver. All three cones can genuinely sweep back and forth while
+   visible -- match-lab.js's own scanOffsetRad() -- rather than holding one
+   fixed gaze; see that function's own comment for why. */
+.ml-pitch-vision-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.ml-pitch-vision-layer[data-visible="true"] {
+  opacity: 1;
+}
+.ml-pitch-vision-cone {
+  fill: #4ade80;
+  fill-opacity: 0.22;
+  stroke: #4ade80;
+  stroke-opacity: 0.55;
+  stroke-width: 0.3;
+}
+#labVisionConeCurrent {
+  opacity: 1;
+  transition: opacity 150ms ease;
+}
+#labVisionConeFading {
+  opacity: 0;
+  transition: opacity var(--vision-fade-ms, 1500ms) ease-out;
+}
+.ml-pitch-vision-cone-anticipating {
+  fill: #facc15;
+  fill-opacity: 0.14;
+  stroke: #facc15;
+  stroke-opacity: 0.6;
+  stroke-dasharray: 1.2 0.8;
+}
+#labVisionConeAnticipating {
+  opacity: 0;
+  transition: opacity 250ms ease;
+}
+
+/* Deliberately NOT display:flex/flex-direction:column here anymore -- that
+   made translate(-50%,-50%) center the whole dot+label stack as one box,
+   so a marker WITH a label (every player) centered its dot slightly above
+   the true x/y point, while a marker withOUT one (the ball, which lost its
+   label -- see the "remove the ball's label" change) centered exactly on
+   it. Same x/y, visibly different dot position. Now the label is taken out
+   of flow (position:absolute, see .match-lab-marker-label) so this
+   container's own box is just the dot, and every marker's dot centers on
+   its x/y identically regardless of whether it carries a label. */
 .match-lab-marker {
   position: absolute;
   top: var(--marker-y, 50%);
   left: var(--marker-x, 50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
   transform: translate(-50%, -50%);
   cursor: grab;
   user-select: none;
@@ -6468,6 +6795,13 @@ body.is-hall-of-fame-open {
 
 .match-lab-marker:active {
   cursor: grabbing;
+}
+
+/* Scenario Probe: dims a placed player whose role isn't one of the
+   current scenario's own declared roles -- see renderPitch()'s own
+   comment for why this can't just look like a real participant. */
+.match-lab-marker[data-unused="true"] {
+  opacity: 0.4;
 }
 
 .match-lab-marker-dot {
@@ -6495,21 +6829,297 @@ body.is-hall-of-fame-open {
   background: var(--accent-2);
 }
 
-/* Role sets the dot's fill; team sets its border, independent of role --
-   without this, an away "Defender" and a home "Defender" looked identical
-   on the pitch, and only the roster list's Home/Away dropdown (off-pitch)
-   distinguished them. */
+/* Team identity owns the player-dot fill, overriding the older role colours.
+   The ball marker has no data-team attribute and keeps its separate rule. */
+.match-lab-marker[data-team="home"] .match-lab-marker-dot {
+  background: #880a0a;
+  color: #fff;
+}
+
 .match-lab-marker[data-team="away"] .match-lab-marker-dot {
+  background: #fff;
+  color: #0b120d;
   border-color: #3b82f6;
 }
 
+/* Goalkeepers keep a distinct kit colour while retaining team identity:
+   home uses yellow, away uses green. These intentionally follow the generic
+   team rules above so the role-specific palette wins in both Match Lab modes. */
+.match-lab-marker[data-role="keeper"][data-team="home"] .match-lab-marker-dot {
+  background: #ffff5a;
+  color: #000;
+  border-color: #000;
+}
+
+.match-lab-marker[data-role="keeper"][data-team="away"] .match-lab-marker-dot {
+  background: #5ddb52;
+  color: #000;
+  border-color: #000;
+}
+
 .match-lab-marker-ball .match-lab-marker-dot {
-  width: 14px;
-  height: 14px;
+  width: 8px;
+  height: 8px;
   background: #fff;
 }
 
+/* The ball owns its x/y/z presentation independently from player markers.
+   --ball-lift is authored by the immutable ball track, never inferred from a
+   nearby player. Ground touches stay at zero; crosses/shots rise above it.
+   --ball-rest-x/y (2026-08-19) is a SEPARATE, purely cosmetic pixel nudge --
+   the standalone `translate` property, not folded into the `transform`
+   above, specifically so it composes without clashing (same technique
+   .match-lab-marker[data-cosmetic="true"] already uses for the same
+   reason). At rest with an outfield player, the ball is drawn a fixed 18px
+   from that player's own center -- clearing their 22px-diameter dot's own
+   11px radius plus the ball's own 4px radius, so the ball reads as a real,
+   separate object "at their feet," never swallowed inside the player's own
+   circle. Exceptions (both handled entirely in JS, by leaving this at
+   0px,0px): a goalkeeper holding it, and a ball genuinely in the air (a
+   header contests it at head height, directly on the player, not off to
+   one side) -- see restingBallOffsetPx()'s own comment in match-lab.js.
+
+   This `translate` transition is deliberately UNCONDITIONAL (not gated
+   behind [data-animating="true"] the way --marker-x/y's own left/top
+   transition is) -- Timeline Playback v1 drives --marker-x/y directly,
+   every rAF frame, from its own continuously-sampled ball track, so a
+   transition there would visibly lag behind the true sampled position on
+   every ordinary pass/shot/carry (see [data-animating="true"]'s own
+   comment on exactly this). --ball-rest-x/y is different: it only
+   actually CHANGES value at the rare, discrete instant possession itself
+   changes hands (a real browser round reported this reading as an
+   instant teleport between one player's circle edge and the other's) --
+   it holds perfectly steady, frame after frame, the rest of the time, so
+   an always-on transition here animates exactly (and only) that handover,
+   without ever fighting the continuous sampler. */
+.match-lab-marker-ball {
+  transform: translate(-50%, calc(-50% - var(--ball-lift, 0px)));
+  translate: var(--ball-rest-x, 0px) var(--ball-rest-y, 0px);
+  transition: translate 180ms ease-out;
+  z-index: 8;
+}
+
+.match-lab-marker-ball[data-flight="true"] .match-lab-marker-dot {
+  box-shadow: 0 calc(3px + var(--ball-lift, 0px)) 5px rgba(0, 0, 0, 0.45);
+}
+
+/* Animation v0 -- playback-only. Markers position via --marker-x/y even
+   outside animation (renderPitch()/startDrag() set them directly); this
+   modifier just adds a transition on the standard left/top properties, so
+   writing a new --marker-x/y interpolates instead of jumping. Off during
+   drag (1:1 tracking would lag behind the pointer) and off for a freshly
+   rebuilt marker (no "old" position to transition from) -- only the
+   playback controller ever sets this attribute. */
+.match-lab-marker[data-animating="true"] {
+  transition: left var(--marker-duration, 400ms) ease-in-out,
+              top var(--marker-duration, 400ms) ease-in-out;
+}
+
+/* One-shot flourishes, cleared and re-applied every step by the playback
+   controller (CSS animations don't restart on re-setting the same
+   attribute value, so "clear then set" is required, not optional). */
+@keyframes match-lab-pulse {
+  0%, 100% { box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4), 0 0 0 0 rgba(255, 214, 10, 0.55); }
+  50% { box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4), 0 0 0 7px rgba(255, 214, 10, 0); }
+}
+.match-lab-marker[data-pulse="true"] .match-lab-marker-dot {
+  animation: match-lab-pulse 550ms ease-out 1;
+}
+
+/* Non-positional "these two are contesting" indicator for a movement-
+   LESS duel beat (a "looks to get past"/"chooses tackle"/foul-card
+   beat) -- see applyStepAnimation()'s own comment. Deliberately NOT a
+   position change: a double ring in a distinct (red, vs pulse's amber)
+   tone reads as "engaged in a contest" without ever implying either
+   marker physically moved, which a coordinate nudge -- even a cosmetic,
+   non-authoritative one -- still did. */
+@keyframes match-lab-contest {
+  0%, 100% { box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4), 0 0 0 0 rgba(239, 68, 68, 0.6), 0 0 0 0 rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4), 0 0 0 5px rgba(239, 68, 68, 0.35), 0 0 0 10px rgba(239, 68, 68, 0); }
+}
+.match-lab-marker[data-contest="true"] .match-lab-marker-dot {
+  animation: match-lab-contest 500ms ease-out 1;
+}
+
+@keyframes match-lab-dive {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50% { transform: scale(1.18) rotate(-14deg); }
+}
+.match-lab-marker[data-dive="true"] .match-lab-marker-dot {
+  animation: match-lab-dive 350ms ease-out 1;
+}
+
+@keyframes match-lab-celebrate {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-7px); }
+}
+.match-lab-marker[data-celebrate="true"] .match-lab-marker-dot {
+  animation: match-lab-celebrate 700ms ease-in-out 1;
+}
+
+/* Cosmetic-only reaction (closing down, a duel lean, a beaten defender's
+   lunge) -- see applyCosmeticOffset()'s own comment in match-lab.js. Uses
+   the standalone `translate` property, not `transform: translate(...)`,
+   specifically so it composes without clashing if data-dive/data-celebrate
+   (both `transform`-based) ever land on the same node in the same step.
+   Explicitly returns to (0,0) before the animation ends -- this is a
+   transient visual offset, never a real position change, so there is
+   nothing to "undo" once it finishes; the marker's own --marker-x/
+   --marker-y (its logical position) was never touched. */
+@keyframes match-lab-cosmetic-offset {
+  0%, 100% { translate: 0 0; }
+  55% { translate: var(--cosmetic-x, 0) var(--cosmetic-y, 0); }
+}
+.match-lab-marker[data-cosmetic="true"] .match-lab-marker-dot {
+  animation: match-lab-cosmetic-offset var(--cosmetic-duration, 400ms) ease-out 1;
+}
+
+/* Held/recovered -- tucks the ball marker down against the keeper it's
+   already sitting on top of (see pushKeeperSaveEvent()), instead of
+   leaving it the same size as a ball still live and in flight. */
+.match-lab-marker-ball[data-held="true"] .match-lab-marker-dot {
+  transform: scale(0.6);
+  opacity: 0.85;
+}
+
+/* "Over the bar" height cue -- a top-down view has no z-axis, so an OVER
+   miss needs something other than x/y to read as different from a shot on
+   frame: the ball grows (reads as "closer to camera," i.e. higher) and
+   fades as it sails out, instead of just sliding along the ground like
+   every other miss. */
+@keyframes match-lab-ball-over {
+  0%, 12% { transform: scale(1); opacity: 1; }
+  65% { transform: scale(2); opacity: 0.9; }
+  100% { transform: scale(1.4); opacity: 0.25; }
+}
+.match-lab-marker-ball[data-height="over"] .match-lab-marker-dot {
+  animation: match-lab-ball-over var(--marker-duration, 500ms) ease-in 1;
+}
+
+/* Synchronized result badge -- movement/position alone is ambiguous for
+   several outcomes (a catch and a parry both just move the ball to
+   roughly the same spot on-screen), so every keeper-save/miss event also
+   carries an explicit text badge, cleared and re-shown per step exactly
+   like the marker effects above. */
+.ml-pitch-badge {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-6px);
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(11, 18, 13, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease, transform 150ms ease;
+  z-index: 5;
+}
+.ml-pitch-badge[data-visible="true"] {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.ml-pitch-badge[data-kind="goal"] { border-color: var(--accent); }
+.ml-pitch-badge[data-kind="caught"] { border-color: var(--accent-2); }
+.ml-pitch-badge[data-kind="parried"],
+.ml-pitch-badge[data-kind="spilled"] { border-color: #f5a623; }
+.ml-pitch-badge[data-kind="corner"],
+.ml-pitch-badge[data-kind="post"] { border-color: #3b82f6; }
+.ml-pitch-badge[data-kind="wide"],
+.ml-pitch-badge[data-kind="over"] { border-color: var(--danger); }
+
+/* Full-pitch goal flash -- keyed off #labPitch (elements.pitch in
+   match-lab.js), which is .ml-pitch-field, not the outer .match-lab-pitch
+   margin wrapper -- see the note on .ml-pitch-field above. */
+.ml-pitch-field::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, rgba(255, 214, 10, 0.55), transparent 70%);
+  opacity: 0;
+  pointer-events: none;
+}
+.ml-pitch-field[data-goal-flash="true"]::after {
+  animation: match-lab-goal-flash 900ms ease-out 1;
+}
+@keyframes match-lab-goal-flash {
+  0% { opacity: 0; }
+  15% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.match-lab-speed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.match-lab-speed-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.match-lab-speed-control input[type="range"] {
+  width: 120px;
+}
+
+.match-lab-speed-value {
+  min-width: 2.4em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.match-lab-sound-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.match-lab-volume-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.match-lab-volume-control input[type="range"] {
+  width: 100px;
+}
+
+.match-lab-attacking-direction {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.match-lab-trace-status {
+  color: var(--accent);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Label decluttering (2026-08-19) -- off by default: only the current ball
+   owner's own label stays visible, everyone else's is faded out, so a
+   crowded 9v9/11v11 roster doesn't read as a wall of overlapping text.
+   #labShowLabelsCheckbox flips data-label-visible to "true" for every
+   marker unconditionally. The fade itself lives here, on opacity (never
+   `hidden`/`display:none`, which can't transition) -- match-lab.js only
+   ever writes the data attribute; timing is entirely CSS's job. */
 .match-lab-marker-label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
   margin-top: 3px;
   padding: 1px 6px;
   background: rgba(11, 18, 13, 0.82);
@@ -6517,6 +7127,12 @@ body.is-hall-of-fame-open {
   color: var(--text);
   font-size: 0.6rem;
   white-space: nowrap;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 600ms ease;
+}
+.match-lab-marker[data-label-visible="false"] .match-lab-marker-label {
+  opacity: 0;
 }
 
 .match-lab-roster {
@@ -6562,6 +7178,36 @@ body.is-hall-of-fame-open {
 .match-lab-roster-zone {
   color: var(--muted);
   font-size: 0.68rem;
+}
+
+/* Roster player name deep-links to their real Database Page
+   (database.html) -- styled to read as a real link (not the item's own
+   plain-text label) while staying legible against --surface-2 in both
+   themes; hover attributes ride the browser-native title tooltip, no
+   extra markup needed for that part. */
+.match-lab-roster-item a {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.match-lab-roster-item a:hover {
+  text-decoration: underline;
+}
+
+/* Scenario Probe: a placed player whose role isn't one of the current
+   scenario's own declared roles is never read by that scenario's run()
+   at all -- dimmed and tagged rather than silently looking identical to
+   an actual participant (see scenarioPrimaryRoleKey()'s comment). */
+.match-lab-roster-item[data-unused="true"] {
+  opacity: 0.45;
+}
+
+.match-lab-roster-unused-tag {
+  color: var(--danger);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.62rem;
 }
 
 .match-lab-role-requirements {
@@ -6659,6 +7305,102 @@ body.is-hall-of-fame-open {
   width: 70px;
 }
 
+.match-lab-quick-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.match-lab-section-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.match-lab-quick-setup-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.match-lab-quick-setup button {
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.match-lab-quick-setup button:hover,
+.match-lab-quick-setup button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.match-lab-quick-setup button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.match-lab-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.match-lab-switch input[type="checkbox"] {
+  position: absolute;
+  height: 0;
+  width: 0;
+  opacity: 0;
+}
+
+.match-lab-switch-track {
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 18px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.match-lab-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition: left 0.2s ease, background 0.2s ease;
+}
+
+.match-lab-switch input:checked + .match-lab-switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.match-lab-switch input:checked + .match-lab-switch-track::after {
+  left: 17px;
+  background: #0b120d;
+}
+
+.match-lab-switch input:focus-visible + .match-lab-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .match-lab-inspector dl,
 .match-lab-trace ol,
 .match-lab-distribution ol {
@@ -6706,6 +7448,42 @@ body.is-hall-of-fame-open {
   font-weight: 700;
 }
 
+.match-lab-trace-attribution {
+  margin-top: 5px;
+  color: var(--subtle);
+}
+
+.match-lab-trace-attribution summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.7rem;
+}
+
+.match-lab-trace-attribution ul {
+  display: grid;
+  gap: 3px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.match-lab-trace-attribution li {
+  padding: 0;
+  background: none;
+  font-size: 0.68rem;
+}
+
+.match-lab-trace-attribution small {
+  color: var(--subtle);
+}
+
+.match-lab-move-diagnostics small {
+  display: block;
+  margin-top: 0.25rem;
+  line-height: 1.45;
+}
+
 .match-lab-distribution li {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -6721,6 +7499,106 @@ body.is-hall-of-fame-open {
   height: 6px;
   background: var(--accent);
   border-radius: 999px;
+}
+
+/* Stage 1 one-on-one decision diagnostic -- deliberately styled as a
+   clearly-set-apart "this is not a resolved outcome" panel (amber border,
+   explicit warning heading), not blended in with the trace/distribution
+   panels above that DO represent real engine results. */
+.match-lab-one-on-one {
+  border: 1px solid #f5a623;
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(245, 166, 35, 0.06);
+}
+
+.match-lab-one-on-one h3 {
+  margin: 0 0 6px;
+  color: #f5a623;
+  font-size: 0.86rem;
+}
+
+.match-lab-one-on-one h4 {
+  margin: 0 0 4px;
+  color: var(--subtle);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.match-lab-one-on-one-candidates {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.match-lab-one-on-one-candidates li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: 0.74rem;
+}
+
+.match-lab-one-on-one-candidates li[data-selected="true"] {
+  outline: 1px solid #f5a623;
+  background: rgba(245, 166, 35, 0.14);
+  font-weight: 700;
+}
+
+.match-lab-one-on-one-bar {
+  height: 6px;
+  background: #f5a623;
+  border-radius: 999px;
+}
+
+.match-lab-one-on-one-execution {
+  margin: 4px 0 10px;
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr;
+  gap: 3px 8px;
+  font-size: 0.72rem;
+}
+
+.match-lab-one-on-one-execution dt {
+  color: var(--subtle);
+}
+
+.match-lab-one-on-one-execution dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.match-lab-one-on-one-states {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.match-lab-one-on-one-states dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 8px;
+  font-size: 0.72rem;
+}
+
+.match-lab-one-on-one-states dt {
+  color: var(--subtle);
+}
+
+.match-lab-one-on-one-states dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .match-lab-mode-toggle {

@@ -32,3 +32,11 @@ db/
 **/cm4-metadata.json
 
 tools/CM4PregameEditor/
+
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Raw audio source library (146 WAV files, ~155MB, mostly uncompressed
+# PCM) -- source material for tools/convert-sounds.mjs, never committed
+# itself. sounds/v1/ (the small compressed output) is NOT excluded.
+sounds/*.wav

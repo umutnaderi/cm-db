@@ -21,6 +21,7 @@ import {
   engineAttribute,
   engineAttributeDetail,
   FINISH_TYPE_LABELS,
+  freeKickContextMultiplier,
   FREE_KICK_SHOT_LABELS,
   goalkeeperScore,
   hashString,
@@ -65,7 +66,11 @@ import {
   weightedPlayer,
   ZONE_CENTERS,
   ZONE_TRANSITION_MATRIX,
-} from "./src/lib/matchEngineCore.js?v=20260811-01";
+} from "./src/lib/matchEngineCore.js?v=20260814-01";
+import {
+  isSoundEnabled, playEvent, preloadCore, resolveCueSequence,
+  setEnabled as setSoundEnabled, stopAll as stopAllSound, unlock as unlockSound,
+} from "./src/lib/matchSound.js?v=20260821-02";
 import {
   createDraftSquad,
   formatDraftSquadText,
@@ -433,6 +438,7 @@ const TITAN_BY_KEY = new Map(
 
 const elements = {
   seed: document.querySelector("#runSeed"),
+  soundButton: document.querySelector("#runSoundButton"),
   teamName: document.querySelector("#runTeamName"),
   teamOverall: document.querySelector("#runTeamOverall"),
   stageKicker: document.querySelector("#runStageKicker"),
@@ -2009,8 +2015,8 @@ function buildTransitionTimeline({
           zone = 7;
           return;
         }
-        const keeperFinishType = { regular: "calm", hard: "blast", curl: "finesse" }[shotType] || "calm";
-        const save = resolveKeeperSave(taker, keeper, keeperFinishType, minute, random, 1);
+        const keeperFinishType = { regular: "fk-regular", hard: "fk-hard", curl: "fk-curl" }[shotType] || "fk-regular";
+        const save = resolveKeeperSave(taker, keeper, keeperFinishType, minute, random, 1, freeKickContextMultiplier(zone));
         if (save.goal) {
           addGoal("direct-free-kick", players, opponents, { scorer: taker, scenarioType: save.code });
           return;
@@ -3982,9 +3988,25 @@ function renderCanonicalMatchSnapshot(view, snapshot) {
           setMiniPitchZone(view.pitch, latest, "to", view.opponentName);
         }
       });
+      // Only a genuinely live arrival plays a sound -- a tab resync/catch-up
+      // after being backgrounded can jump the reducer past several events
+      // at once (isLiveArrival false for those), which must stay silent
+      // the same way Run N does in Match Lab, not fire a stacked burst of
+      // cues for things that "happened" while the tab was hidden.
+      playEvent(
+        { code: latest.scenarioType || "" },
+        {
+          playbackId: view.soundPlaybackId, eventId: latest.timelineId,
+          side: latest.side === "user" ? "for" : "against", isGoal: Boolean(latest.goal),
+        },
+      );
     } else {
       setMiniPitchZone(view.pitch, latest, "to", view.opponentName);
     }
+  }
+  if (snapshot.completed && !view.finalWhistlePlayed) {
+    view.finalWhistlePlayed = true;
+    playEvent({ code: "MATCH.END" }, { playbackId: view.soundPlaybackId, eventId: "full-time" });
   }
 }
 
@@ -4102,6 +4124,12 @@ async function animateMatch(result, {
     homeName: team.teamName,
     opponentName: result.opponentName,
     latestTimelineId: "",
+    finalWhistlePlayed: false,
+    // Identifies this exact match for deterministic sample-variant
+    // selection (see matchSound.js's stableHash) -- same idea as Match
+    // Lab's seed-based playbackId, just using this game's own per-match
+    // identity instead.
+    soundPlaybackId: `${runSeed}:${state.matchNumber}`,
   };
   if (lockPace) {
     paceSelect.value = "normal";
@@ -4121,6 +4149,12 @@ async function animateMatch(result, {
     if (!document.hidden) playback.resync();
   };
   document.addEventListener("visibilitychange", resyncVisibleMatch);
+  // Sound was already unlocked synchronously inside the originating click
+  // (playNext()/the friendly-room join flow) -- this is just the actual
+  // whistle cue, which is fine to fire from here even though this point is
+  // several awaits removed from that click (only *unlocking* the
+  // AudioContext needs to happen inside the gesture itself).
+  playEvent({ code: "MATCH.START" }, { playbackId: view.soundPlaybackId, eventId: "kickoff" });
   try {
     await playback.start({ startAt, offsetMs });
   } finally {
@@ -4548,6 +4582,13 @@ async function playRound(kind) {
 
 async function playNext() {
   if (state.busy || state.completed) return;
+  // Synchronous, first line of a real click handler -- satisfies the
+  // browser autoplay policy's requirement that unlocking/resuming the
+  // AudioContext happen inside the user gesture itself, not after any of
+  // the awaited squad-hydration/network calls below.
+  unlockSound();
+  preloadCore();
+  stopAllSound();
   state.busy = true;
   try {
     await playRound(state.phase);
@@ -4734,6 +4775,21 @@ function startFriendlyRoom() {
 }
 
 elements.nextButton.addEventListener("click", playNext);
+function updateSoundButton() {
+  const on = isSoundEnabled();
+  elements.soundButton.textContent = on ? "🔊 Sound On" : "🔇 Sound Off";
+  elements.soundButton.setAttribute("aria-pressed", String(on));
+}
+elements.soundButton.addEventListener("click", () => {
+  // Always available (header, not gated on match state) -- the one place a
+  // user in the friend-room waiting screen (no other click fires before
+  // that match starts automatically over the websocket) can unlock sound
+  // ahead of kickoff.
+  unlockSound();
+  setSoundEnabled(!isSoundEnabled());
+  updateSoundButton();
+});
+updateSoundButton();
 elements.recordForm.addEventListener("submit", saveCurrentRecord);
 elements.recordsClose.addEventListener("click", closeHallOfFame);
 elements.recordsPanel.addEventListener("click", (event) => {

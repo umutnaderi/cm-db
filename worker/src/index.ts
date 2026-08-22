@@ -162,6 +162,167 @@ async function cachedJson(
   return response;
 }
 
+const CANDIDATE_POOL_BAND_COUNT = 5;
+const CANDIDATE_POOL_BAND_SIZE = 60;
+const CANDIDATE_POOL_TTL_SECONDS = 3600;
+
+// Deterministic per-seed sort key -- same spirit as the SQL expression
+// /api/draft-candidates used to sort by (abs((id * 1103515245 + seed) %
+// 2147483647)), computed here in JS over an already-fetched pool instead
+// of asked of SQLite as a per-row ORDER BY expression. BigInt, not
+// Number, so a large source_person_id doesn't lose precision in the
+// multiply -- exact bit-compatibility with the old SQL formula isn't a
+// goal (this is a fresh pool, not the same rows), only "same seed, same
+// pool -> same picks, every time" is.
+// SQLite's CAST(x AS INTEGER) reads only a leading (optionally signed)
+// digit run and silently falls back to 0 for anything else -- it never
+// throws. source_person_id isn't always a plain integer (seen in local
+// data: "PLDATA2.DB1:1216"), so BigInt(sourcePersonId) would throw where
+// the original SQL's cast(...AS INTEGER) just silently produced 0 for
+// that row instead. Match that leniency, not JS's stricter BigInt().
+function sqliteCastIntegerPrefix(value: string): bigint {
+  const match = /^\s*[+-]?\d+/.exec(value);
+  return match ? BigInt(match[0]) : 0n;
+}
+
+function seededSortKey(sourcePersonId: string, databaseSeed: number): number {
+  const id = sqliteCastIntegerPrefix(sourcePersonId || "");
+  const key = (id * 1103515245n + BigInt(databaseSeed)) % 2147483647n;
+  return Number(key < 0n ? -key : key);
+}
+
+function pickBySeed(pool: QueryRow[], databaseSeed: number, limit: number): QueryRow[] {
+  return pool
+    .map((row) => ({ row, key: seededSortKey(textField(row, "source_person_id"), databaseSeed) }))
+    .sort((a, b) =>
+      a.key - b.key ||
+      textField(a.row, "source_person_id").localeCompare(textField(b.row, "source_person_id")),
+    )
+    .slice(0, limit)
+    .map((entry) => entry.row);
+}
+
+// The actual fix for /api/draft-candidates' latency (2026-08-21, see
+// MATCH_LAB_PLAN.md's "Follow-up 2" for the full investigation). The old
+// per-request query asked SQLite to ORDER BY an expression involving the
+// caller's `seed` -- that can't use any index (EXPLAIN QUERY PLAN showed
+// "USE TEMP B-TREE FOR ORDER BY": a full materialize-and-sort of every
+// row matching the WHERE clause, up to ~13.5k rows for the biggest
+// database, on EVERY single request) -- and the whole response was
+// wrapped in a cache keyed by the request URL, which never actually hit
+// because the client sends a fresh random seed on every call.
+//
+// This pool -- eligible players per (database, minAbility, position
+// filter) -- only depends on those STATIC parameters, never on `seed`,
+// so it's genuinely shareable across every caller asking for the same
+// combination, unlike the old per-seed cache that never hit.
+//
+// Fetched as CANDIDATE_POOL_BAND_COUNT index-friendly ability BANDS
+// spanning [minAbility, 200] -- e.g. minAbility=110 splits into
+// [110,128) [128,146) [146,164) [164,182) [182,200], each queried with
+// current_ability BETWEEN its own bounds (verified via EXPLAIN QUERY
+// PLAN to resolve as a pure walk of idx_player_search_db_ca, no sort
+// step at all, same as any other range predicate on an indexed column).
+//
+// Two earlier, simpler approaches were tried and rejected: a single "top
+// N by ability" slice makes the whole pool elite-only for any database
+// with more than N eligible players (fm2005 at minAbility 110, N=200,
+// floored out at CA 160+) -- and even TOP+BOTTOM (two slices, one from
+// each end) leaves a dead gap in the middle for a heavily skewed
+// distribution (fm2005 has 6274 players at CA 110-119 alone, so a
+// bottom-150 slice never gets past CA~111, and a top-150 slice never
+// gets below the 150th-most-elite player -- the whole 120-159 range was
+// completely absent from the pool, confirmed against real local data).
+// Banding by ability guarantees every part of the requested range is
+// represented, proportionally bounded by band count x band size rather
+// than by however lopsided one particular database's talent curve is.
+async function fetchCandidatePool(
+  db: ReturnType<typeof d1Client>,
+  ctx: ExecutionContext,
+  databaseSlug: string,
+  minAbility: number,
+  positionPatterns: string[],
+): Promise<QueryRow[]> {
+  const cacheKeyUrl = new URL("https://retroball-candidate-pool.internal/pool");
+  cacheKeyUrl.searchParams.set("db", databaseSlug);
+  cacheKeyUrl.searchParams.set("minAbility", String(minAbility));
+  cacheKeyUrl.searchParams.set("positions", positionPatterns.join(","));
+  // Bump whenever this function's query/pool SHAPE changes (band count,
+  // band size, columns) -- otherwise a stale differently-shaped cached
+  // pool from before the change keeps getting served under the same key
+  // (bit us locally during development: a stale single-slice pool from
+  // before an earlier revision of this function stayed cached and kept
+  // getting returned after the code changed, since the key itself never
+  // changed). Same convention this repo already uses for cache-busting
+  // JS module imports.
+  cacheKeyUrl.searchParams.set("__poolVersion", "3");
+  const cacheKey = new Request(cacheKeyUrl.toString());
+  const cache = caches.default;
+  const cached = await cache.match(cacheKey);
+  if (cached) return (await cached.json()) as QueryRow[];
+
+  const positionMatchSql = positionPatterns.length
+    ? positionPatterns.map(
+        () => "upper(replace(coalesce(ps.position_text, ''), ' ', '')) LIKE ?",
+      ).join(" OR ")
+    : "";
+  const bandSql = (isLastBand: boolean) => `
+    SELECT
+      candidates.*,
+      canonical_player.canonical_player_id,
+      canonical_player.canonical_player_public_id,
+      canonical_player.canonical_player_name,
+      profile.position_ratings_json
+    FROM (
+      ${playerSearchBaseSelectColumns()}
+      WHERE ps.database_slug = ?
+        AND ps.current_ability IS NOT NULL
+        AND ps.current_ability BETWEEN 100 AND 200
+        AND ps.current_ability >= ?
+        AND ps.current_ability ${isLastBand ? "<=" : "<"} ?
+        ${positionPatterns.length ? `AND (${positionMatchSql})` : ""}
+      ORDER BY
+        ps.current_ability DESC,
+        ps.source_person_id
+      LIMIT ?
+    ) candidates
+    LEFT JOIN canonical_player_names canonical_player
+      ON canonical_player.database_slug = candidates.database_slug
+     AND canonical_player.source_person_id = cast(candidates.source_person_id AS TEXT)
+    LEFT JOIN player_profile profile
+      ON profile.database_slug = candidates.database_slug
+     AND profile.source_person_id = candidates.source_person_id
+  `;
+  const bandWidth = Math.max(1, (200 - minAbility) / CANDIDATE_POOL_BAND_COUNT);
+  const bandQueries = Array.from({ length: CANDIDATE_POOL_BAND_COUNT }, (_, band) => {
+    const isLastBand = band === CANDIDATE_POOL_BAND_COUNT - 1;
+    const bandLow = Math.round(minAbility + band * bandWidth);
+    const bandHigh = isLastBand ? 200 : Math.round(minAbility + (band + 1) * bandWidth);
+    return {
+      sql: bandSql(isLastBand),
+      args: [databaseSlug, bandLow, bandHigh, ...positionPatterns, CANDIDATE_POOL_BAND_SIZE],
+    };
+  });
+  const bandResults = await db.batch(bandQueries);
+  const uniquePool = new Map<string, QueryRow>();
+  for (const result of bandResults) {
+    for (const row of result.rows) {
+      const key = textField(row, "source_person_id");
+      if (key && !uniquePool.has(key)) uniquePool.set(key, row);
+    }
+  }
+  const pool = [...uniquePool.values()];
+
+  const response = new Response(JSON.stringify(pool), {
+    headers: {
+      "content-type": "application/json",
+      "cache-control": `public, max-age=${CANDIDATE_POOL_TTL_SECONDS}`,
+    },
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return pool;
+}
+
 async function matchEdgeCache(request: Request): Promise<Response | undefined> {
   if (request.method !== "GET") return undefined;
   const cached = await caches.default.match(edgeCacheKey(request));
@@ -977,11 +1138,6 @@ export default {
         );
         const minAbility = Math.min(200, Math.max(100, parsedMinAbility || 100));
         const positionPatterns = draftPositionPatterns(url.searchParams.get("positions"));
-        const positionMatchSql = positionPatterns.length
-          ? positionPatterns.map(
-              () => "upper(replace(coalesce(ps.position_text, ''), ' ', '')) LIKE ?",
-            ).join(" OR ")
-          : "";
 
         return cachedJson(request, env, ctx, 300, async () => {
           const databaseResult = await db.execute(`
@@ -990,134 +1146,49 @@ export default {
             ORDER BY season_order
           `);
           const databases = databaseResult.rows;
-          const queries = databases.map((database, index) => {
-            const databaseSeed = (seed * 31 + (index + 1) * 397) % 2_147_483_647;
-            return {
-              sql: `
-                SELECT
-                  candidates.*,
-                  canonical_player.canonical_player_id,
-                  canonical_player.canonical_player_public_id,
-                  canonical_player.canonical_player_name,
-                  profile.position_ratings_json
-                FROM (
-                  ${playerSearchBaseSelectColumns()}
-                  WHERE ps.database_slug = ?
-                    AND ps.current_ability IS NOT NULL
-                    AND ps.current_ability BETWEEN 100 AND 200
-                    AND ps.current_ability >= ?
-                  ORDER BY
-                    abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
-                    ps.source_person_id
-                  LIMIT ?
-                ) candidates
-                LEFT JOIN canonical_player_names canonical_player
-                  ON canonical_player.database_slug = candidates.database_slug
-                 AND canonical_player.source_person_id = cast(candidates.source_person_id AS TEXT)
-                LEFT JOIN player_profile profile
-                  ON profile.database_slug = candidates.database_slug
-                 AND profile.source_person_id = candidates.source_person_id
-              `,
-              args: [
-                database.slug as string,
-                minAbility,
-                databaseSeed,
-                perDatabase,
-              ],
-            };
-          });
-          const targetedQueries = positionPatterns.length
-            ? databases.map((database, index) => {
-                const databaseSeed = (seed * 31 + (index + 1) * 397 + 8191) % 2_147_483_647;
-                return {
-                  sql: `
-                    SELECT
-                      candidates.*,
-                      canonical_player.canonical_player_id,
-                      canonical_player.canonical_player_public_id,
-                      canonical_player.canonical_player_name,
-                      profile.position_ratings_json
-                    FROM (
-                      ${playerSearchBaseSelectColumns()}
-                      WHERE ps.database_slug = ?
-                        AND ps.current_ability IS NOT NULL
-                        AND ps.current_ability BETWEEN 100 AND 200
-                        AND ps.current_ability >= ?
-                        AND (${positionMatchSql})
-                      ORDER BY
-                        abs((cast(ps.source_person_id AS INTEGER) * 1103515245 + ?) % 2147483647),
-                        ps.source_person_id
-                      LIMIT 4
-                    ) candidates
-                    LEFT JOIN canonical_player_names canonical_player
-                      ON canonical_player.database_slug = candidates.database_slug
-                     AND canonical_player.source_person_id = cast(candidates.source_person_id AS TEXT)
-                    LEFT JOIN player_profile profile
-                      ON profile.database_slug = candidates.database_slug
-                     AND profile.source_person_id = candidates.source_person_id
-                  `,
-                  args: [
-                    database.slug as string,
-                    minAbility,
-                    ...positionPatterns,
-                    databaseSeed,
-                  ],
-                };
-              })
+
+          // One (or two, if position-filtered) cached pool fetch per
+          // database instead of three seed-parameterized queries -- see
+          // fetchCandidatePool()'s own comment for the full story. Pools
+          // are shared across every request for the same database/
+          // minAbility/positions combination (independent of `seed`), so
+          // this is a cache hit for almost every call; only the rare
+          // first-request-per-hour-per-combination actually touches D1.
+          const generalPools = await Promise.all(
+            databases.map((database) =>
+              fetchCandidatePool(db, ctx, database.slug as string, minAbility, []),
+            ),
+          );
+          const targetedPools = positionPatterns.length
+            ? await Promise.all(
+                databases.map((database) =>
+                  fetchCandidatePool(db, ctx, database.slug as string, minAbility, positionPatterns),
+                ),
+              )
             : [];
-          const qualityQueries = databases.map((database, index) => {
-            const databaseSeed = (seed * 31 + (index + 1) * 397 + 16_381) % 2_147_483_647;
-            return {
-              sql: `
-                SELECT
-                  candidates.*,
-                  canonical_player.canonical_player_id,
-                  canonical_player.canonical_player_public_id,
-                  canonical_player.canonical_player_name,
-                  profile.position_ratings_json
-                FROM (
-                  ${playerSearchBaseSelectColumns()}
-                  WHERE ps.database_slug = ?
-                    AND ps.current_ability BETWEEN 140 AND 200
-                    AND ps.current_ability >= ?
-                  ORDER BY
-                    ps.current_ability DESC,
-                    ps.source_person_id
-                  LIMIT 24 OFFSET ?
-                ) candidates
-                LEFT JOIN canonical_player_names canonical_player
-                  ON canonical_player.database_slug = candidates.database_slug
-                 AND canonical_player.source_person_id = cast(candidates.source_person_id AS TEXT)
-                LEFT JOIN player_profile profile
-                  ON profile.database_slug = candidates.database_slug
-                 AND profile.source_person_id = candidates.source_person_id
-              `,
-              args: [
-                database.slug as string,
-                minAbility,
-                databaseSeed % 120,
-              ],
-            };
-          });
-          const queryResults = await db.batch([
-            ...queries,
-            ...targetedQueries,
-            ...qualityQueries,
-          ]);
-          const randomResults = queryResults.slice(0, databases.length);
-          const targetedResults = queryResults.slice(
-            databases.length,
-            databases.length + targetedQueries.length,
-          );
-          const qualityResults = queryResults.slice(
-            databases.length + targetedQueries.length,
-          );
-          const results = randomResults.map((result, index) => {
-            const rows = [
-              ...(targetedResults[index]?.rows || []),
-              ...(qualityResults[index]?.rows || []),
-              ...result.rows,
-            ];
+
+          const results = databases.map((database, index) => {
+            const generalPool = generalPools[index] || [];
+            const targetedPool = targetedPools[index] || [];
+            // The general pool is already ordered by current_ability DESC
+            // (that's what makes it index-friendly to fetch/cache) -- the
+            // "quality tier" the old qualityQueries fetched separately
+            // (CA 140-200) is just this pool's own head portion, already
+            // ranked, no extra query needed.
+            const qualityPool = generalPool.filter(
+              (row) => Number(row.current_ability) >= 140,
+            );
+
+            const randomSeed = (seed * 31 + (index + 1) * 397) % 2_147_483_647;
+            const targetedSeed = (seed * 31 + (index + 1) * 397 + 8191) % 2_147_483_647;
+            const qualitySeed = (seed * 31 + (index + 1) * 397 + 16_381) % 2_147_483_647;
+
+            const targetedPicks = positionPatterns.length ? pickBySeed(targetedPool, targetedSeed, 4) : [];
+            const qualityOffset = qualityPool.length ? Math.abs(qualitySeed) % qualityPool.length : 0;
+            const qualityPicks = qualityPool.slice(qualityOffset, qualityOffset + 24);
+            const randomPicks = pickBySeed(generalPool, randomSeed, perDatabase);
+
+            const rows = [...targetedPicks, ...qualityPicks, ...randomPicks];
             const uniqueRows = new Map<string, QueryRow>();
             for (const row of rows) {
               const key = textField(row, "source_person_id");

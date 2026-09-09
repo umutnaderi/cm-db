@@ -6335,16 +6335,59 @@ body.is-hall-of-fame-open {
   letter-spacing: 0.04em;
 }
 
+/* Match Setup Integration v1 (2026-09-04) -- the left column now holds the
+   tactics board, so it needs more width than the old search-only panel.
+   The pitch still takes every remaining pixel (1fr) and stays the largest
+   thing on screen; the page does not get wider overall, and nothing forces
+   horizontal scrolling. The setup column and the search disclosure share
+   the first grid track, stacked. */
 .match-lab-grid {
   display: grid;
-  grid-template-columns: 260px minmax(320px, 1fr) 340px;
+  grid-template-columns: 320px minmax(320px, 1fr) 340px;
+    grid-template-areas:
+      "setup pitch inspect"
+      "search pitch inspect";
+    grid-template-rows: auto auto;
   gap: 16px;
   align-items: start;
 }
 
+.match-lab-column-setup {
+  grid-area: setup;
+}
+
+.match-lab-column-search {
+  grid-area: search;
+}
+
+.match-lab-column-pitch {
+  grid-area: pitch;
+}
+
+.match-lab-column-inspect {
+  grid-area: inspect;
+}
+
+@media (max-width: 1180px) {
+  .match-lab-grid {
+    grid-template-columns: 300px minmax(280px, 1fr);
+    grid-template-areas:
+      "setup pitch"
+      "search pitch"
+      "inspect inspect";
+  }
+}
+
+/* Narrow screens stack in reading order: author the setup, look at the
+   pitch, then run and inspect. */
 @media (max-width: 980px) {
   .match-lab-grid {
     grid-template-columns: 1fr;
+    grid-template-areas:
+        "setup"
+        "search"
+        "pitch"
+        "inspect";
   }
 }
 
@@ -6775,6 +6818,137 @@ body.is-hall-of-fame-open {
   transition: opacity 250ms ease;
 }
 
+/* Tactical Region Foundation v1. A subtle 5x6 coaching grid, deliberately
+   different from the legacy numeric 3x4 zone index and drawn below the team-
+   shape targets/markers. It is diagnostic-only and pointer-transparent. */
+.ml-pitch-tactical-regions {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.ml-pitch-tactical-regions[data-visible="true"] {
+  opacity: 1;
+}
+
+.ml-tactical-region-cell {
+  fill: rgba(192, 132, 252, 0.018);
+  stroke: rgba(216, 180, 254, 0.32);
+  stroke-width: 0.16;
+  stroke-dasharray: 0.8 0.75;
+  vector-effect: non-scaling-stroke;
+}
+
+.ml-tactical-region-cell[data-lane-index="1"],
+.ml-tactical-region-cell[data-lane-index="3"] {
+  fill: rgba(250, 204, 21, 0.028);
+}
+
+.ml-pitch-tactical-regions-hud {
+  position: absolute;
+  z-index: 8;
+  right: 0.45rem;
+  bottom: 0.45rem;
+  max-width: calc(100% - 0.9rem);
+  padding: 0.3rem 0.45rem;
+  border: 1px solid rgba(216, 180, 254, 0.34);
+  border-radius: 5px;
+  background: rgba(18, 8, 29, 0.82);
+  color: #f5eafe;
+  font: 600 0.56rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-line;
+  pointer-events: none;
+}
+
+/* Team Shape & Phase Intelligence v1 developer overlay. All geometry is
+   derived from engine snapshots; this layer is pointer-transparent and can
+   never influence drag, targeting or playback. */
+.ml-pitch-shape-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.ml-pitch-shape-layer[data-visible="true"] {
+  opacity: 1;
+}
+
+.ml-shape-line {
+  stroke-width: 0.32;
+  stroke-dasharray: 2 1.5;
+  opacity: 0.72;
+}
+
+.ml-shape-home {
+  stroke: #ff8a8a;
+  color: #ff8a8a;
+}
+
+.ml-shape-away {
+  stroke: #7cc5ff;
+  color: #7cc5ff;
+}
+
+.ml-shape-centroid {
+  fill: currentColor;
+  stroke-width: 0.35;
+}
+
+.ml-shape-anchor-link {
+  stroke-width: 0.22;
+  stroke-dasharray: 0.9 0.9;
+  opacity: 0.55;
+}
+
+.ml-shape-intention-link {
+  stroke-width: 0.34;
+  opacity: 0.9;
+}
+
+.ml-shape-anchor {
+  fill: transparent;
+  stroke-width: 0.28;
+}
+
+.ml-shape-target {
+  fill: transparent;
+  stroke-width: 0.34;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: rotate(45deg);
+}
+
+.ml-shape-intention {
+  fill: currentColor;
+  stroke: #07140c;
+  stroke-width: 0.25;
+}
+
+.ml-pitch-shape-hud {
+  position: absolute;
+  z-index: 8;
+  top: 0.45rem;
+  left: 0.45rem;
+  max-width: calc(100% - 0.9rem);
+  padding: 0.3rem 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 5px;
+  background: rgba(4, 15, 9, 0.84);
+  color: #eefbf2;
+  font: 600 0.58rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-line;
+  pointer-events: none;
+}
 /* Deliberately NOT display:flex/flex-direction:column here anymore -- that
    made translate(-50%,-50%) center the whole dot+label stack as one box,
    so a marker WITH a label (every player) centered its dot slightly above
@@ -6861,41 +7035,27 @@ body.is-hall-of-fame-open {
   width: 8px;
   height: 8px;
   background: #fff;
+  /* Ball Realism v1 (2026-08-31) -- a real, explicit demand: the ball's
+         marker used to get pushed a synthetic, speed-scaled 16-34px off of a
+         player's own center ("--ball-rest-x/y", restingBallOffsetPx()) purely
+         so it stayed visible next to their circle -- a cosmetic position
+         override on top of otherwise-genuinely-simulated data, and the direct
+         cause of several real "the ball looks teleported" reports (that fake
+         offset's own synthetic speed/direction signal, not the ball's real
+         position, was what visibly snapped). --marker-x/y is now the ball's
+         ONLY position, always, exactly as authored -- when it's genuinely
+         coincident with a player (a hold, a touch's own contact instant),
+         this outline is what keeps the white dot visibly distinct instead of
+         any position trick. */
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
 }
 
 /* The ball owns its x/y/z presentation independently from player markers.
-   --ball-lift is authored by the immutable ball track, never inferred from a
-   nearby player. Ground touches stay at zero; crosses/shots rise above it.
-   --ball-rest-x/y (2026-08-19) is a SEPARATE, purely cosmetic pixel nudge --
-   the standalone `translate` property, not folded into the `transform`
-   above, specifically so it composes without clashing (same technique
-   .match-lab-marker[data-cosmetic="true"] already uses for the same
-   reason). At rest with an outfield player, the ball is drawn a fixed 18px
-   from that player's own center -- clearing their 22px-diameter dot's own
-   11px radius plus the ball's own 4px radius, so the ball reads as a real,
-   separate object "at their feet," never swallowed inside the player's own
-   circle. Exceptions (both handled entirely in JS, by leaving this at
-   0px,0px): a goalkeeper holding it, and a ball genuinely in the air (a
-   header contests it at head height, directly on the player, not off to
-   one side) -- see restingBallOffsetPx()'s own comment in match-lab.js.
-
-   This `translate` transition is deliberately UNCONDITIONAL (not gated
-   behind [data-animating="true"] the way --marker-x/y's own left/top
-   transition is) -- Timeline Playback v1 drives --marker-x/y directly,
-   every rAF frame, from its own continuously-sampled ball track, so a
-   transition there would visibly lag behind the true sampled position on
-   every ordinary pass/shot/carry (see [data-animating="true"]'s own
-   comment on exactly this). --ball-rest-x/y is different: it only
-   actually CHANGES value at the rare, discrete instant possession itself
-   changes hands (a real browser round reported this reading as an
-   instant teleport between one player's circle edge and the other's) --
-   it holds perfectly steady, frame after frame, the rest of the time, so
-   an always-on transition here animates exactly (and only) that handover,
-   without ever fighting the continuous sampler. */
+         --ball-lift is authored by the immutable ball track,
+         never inferred from a nearby player. Ground touches stay at zero;
+         crosses/shots rise above it. */
 .match-lab-marker-ball {
   transform: translate(-50%, calc(-50% - var(--ball-lift, 0px)));
-  translate: var(--ball-rest-x, 0px) var(--ball-rest-y, 0px);
-  transition: translate 180ms ease-out;
   z-index: 8;
 }
 
@@ -6903,6 +7063,111 @@ body.is-hall-of-fame-open {
   box-shadow: 0 calc(3px + var(--ball-lift, 0px)) 5px rgba(0, 0, 0, 0.45);
 }
 
+/* Ball Coordinates HUD v1 (2026-08-30) -- #labShowCoordsCheckbox, off by
+   default. match-lab.js writes the live text and toggles data-visible;
+   the show/hide itself lives here. Positioned ABOVE the ball (player name
+   labels sit below their own dot, --marker-label's own top:100%) so the
+   two never overlap when the ball sits right next to its owner. No fade
+   transition (unlike --marker-label's 600ms) -- this needs to read the
+   exact live value every single frame, not linger on a stale one. */
+.match-lab-ball-coords {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 3px;
+  padding: 1px 6px;
+  background: rgba(11, 18, 13, 0.88);
+  border: 1px solid rgba(255, 214, 10, 0.55);
+  border-radius: 999px;
+  color: #ffd60a;
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9;
+  display: none;
+}
+
+.match-lab-ball-coords[data-visible="true"] {
+  display: block;
+}
+
+/* Ball Coordinates HUD v1 -- the CARRIER's own copy (updatePlayerCoordsLabel(),
+   shown only for the current ball owner). A distinct color from the
+   ball's own amber readout so the two are never confused in a
+   screenshot -- this answers "did the ball move, or did the player move
+   to meet it," a real reported ambiguity the ball-only readout alone
+   couldn't settle. Same positioning/no-transition reasoning as
+   --ball-coords above. */
+.match-lab-player-coords {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 3px;
+  padding: 1px 6px;
+  background: rgba(11, 18, 13, 0.88);
+  border: 1px solid rgba(94, 200, 255, 0.55);
+  border-radius: 999px;
+  color: #5ec8ff;
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9;
+  display: none;
+}
+
+.match-lab-player-coords[data-visible="true"] {
+  display: block;
+}
+
+/* Stamina Bars v1 -- a small fixed-width track sitting directly under the
+   marker dot, with an inner fill span sized by --stamina-pct
+   (match-lab.js's own updateStaminaBar()). Green -> amber -> red via
+   data-low, the same "genuinely low" 35% threshold determineCarryGait()'s
+   own full-sprint floor uses -- a bar reading "low" here is exactly a bar
+   that would deny a full sprint right now. Every player at once (not just
+   the current ball owner, unlike the coordinate HUD above), off by
+   default. */
+.match-lab-stamina-bar {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 2px;
+  width: 22px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(11, 18, 13, 0.65);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 9;
+  display: none;
+}
+
+.match-lab-stamina-bar[data-visible="true"] {
+  display: block;
+}
+
+.match-lab-stamina-bar-fill {
+  display: block;
+  height: 100%;
+  width: var(--stamina-pct, 100%);
+  background: #34d058;
+  transition: width 200ms ease;
+}
+
+.match-lab-stamina-bar[data-low="true"] .match-lab-stamina-bar-fill {
+  background: #ff4d4f;
+}
+
+/* Room for the bar between the dot and the name label instead of the two
+   overlapping -- only when this marker's own bar is actually showing. */
+.match-lab-marker[data-show-stamina="true"] .match-lab-marker-label {
+  margin-top: 9px;
+}
 /* Animation v0 -- playback-only. Markers position via --marker-x/y even
    outside animation (renderPitch()/startDrag() set them directly); this
    modifier just adds a transition on the standard left/top properties, so
@@ -6915,6 +7180,12 @@ body.is-hall-of-fame-open {
               top var(--marker-duration, 400ms) ease-in-out;
 }
 
+/* RAF playback writes --marker-x/y every frame. A leftover CSS transition
+   on [data-animating="false"] fights the clock and reads as a hitch on
+   receive / first touch. */
+.match-lab-marker[data-animating="false"] {
+  transition: none !important;
+}
 /* One-shot flourishes, cleared and re-applied every step by the playback
    controller (CSS animations don't restart on re-setting the same
    attribute value, so "clear then set" is required, not optional). */
@@ -7101,6 +7372,149 @@ body.is-hall-of-fame-open {
   font-size: 0.76rem;
 }
 
+.match-lab-marking,
+.match-lab-attacking,
+.match-lab-transition {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Desktop Match Lab v2: make the live pitch the main canvas. The engine's
+   75x120 world is rotated as one unit, preserving markings, SVG diagnostics,
+   trails and animation geometry while placing the goals at left and right. */
+@media (min-width: 1181px) {
+  .match-lab-shell {
+    width: min(1800px, 100%);
+  }
+
+  .match-lab-grid {
+    grid-template-columns:
+      minmax(250px, 300px)
+      minmax(560px, 1fr)
+      minmax(270px, 320px);
+  }
+
+  .match-lab-column-pitch {
+    min-width: 0;
+  }
+
+  .match-lab-pitch {
+    aspect-ratio: 120 / 75;
+  }
+
+  .match-lab-pitch > .ml-pitch-field {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    /* Rotating swaps the physical axes. These dimensions retain the same
+       four-percent stand margin as portrait mode after the swap. */
+    width: 57.5%;
+    height: 147.2%;
+    transform: translate(-50%, -50%) rotate(-90deg);
+  }
+
+  .ml-pitch-field > .match-lab-marker {
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}
+
+.match-lab-marking-team,
+.match-lab-attacking-team,
+.match-lab-transition-team {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.match-lab-marking-team-label {
+  min-width: 3.4em;
+}
+
+.match-lab-marking-scheme,
+.match-lab-attacking-style {
+  padding: 4px 6px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 0.72rem;
+}
+
+/* Strictness "volume bar" (2026-08-24; reused for Attacking's directness
+   dial, 2026-08-25) -- five step buttons of increasing height, filled up
+   to the current level, echoing a physical equalizer/volume meter rather
+   than a plain numeric slider. */
+.match-lab-marking-strictness,
+.match-lab-attacking-strictness {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.match-lab-marking-strictness:focus-visible,
+.match-lab-attacking-strictness:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.match-lab-marking-bar,
+.match-lab-attacking-bar {
+  width: 8px;
+  padding: 0;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.match-lab-marking-bar[data-level="1"],
+.match-lab-attacking-bar[data-level="1"] {
+  height: 6px;
+}
+
+.match-lab-marking-bar[data-level="2"],
+.match-lab-attacking-bar[data-level="2"] {
+  height: 9px;
+}
+
+.match-lab-marking-bar[data-level="3"],
+.match-lab-attacking-bar[data-level="3"] {
+  height: 12px;
+}
+
+.match-lab-marking-bar[data-level="4"],
+.match-lab-attacking-bar[data-level="4"] {
+  height: 15px;
+}
+
+.match-lab-marking-bar[data-level="5"],
+.match-lab-attacking-bar[data-level="5"] {
+  height: 18px;
+}
+
+.match-lab-marking-bar.is-filled,
+.match-lab-attacking-bar.is-filled {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.match-lab-marking-bar:hover,
+.match-lab-attacking-bar:hover {
+  border-color: var(--accent);
+}
+
+.match-lab-marking-value,
+.match-lab-attacking-value {
+  min-width: 1.2em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+}
 .match-lab-trace-status {
   color: var(--accent);
   font-size: 0.68rem;
@@ -7484,6 +7898,411 @@ body.is-hall-of-fame-open {
   line-height: 1.45;
 }
 
+/* World Motion Contract v1 -- a move that covered more ground than the
+   player could physically cover in its own scheduled window. Development
+   telemetry: it marks an authoring bug, not a game event. */
+.match-lab-move-overrun {
+  color: #ff8f6b;
+}
+
+/* --- Match Setup Integration v1 (2026-09-04) ---------------------------- */
+
+/* The setup column needs room for a readable tactics board, but the pitch
+   stays the largest thing on the page. */
+.match-lab-column-setup {
+  min-width: 0;
+}
+
+.match-lab-setup-block {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.match-lab-setup-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--subtle);
+}
+
+.match-lab-setup-field select,
+.match-lab-setup-field input {
+  width: 100%;
+}
+
+.match-lab-setup-field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.82;
+}
+
+.match-lab-setup-note {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--subtle);
+}
+
+.match-lab-setup-note[data-state="ok"] {
+  color: #7fd98f;
+}
+
+.match-lab-setup-note[data-state="error"] {
+  color: #ff8f6b;
+}
+
+.match-lab-setup-note[data-state="manual"] {
+  color: #e6cc75;
+}
+
+.match-lab-choice-row,
+.match-lab-team-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.match-lab-choice-row button,
+.match-lab-team-tabs button {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.match-lab-choice-row button.is-selected,
+.match-lab-team-tabs button.is-selected {
+  outline: 2px solid var(--accent, #6ea8ff);
+}
+
+/* The tactics board is an EDITOR for the authored draft, not a second
+   simulation -- it draws each slot at the coordinate the pitch will get. */
+.match-lab-tactics-board {
+  position: relative;
+  aspect-ratio: 75 / 120;
+  width: 100%;
+  max-height: 320px;
+  margin: 4px auto;
+  background:
+    repeating-linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.018) 0 12.5%,
+      rgba(0, 0, 0, 0.025) 12.5% 25%),
+    var(--surface-1, #16301f);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.match-lab-role-map-toolbar {
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+}
+
+.match-lab-role-map-toolbar .match-lab-setup-note {
+  margin: 0;
+}
+
+.match-lab-role-map-grid {
+  --role-map-columns: 15;
+  --role-map-rows: 24;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--role-map-columns), 1fr);
+  grid-template-rows: repeat(var(--role-map-rows), 1fr);
+  gap: 1px;
+  padding: 1px;
+  pointer-events: none;
+}
+
+.match-lab-role-map-cell {
+  min-width: 0;
+  min-height: 0;
+  background: rgba(73, 222, 139, 0.1);
+  border: 1px solid rgba(116, 245, 174, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(9, 35, 20, 0.1);
+}
+
+.match-lab-role-map-cell[data-level="2"] { background: rgba(73, 222, 139, 0.16); }
+.match-lab-role-map-cell[data-level="3"] { background: rgba(76, 229, 142, 0.23); }
+.match-lab-role-map-cell[data-level="4"] { background: rgba(91, 235, 151, 0.32); }
+.match-lab-role-map-cell[data-level="5"] { background: rgba(128, 241, 166, 0.43); }
+.match-lab-role-map-cell[data-level="6"] {
+  background: rgba(178, 248, 188, 0.58);
+  border-color: rgba(213, 255, 220, 0.3);
+}
+
+.match-lab-tactics-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: block;
+  width: 58px;
+  height: 48px;
+  min-width: 58px;
+  padding: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #eaf3ec;
+  font-size: 0.56rem;
+  line-height: 1.15;
+  text-align: center;
+  cursor: pointer;
+  overflow: visible;
+}
+
+.match-lab-tactics-shirt {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 11px 12px 5px 5px;
+  background: rgba(7, 17, 11, 0.92);
+  border: 2px solid rgba(74, 222, 128, 0.72);
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(3, 9, 5, 0.7), 0 2px 5px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.match-lab-tactics-number {
+  position: absolute;
+  top: 4px;
+  left: 7px;
+  color: #f4f7f5;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.match-lab-tactics-details {
+  display: grid;
+  gap: 1px;
+  align-content: center;
+  justify-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.match-lab-tactics-board[data-team="away"] .match-lab-tactics-shirt {
+  border-color: rgba(255, 190, 120, 0.55);
+}
+
+.match-lab-tactics-marker[data-selected="true"] {
+  z-index: 2;
+}
+
+.match-lab-tactics-marker[data-selected="true"] .match-lab-tactics-shirt {
+  border-color: var(--accent, #6ea8ff);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25), 0 3px 8px rgba(0, 0, 0, 0.38);
+}
+
+.match-lab-tactics-marker:focus-visible {
+  outline: none;
+}
+
+.match-lab-tactics-marker:focus-visible .match-lab-tactics-shirt {
+  outline: 2px solid #f4f7f5;
+  outline-offset: 2px;
+}
+
+.match-lab-tactics-marker[data-included="false"] {
+  opacity: 0.4;
+}
+
+.match-lab-tactics-marker[data-included="false"] .match-lab-tactics-shirt {
+  border-style: dashed;
+}
+
+.match-lab-tactics-slot {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.match-lab-tactics-role-name {
+  display: -webkit-box;
+  max-width: 39px;
+  overflow: hidden;
+  color: #d9e6dc;
+  font-size: 0.46rem;
+  font-weight: 600;
+  line-height: 1.05;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.match-lab-duty-indicator {
+  position: absolute;
+  top: 7px;
+  right: 5px;
+  bottom: 7px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.match-lab-duty-dot {
+  width: 7px;
+  height: 7px;
+  background: #020604;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+}
+
+.match-lab-duty-dot[data-active="true"] {
+  background: var(--accent, #22c55e);
+  border-color: #71f59f;
+  box-shadow: 0 0 5px rgba(34, 197, 94, 0.75);
+}
+
+/* Restart Execution v2 -- in restart view the solid markers are the real
+   restart positions and these faint ones are the open-play anchors each
+   player releases back toward once the ball is live. */
+.match-lab-tactics-ghost {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 1px 3px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  border-radius: 3px;
+  color: rgba(234, 243, 236, 0.35);
+  font-size: 0.5rem;
+  pointer-events: none;
+}
+
+/* Action Pattern Schema v1 -- development diagnostics. Compact, optional,
+   and never load-bearing: nothing here affects the simulation. */
+.match-lab-pattern-diagnostics {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--surface-1, #12261a);
+  border-radius: 6px;
+}
+
+.match-lab-pattern-list {
+  margin: 0;
+  padding-left: 14px;
+  display: grid;
+  gap: 3px;
+  font-size: 0.62rem;
+  line-height: 1.35;
+}
+
+.match-lab-pattern-list li[data-state="matched"] {
+  color: #7fd98f;
+}
+
+.match-lab-pattern-list li[data-state="rejected"] {
+  color: var(--subtle);
+}
+
+.match-lab-tactics-role {
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 50%;
+  max-width: 88px;
+  transform: translateX(-50%);
+  overflow: hidden;
+  color: #9ad0ff;
+  font-size: 0.5rem;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-lab-tactics-marker[data-taker="true"] .match-lab-tactics-shirt {
+  border-color: #ffd479;
+  box-shadow: 0 0 0 1px rgba(255, 212, 121, 0.5);
+}
+
+.match-lab-tactics-marker[data-restart-role^="wall"] .match-lab-tactics-shirt {
+  border-color: #ff8f6b;
+}
+
+.match-lab-tactics-name {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 50%;
+  width: 82px;
+  transform: translateX(-50%);
+  overflow: hidden;
+  color: #f2f5f3;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.match-lab-slot-player {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.match-lab-setup-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.match-lab-setup-actions button {
+  flex: 1 1 auto;
+}
+
+.match-lab-setup-status {
+  margin: 6px 0 0;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  min-height: 1.2em;
+}
+
+.match-lab-setup-status[data-level="ok"] {
+  color: #7fd98f;
+}
+
+.match-lab-setup-status[data-level="warn"] {
+  color: #ffd479;
+}
+
+.match-lab-setup-status[data-level="error"] {
+  color: #ff8f6b;
+}
+
+/* "Find a player" is now a manual-edit fallback below Match Setup, not the
+   main content of the column. */
+.match-lab-column-search>.match-lab-search-summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 0;
+}
+
+/* World Motion Contract v1 -- routine carry touches collapsed under one
+   heading so a single continuous carry reads as one action rather than a
+   dozen. */
+.match-lab-trace-group>details>summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.match-lab-trace-sublist {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 4px;
+}
 .match-lab-distribution li {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -7678,4 +8497,509 @@ body.is-hall-of-fame-open {
   font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+/* Full-width tactics workspace. Match setup keeps the squad/restart inputs;
+   tactical controls live here in three readable, independent columns. */
+.match-lab-main-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 4px;
+  width: fit-content;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+}
+
+.match-lab-main-tabs button {
+  min-width: 120px;
+  padding: 8px 18px;
+  cursor: pointer;
+}
+
+.match-lab-main-tabs button[aria-selected="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08120c;
+}
+
+.match-lab-tactics-workspace {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.match-lab-tactics-workspace[hidden],
+.match-lab-grid[hidden] {
+  display: none;
+}
+
+.match-lab-tactics-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.match-lab-tactics-heading h2,
+.match-lab-tactics-heading p {
+  margin: 0;
+}
+
+.match-lab-tactics-heading p {
+  max-width: 680px;
+  color: var(--subtle);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.match-lab-tactics-layout {
+  display: grid;
+  grid-template-columns: minmax(270px, 0.85fr) minmax(430px, 1.35fr) minmax(270px, 0.85fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.match-lab-tactics-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.match-lab-tactics-section>.match-lab-setup-block {
+  margin: 0;
+}
+
+.match-lab-tactics-shape .match-lab-tactics-board {
+  width: min(100%, 560px);
+  max-height: none;
+  min-height: 520px;
+  touch-action: none;
+}
+
+.match-lab-tactics-board[data-view="open-play"] .match-lab-tactics-marker,
+.match-lab-tactics-board[data-view="with-ball"] .match-lab-tactics-marker,
+.match-lab-tactics-board[data-view="without-ball"] .match-lab-tactics-marker {
+  cursor: grab;
+}
+
+.match-lab-tactics-board[data-view="open-play"] .match-lab-tactics-marker:active,
+.match-lab-tactics-board[data-view="with-ball"] .match-lab-tactics-marker:active,
+.match-lab-tactics-board[data-view="without-ball"] .match-lab-tactics-marker:active {
+  z-index: 5;
+  cursor: grabbing;
+}
+
+.match-lab-phase-zone-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+}
+
+.match-lab-phase-zone-grid button {
+  position: relative;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.09);
+  border-radius: 0;
+  cursor: crosshair;
+}
+
+.match-lab-phase-zone-grid button[data-selected="true"] {
+  background: rgba(242, 210, 79, 0.08);
+  border-color: rgba(242, 210, 79, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(242, 210, 79, 0.2);
+}
+
+.match-lab-phase-zone-grid button[data-selected="true"]::after {
+  content: "⚽";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.62;
+  font-size: 0.8rem;
+}
+
+.match-lab-tactics-markings,
+.match-lab-tactics-markings>span {
+  position: absolute;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.match-lab-tactics-markings {
+  inset: 0;
+}
+
+.match-lab-tactics-halfway {
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.match-lab-tactics-centre-circle {
+  left: 36.666667%;
+  top: 41.666667%;
+  width: 26.666667%;
+  height: 16.666667%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+}
+
+.match-lab-tactics-box {
+  left: 20.666667%;
+  width: 58.666667%;
+  height: 15%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.match-lab-tactics-box-top {
+  top: -1px;
+}
+
+.match-lab-tactics-box-bottom {
+  bottom: -1px;
+}
+
+.match-lab-tactics-six-yard {
+  left: 36.666667%;
+  width: 26.666667%;
+  height: 5%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.match-lab-tactics-six-yard-top {
+  top: -1px;
+}
+
+.match-lab-tactics-six-yard-bottom {
+  bottom: -1px;
+}
+
+.match-lab-tactics-spot {
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+}
+
+.match-lab-tactics-centre-spot {
+  left: 50%;
+  top: 50%;
+}
+
+.match-lab-tactics-penalty-spot-top {
+  left: 50%;
+  top: 10%;
+}
+
+.match-lab-tactics-penalty-spot-bottom {
+  left: 50%;
+  top: 90%;
+}
+
+.match-lab-tactics-penalty-arc {
+  left: 36.666667%;
+  width: 26.666667%;
+  height: 16.666667%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+}
+
+.match-lab-tactics-penalty-arc-top {
+  top: 1.666667%;
+  clip-path: inset(80% 0 0 0);
+}
+
+.match-lab-tactics-penalty-arc-bottom {
+  bottom: 1.666667%;
+  clip-path: inset(0 0 80% 0);
+}
+
+.match-lab-tactics-corner-arc {
+  width: 2.666667%;
+  height: 1.666667%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+}
+
+.match-lab-tactics-corner-top-left {
+  left: -1.333333%;
+  top: -0.833333%;
+}
+
+.match-lab-tactics-corner-top-right {
+  right: -1.333333%;
+  top: -0.833333%;
+}
+
+.match-lab-tactics-corner-bottom-left {
+  left: -1.333333%;
+  bottom: -0.833333%;
+}
+
+.match-lab-tactics-corner-bottom-right {
+  right: -1.333333%;
+  bottom: -0.833333%;
+}
+
+.match-lab-tactics-marker[data-phase-override="false"] .match-lab-tactics-shirt {
+  border-style: dashed;
+}
+
+.match-lab-tactics-marker {
+  z-index: 1;
+}
+
+.match-lab-tactics-section .match-lab-marking,
+.match-lab-tactics-section .match-lab-attacking,
+.match-lab-tactics-section .match-lab-transition {
+  padding: 10px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.match-lab-tactics-section .match-lab-marking-team,
+.match-lab-tactics-section .match-lab-attacking-team,
+.match-lab-tactics-section .match-lab-transition-team {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 7px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.match-lab-tactics-section .match-lab-marking-team[hidden],
+.match-lab-tactics-section .match-lab-attacking-team[hidden],
+.match-lab-tactics-section .match-lab-transition-team[hidden] {
+  display: none;
+}
+
+.match-lab-tactics-section .match-lab-marking-team-label {
+  grid-row: 1;
+  align-self: start;
+  padding-top: 6px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.match-lab-team-instruction-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.match-lab-team-instruction-grid>label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.match-lab-team-instruction-grid select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 7px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 0.72rem;
+}
+
+.match-lab-team-instruction-grid .match-lab-team-instruction-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 7px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+}
+
+.match-lab-team-instruction-toggle input {
+  width: auto;
+  margin: 0;
+}
+
+.match-lab-team-meter-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) auto 18px;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.match-lab-team-shooting,
+.match-lab-team-tempo {
+  min-width: 0;
+  padding: 4px 6px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 0.72rem;
+}
+
+.match-lab-goalkeeper-instructions {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+}
+
+.match-lab-slot-editor,
+#labSlotEditorFields {
+  display: grid;
+  gap: 9px;
+}
+
+#labSlotEditorFields[hidden] {
+  display: none;
+}
+
+#labSlotShootingField[hidden],
+#labSlotTempoField[hidden],
+#labGoalkeeperInstructionFields[hidden],
+#labResetPhasePosition[hidden] {
+  display: none;
+}
+
+.match-lab-tactics-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+@media (max-width: 1180px) {
+  .match-lab-tactics-layout {
+    grid-template-columns: minmax(240px, 0.8fr) minmax(400px, 1.2fr);
+  }
+
+  #labPlayerTacticsHost {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .match-lab-tactics-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .match-lab-tactics-layout {
+    grid-template-columns: 1fr;
+  }
+
+  #labPlayerTacticsHost {
+    grid-column: auto;
+  }
+
+  .match-lab-tactics-shape .match-lab-tactics-board {
+    min-height: 430px;
+  }
+}
+.match-lab-highlight-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px;
+  background: #202723;
+  border: 1px solid #35483a;
+  border-radius: 7px;
+}
+.match-lab-highlight-controls select,
+.match-lab-highlight-controls button { min-height: 34px; width: 100%; }
+.match-lab-highlight-controls p { margin: 2px 0; font-size: 12px; }
+.match-lab-pitch { position: relative; }
+.match-lab-interlude {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  padding: 24px;
+  color: #d6e7d9;
+  text-align: center;
+  font-size: 20px;
+}
+.match-lab-interlude[hidden] { display: none; }
+
+.match-live-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  background: #141a17;
+  border: 1px solid #33433a;
+  border-radius: 8px;
+}
+.match-live-commentary {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  min-height: 42px;
+  overflow: hidden;
+  background: linear-gradient(90deg, #143875, #101c36 46%, #791c22);
+  border: 1px solid #54709c;
+  border-radius: 5px;
+  color: #fff;
+  font-weight: 700;
+}
+.match-live-minute { display: grid; place-items: center; background: rgba(0, 0, 0, 0.24); font-variant-numeric: tabular-nums; }
+.match-live-commentary p { align-self: center; margin: 0; padding: 8px 12px; text-align: center; line-height: 1.35; }
+.match-possession { display: grid; gap: 5px; }
+.match-possession-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--subtle); font-size: 0.7rem; }
+.match-possession-heading b:first-child { color: #8bb6ff; }
+.match-possession-heading b:last-child { color: #ff9299; }
+.match-possession-bar { display: flex; height: 12px; overflow: hidden; background: #29322d; border: 1px solid #526258; border-radius: 3px; }
+.match-possession-bar span { display: block; min-width: 0; transition: width 220ms ease; }
+.match-possession-bar .is-home { background: #2764c5; border-right: 1px solid #f4f7f5; }
+.match-possession-bar .is-away { background: #c3323b; }
+.match-live-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.match-live-actions button { min-height: 32px; cursor: pointer; }
+#labTacticsRequestStatus { flex: 1 1 220px; color: var(--subtle); font-size: 0.72rem; }
+.match-stats-panel { display: grid; grid-template-columns: minmax(150px, 0.35fr) minmax(180px, 0.65fr); gap: 10px 16px; align-items: start; padding-top: 10px; border-top: 1px solid #33433a; }
+.match-stats-panel[hidden] { display: none; }
+.match-stats-tabs { grid-column: 1 / -1; display: flex; gap: 6px; border-bottom: 1px solid #33433a; padding-bottom: 8px; }
+.match-stats-tabs button { min-height: 32px; cursor: pointer; }
+.match-stats-tabs button[aria-selected="true"] { color: #fff; background: #175a38; border-color: #20d675; }
+.match-stats-scope { display: grid; gap: 5px; color: var(--subtle); font-size: 0.7rem; }
+.match-heat-map { display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 75 / 120; max-height: 250px; background: #174727; border: 1px solid rgba(255,255,255,.55); }
+.match-heat-cell { background: rgba(255, 223, 75, var(--heat, 0)); box-shadow: inset 0 0 9px rgba(255, 64, 40, calc(var(--heat, 0) * .65)); }
+.match-stats-table-wrap { grid-column: 1 / -1; overflow-x: auto; }
+.match-stats-table { width: 100%; border-collapse: collapse; font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+.match-stats-table th, .match-stats-table td { padding: 6px 7px; border-bottom: 1px solid #304037; text-align: right; white-space: nowrap; }
+.match-stats-table th:first-child, .match-stats-table td:first-child { text-align: left; }
+.match-stats-table tr[data-team="home"] td:first-child { color: #9dbfff; }
+.match-stats-table tr[data-team="away"] td:first-child { color: #ffabb0; }
+#labResumeMatchButton[hidden] { display: none; }
+@media (max-width: 720px) {
+  .match-stats-panel { grid-template-columns: 1fr; }
+  .match-heat-map { justify-self: center; width: min(210px, 100%); }
 }

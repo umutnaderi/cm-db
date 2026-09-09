@@ -54,16 +54,16 @@ const recovery = resolveMotionBatch([{
 }], second.state, { durationMs: 450 });
 assert.equal(recovery.moves[0].intention.retained, false,
   "an offside recovery overrides the previous attacking commitment immediately");
-assert.deepEqual(recovery.moves[0].to, point(23, 62),
+assert.deepEqual(recovery.moves[0].intention.target, point(23, 62),
   "a forced recovery uses the fresh legal target rather than stale intent");
 
 const quickPath = buildMotionTrajectory({ from: point(10, 70), to: point(20, 55), player: quick, durationMs: 450 });
 const slowPath = buildMotionTrajectory({ from: point(10, 70), to: point(20, 55), player: slow, durationMs: 450 });
 const speed = (velocity) => Math.hypot(velocity.x, velocity.y);
 assert(speed(quickPath.endVelocity) > speed(slowPath.endVelocity),
-  "Pace affects locomotion texture while leaving the tactical endpoint unchanged");
-assert.deepEqual(quickPath.samples.at(-1).position, slowPath.samples.at(-1).position,
-  "movement attributes never rewrite the tactical destination");
+  "Pace changes the speed physically reached in the shared window");
+assert.notDeepEqual(quickPath.samples.at(-1).position, slowPath.samples.at(-1).position,
+  "different attributes cover different real ground toward the same tactical destination");
 
 const curved = buildMotionTrajectory({
   from: point(20, 60), to: point(40, 40), player: quick, durationMs: 500,
@@ -75,7 +75,7 @@ const plan = buildMatchLabPlaybackPlan({
     code: "ATT.ADJUST", label: "Runner continues", movement: "reposition", duration: 500,
     overlapWithPrevious: false,
     playerMoves: [{
-      playerId: "runner", from: point(20, 60), to: point(40, 40), action: "forward-run",
+      playerId: "runner", from: point(20, 60), to: curved.samples.at(-1).position, action: "forward-run",
       trajectory: curved.samples,
       intention: { action: "forward-run", target: point(40, 40), retained: true },
     }],
@@ -84,7 +84,7 @@ const plan = buildMatchLabPlaybackPlan({
 const midway = sampleMatchLabPlaybackPlan(plan, 250).players.runner;
 assert(Math.abs(midway.x - 30) > 0.05 || Math.abs(midway.y - 50) > 0.05,
   "playback consumes the authored curved trajectory instead of replacing it with a rigid straight midpoint");
-assert.deepEqual(sampleMatchLabPlaybackPlan(plan, 500).players.runner, point(40, 40),
+assert.deepEqual(sampleMatchLabPlaybackPlan(plan, 500).players.runner, curved.samples.at(-1).position,
   "velocity-aware interpolation still lands on the exact authoritative endpoint");
 assert(Object.isFrozen(plan), "the compiled motion playback plan remains immutable");
 

@@ -2,6 +2,7 @@ import { clamp } from "./matchEngineCore.js";
 import {
   reigniteFactor, timeToTopSpeed, topSpeed, turnRetention,
 } from "./playerKinetics.js";
+import { advanceMotion } from "./worldMotion.js";
 import { fromYardPoint, toYardPoint, yardDistance } from "./spatialDecision.js";
 
 const INTENTION_COMMIT_TICKS = 3;
@@ -130,7 +131,7 @@ function hermiteVelocity(origin, destination, startVelocity, endVelocity, durati
  * endpoints. Attribute data changes acceleration/turning texture only; it
  * never changes the tactical destination or consumes gameplay RNG.
  */
-export function buildMotionTrajectory({
+export function buildMotionTrajectoryLegacy({
   from, to, player = null, previousVelocity = null, durationMs = 450,
   continuing = false,
 } = {}) {
@@ -192,6 +193,18 @@ export function createMotionState() {
   return { tick: 0, players: {} };
 }
 
+// Compatibility adapter: endpoints are now reached positions, not promises.
+export function buildMotionTrajectory({
+  from, to, player = null, previousVelocity = null, durationMs = 450,
+  intention = "adjust", role = null,
+} = {}) {
+  const motion = advanceMotion({
+    from, intentionTarget: to, player: player || { current_ability: 100 },
+    elapsedMs: durationMs, incomingVelocity: previousVelocity, intention, role,
+  });
+  return { samples: motion.trajectory, endVelocity: motion.velocity, motion };
+}
+
 /**
  * Resolves every proposed movement from the same world snapshot. Inputs and
  * prior state are left untouched; the returned state becomes the sole memory
@@ -204,7 +217,7 @@ export function resolveMotionBatch(proposals = [], previousState = createMotionS
   const proposalIds = new Set(proposals.map((proposal) => proposal.id));
   const nextPlayers = Object.fromEntries(Object.entries(previousState.players || {}).map(([id, value]) => [id, {
     ...value,
-    velocity: proposalIds.has(id) ? cloneVelocity(value.velocity) : { x: 0, y: 0 },
+    velocity: cloneVelocity(value.velocity),
     intention: value.intention
       ? { ...value.intention, target: clonePoint(value.intention.target) }
       : null,
@@ -223,17 +236,19 @@ export function resolveMotionBatch(proposals = [], previousState = createMotionS
       previousVelocity: previous?.velocity,
       durationMs,
       continuing,
+      intention: proposal.action,
+      role: proposal.role,
     });
     const intention = { ...stabilized.intention, target: clonePoint(stabilized.intention.target) };
     nextPlayers[proposal.id] = {
       velocity: cloneVelocity(trajectory.endVelocity),
       intention,
-      lastPosition: clonePoint(target),
+      lastPosition: clonePoint(trajectory.motion.position),
     };
     return {
       id: proposal.id,
       from: clonePoint(proposal.from),
-      to: clonePoint(target),
+      to: clonePoint(trajectory.motion.position),
       action: proposal.action,
       role: proposal.role,
       trajectory: trajectory.samples,

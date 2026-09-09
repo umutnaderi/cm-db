@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "annotation:v4-arc-overlap-and-run-off-pass",
+  "name": "Switch of play: far-side overlap while the passer supports the ball",
+  "attackingDirection": "up",
+  "ball": {
+    "state": "passed",
+    "lanes": ["left-half-space"],
+    "depthBands": ["progression"]
+  },
+  "observations": [
+    {
+      "label": "passer",
+      "primitive": "run-off-pass",
+      "trigger": "immediately on releasing the pass",
+      "intention": "run-off-pass",
+      "relationships": [{ "relation": "passer", "to": "receiver" }],
+      "evidence": [
+        "sets off from the kick itself, not after the ball has arrived",
+        "runs relative to where the ball is going rather than square to their own position"
+      ],
+      "observationTime": 0,
+      "confidence": 0.95
+    },
+    {
+      "label": "receiver",
+      "primitive": "support-short",
+      "trigger": "offering an angle for the ball already travelling",
+      "intention": "support-short",
+      "relationships": [{ "relation": "intended-receiver", "to": "passer" }],
+      "evidence": ["opens the body to receive across, not with back to play"],
+      "observationTime": 0.2,
+      "confidence": 0.8
+    },
+    {
+      "label": "wideRunner",
+      "primitive": "arc-overlap",
+      "trigger": "unmarked on the opposite flank as the ball switches",
+      "intention": "arc-overlap",
+      "relationships": [{ "relation": "teammate-of-ball-owner", "to": "passer" }],
+      "evidence": [
+        "stays in the wide channel rather than cutting inside",
+        "no defender within tracking distance when the run begins",
+        "the run is on the far side from where the ball currently is"
+      ],
+      "observationTime": 0.5,
+      "confidence": 0.9
+    }
+  ],
+  "source": {
+    "reference": "V4",
+    "note": "Authored observation only. Three reusable fragments were recorded from one passage rather than one indivisible sequence."
+  }
+}

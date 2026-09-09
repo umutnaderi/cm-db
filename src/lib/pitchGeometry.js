@@ -5,6 +5,14 @@
 export const PITCH_WIDTH_YARDS = 75;
 export const PITCH_LENGTH_YARDS = 120;
 export const GOAL_WIDTH_YARDS = 8;
+// Regulation crossbar height (8ft = 2.6667yd) -- Shot As Projectile v1
+// (2026-08-27), the vertical axis a shot's own mouth point is checked
+// against (GOAL_WIDTH_YARDS already covers the horizontal one). Nothing
+// upstream of this constant needs a physical 3D renderer: every consumer
+// treats height as one extra scalar on an existing 2D point, the same
+// pattern matchPassFlight.js's own ballPositionAtElapsed() already
+// established for a pass's own arc.
+export const GOAL_HEIGHT_YARDS = 2.6667;
 
 export const PENALTY_AREA_DEPTH_YARDS = 18;
 export const PENALTY_AREA_WIDTH_YARDS = 44;
@@ -70,4 +78,47 @@ export function isInsideOwnPenaltyArea(entry, point = entry, attackingDirection 
     throw new Error("Own-penalty-area geometry requires an explicit attacking direction.");
   }
   return isInsidePenaltyArea(point, defendingGoalYForDirection(direction));
+}
+
+// Ball Out of Bounds v1 (2026-09-01) -- pure geometry, no team/attacking-
+// direction knowledge at all: given a straight ball segment in this
+// project's own percent-space, where (if anywhere) does it first cross a
+// touchline (x=0/x=100, "left"/"right") or byline (y=0/y=100, "top"/
+// "bottom")? Assumes `from` is itself on the pitch (true at every real
+// call site -- the ball's own position is on-pitch right up until the
+// exact instant this checks whether the NEXT point takes it off).
+// Returns null when `to` is still on the pitch -- a straight segment
+// between two in-bounds points can never exit a convex rectangle and
+// come back, so that single check is sufficient; never a "grazes the
+// line and returns" false positive.
+export function findPitchExit(from, to) {
+  const fx = Number(from?.x);
+  const fy = Number(from?.y);
+  const tx = Number(to?.x);
+  const ty = Number(to?.y);
+  if (![fx, fy, tx, ty].every(Number.isFinite)) return null;
+  if (tx >= 0 && tx <= 100 && ty >= 0 && ty <= 100) return null;
+  const dx = tx - fx;
+  const dy = ty - fy;
+  let bestT = null;
+  let edge = null;
+  const consider = (t, candidateEdge) => {
+    if (t === null || !Number.isFinite(t) || t < 0 || t > 1) return;
+    if (bestT === null || t < bestT) {
+      bestT = t;
+      edge = candidateEdge;
+    }
+  };
+  if (dx < 0) consider((0 - fx) / dx, "left");
+  else if (dx > 0) consider((100 - fx) / dx, "right");
+  if (dy < 0) consider((0 - fy) / dy, "top");
+  else if (dy > 0) consider((100 - fy) / dy, "bottom");
+  if (bestT === null) return null;
+  return {
+    edge,
+    point: {
+      x: Math.max(0, Math.min(100, fx + dx * bestT)),
+      y: Math.max(0, Math.min(100, fy + dy * bestT)),
+    },
+  };
 }

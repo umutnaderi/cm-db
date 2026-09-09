@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "engineVersion": "match-lab-freeplay-v1",
+  "capturedAt": "2026-09-03T17:05:49.737Z",
+  "reason": "Through ball into space for a forward run resolves P.RECEIVE.LATE; reported as always exiting play rather than settling/being recovered (new-issues.md, \"through ball - passer chasing a loose ball issue\").",
+  "tags": [
+    "through-ball",
+    "loose-ball",
+    "reported-bug"
+  ],
+  "seed": 6,
+  "database": "",
+  "ballOwnerId": "passer",
+  "attackingDirections": {
+    "home": "down",
+    "away": "up"
+  },
+  "tacticalSettings": {
+    "marking": {
+      "home": {
+        "scheme": "man",
+        "tightness": 3
+      },
+      "away": {
+        "scheme": "man",
+        "tightness": 3
+      }
+    },
+    "attacking": {
+      "home": {
+        "style": "possession",
+        "directness": 2
+      },
+      "away": {
+        "style": "possession",
+        "directness": 2
+      }
+    }
+  },
+  "roster": [
+    {
+      "id": "passer",
+      "role": "player",
+      "team": "home",
+      "position": {
+        "x": 50,
+        "y": 45
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Through Passer",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Passing",
+            "value": 17
+          },
+          {
+            "label": "Technique",
+            "value": 16
+          },
+          {
+            "label": "Vision",
+            "value": 17
+          },
+          {
+            "label": "Decisions",
+            "value": 15
+          },
+          {
+            "label": "Teamwork",
+            "value": 14
+          }
+        ]
+      }
+    },
+    {
+      "id": "runner",
+      "role": "player",
+      "team": "home",
+      "position": {
+        "x": 55,
+        "y": 68
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Deep Runner",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Pace",
+            "value": 11
+          },
+          {
+            "label": "Acceleration",
+            "value": 11
+          },
+          {
+            "label": "Off the Ball",
+            "value": 14
+          },
+          {
+            "label": "Decisions",
+            "value": 12
+          }
+        ]
+      }
+    },
+    {
+      "id": "defender",
+      "role": "player",
+      "team": "away",
+      "position": {
+        "x": 52,
+        "y": 74
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Covering Defender",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Positioning",
+            "value": 13
+          },
+          {
+            "label": "Anticipation",
+            "value": 12
+          },
+          {
+            "label": "Pace",
+            "value": 14
+          },
+          {
+            "label": "Tackling",
+            "value": 12
+          }
+        ]
+      }
+    },
+    {
+      "id": "keeper",
+      "role": "keeper",
+      "team": "away",
+      "position": {
+        "x": 50,
+        "y": 97
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Away Keeper",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Reflexes",
+            "value": 13
+          },
+          {
+            "label": "Handling",
+            "value": 12
+          },
+          {
+            "label": "Positioning",
+            "value": 13
+          },
+          {
+            "label": "One On Ones",
+            "value": 12
+          }
+        ]
+      }
+    }
+  ]
+}

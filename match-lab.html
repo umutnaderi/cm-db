@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Match Lab · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260820-02">
+    <link rel="stylesheet" href="styles.css?v=20260909-04">
   </head>
   <body class="match-lab-page">
     <main class="match-lab-shell">
@@ -24,9 +24,339 @@
         </div>
       </header>
 
-      <section class="match-lab-grid">
-        <div class="match-lab-column">
-          <h2 class="match-lab-panel-title">Find a player</h2>
+      <nav class="match-lab-main-tabs" role="tablist" aria-label="Match Lab workspace">
+        <button type="button" id="labMatchTab" role="tab" aria-selected="true">Match</button>
+        <button type="button" id="labTacticsTab" role="tab" aria-selected="false">Tactics</button>
+      </nav>
+
+      <section class="match-lab-grid" id="labMatchWorkspace">
+        <div class="match-lab-column match-lab-column-setup">
+          <h2 class="match-lab-panel-title">Match Setup</h2>
+          <p class="match-lab-hint">
+            Choose the squads, format and start of play here, then press
+            <strong>Apply Setup</strong>. Nothing on this panel touches the
+            pitch until you do — it edits a draft, so an experiment that goes
+            wrong leaves the current setup exactly as it was. Formation and
+            instructions are in the main <strong>Tactics</strong> tab.
+          </p>
+
+          <div class="match-lab-setup-block" id="labSquadsSetupPanel">
+            <h3 class="match-lab-section-title">Squads</h3>
+            <label class="match-lab-setup-field">
+              Home
+              <select id="labHomeSquadSelect"></select>
+            </label>
+            <p class="match-lab-setup-note" id="labHomeSquadStatus"></p>
+            <label class="match-lab-setup-field">
+              Away
+              <select id="labAwaySquadSelect"></select>
+            </label>
+            <p class="match-lab-setup-note" id="labAwaySquadStatus"></p>
+          </div>
+
+          <div class="match-lab-setup-block">
+            <h3 class="match-lab-section-title">Format</h3>
+            <div class="match-lab-choice-row" id="labFormatChoices" role="group" aria-label="Match format"></div>
+            <p class="match-lab-setup-note">
+              Reduced-sided shapes are projected deterministically from the
+              chosen formation — the same squad and formation always give the
+              same XI. A format button never rolls a random side.
+            </p>
+          </div>
+
+          <div class="match-lab-setup-block" id="labShapeTacticsPanel">
+            <div class="match-lab-team-tabs" role="tablist" aria-label="Tactics board team">
+              <button type="button" id="labSetupHomeTab" role="tab" aria-selected="true" data-setup-team="home">Home</button>
+              <button type="button" id="labSetupAwayTab" role="tab" aria-selected="false" data-setup-team="away">Away</button>
+            </div>
+            <label class="match-lab-setup-field">
+              Formation
+              <select id="labFormationSelect"></select>
+            </label>
+            <label class="match-lab-setup-field">
+              Formation style
+              <select id="labFormationStyleSelect">
+                <option value="Defensive">Defensive</option>
+                <option value="Balanced" selected>Balanced</option>
+                <option value="Attacking">Attacking</option>
+              </select>
+            </label>
+            <p class="match-lab-setup-note" id="labFormationNote">
+              A neutral default shape, not a claim of historical authenticity —
+              the catalogue carries no per-squad tactical metadata yet. Change
+              it freely.
+            </p>
+            <div class="match-lab-choice-row" id="labBoardViewChoices" role="group" aria-label="Board view">
+              <button type="button" data-board-view="open-play" class="is-selected">Formation</button>
+              <button type="button" data-board-view="with-ball">With ball</button>
+              <button type="button" data-board-view="without-ball">Without ball</button>
+              <button type="button" data-board-view="restart">Restart shape</button>
+            </div>
+            <div class="match-lab-role-map-toolbar">
+              <label class="match-lab-switch">
+                <input type="checkbox" id="labShowRoleMap" checked aria-controls="labTacticsBoard">
+                <span class="match-lab-switch-track"></span>
+                <span class="match-lab-switch-label">Show selected role map</span>
+              </label>
+              <p class="match-lab-setup-note" id="labRoleMapNote" role="status">
+                Select a player to display the role's likely operating area.
+              </p>
+            </div>
+            <div class="match-lab-tactics-board" id="labTacticsBoard" aria-label="Tactics board"></div>
+            <p class="match-lab-setup-note" id="labBoardViewNote"></p>
+            <div class="match-lab-slot-editor" id="labSlotEditor">
+              <p class="match-lab-setup-note" id="labSlotEditorEmpty">Select a marker to edit that position.</p>
+              <div id="labSlotEditorFields" hidden>
+                <p class="match-lab-slot-player" id="labSlotPlayer"></p>
+                <label class="match-lab-setup-field">
+                  Positional slot
+                  <input id="labSlotPosition" type="text" readonly>
+                </label>
+                <label class="match-lab-setup-field">
+                  Tactical role
+                  <select id="labSlotRole"></select>
+                </label>
+                <p class="match-lab-setup-note" id="labSlotRoleNote">
+                  The choices follow this exact positional slot.
+                </p>
+                <label class="match-lab-setup-field">
+                  Duty
+                  <select id="labSlotDuty">
+                    <option value="attack">Attack</option>
+                    <option value="support">Support</option>
+                    <option value="defend">Defend</option>
+                  </select>
+                </label>
+                <label class="match-lab-setup-field" id="labSlotShootingField">
+                  Shooting instruction
+                  <select id="labSlotShootingInstruction">
+                    <option value="inherit" selected>Use team instruction</option>
+                    <option value="discourage">Shoot less</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="encourage">Shoot more</option>
+                  </select>
+                </label>
+                <label class="match-lab-setup-field" id="labSlotTempoField">
+                  Tempo instruction
+                  <select id="labSlotTempoInstruction">
+                    <option value="inherit" selected>Use team instruction</option>
+                    <option value="slow">Slow</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="quick">Quick</option>
+                  </select>
+                </label>
+                <div class="match-lab-goalkeeper-instructions" id="labGoalkeeperInstructionFields" hidden>
+                  <label class="match-lab-setup-field">
+                    Distribution
+                    <select id="labGoalkeeperDistribution">
+                      <option value="short">Short</option>
+                      <option value="mixed" selected>Mixed</option>
+                      <option value="long">Long</option>
+                    </select>
+                  </label>
+                  <label class="match-lab-setup-field">
+                    Sweeping
+                    <select id="labGoalkeeperSweeping">
+                      <option value="cautious">Cautious</option>
+                      <option value="balanced" selected>Balanced</option>
+                      <option value="aggressive">Aggressive</option>
+                    </select>
+                  </label>
+                  <p class="match-lab-setup-note">
+                    Goalkeepers use distribution and sweeping instructions.
+                    Shooting and tempo do not apply to them.
+                  </p>
+                </div>
+                <button type="button" id="labResetPhasePosition" hidden>Reset this phase position</button>
+                <label class="match-lab-switch">
+                  <input type="checkbox" id="labSlotIncluded" checked>
+                  <span class="match-lab-switch-track"></span>
+                  <span class="match-lab-switch-label">Included in the XI</span>
+                </label>
+                <p class="match-lab-setup-note">
+                  Player instructions inherit the team plan until explicitly
+                  overridden. Roles, duties and WIB/WOB positions guide the
+                  engine; live jobs, attributes and movement timing still
+                  decide what the player can execute.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="match-lab-setup-block" id="labGeneralSetupPanel">
+            <h3 class="match-lab-section-title">Start of play</h3>
+            <label class="match-lab-setup-field">
+              Restart
+              <select id="labRestartTypeSelect">
+                <option value="kickoff">Kick-off</option>
+                <option value="free-kick-attacking">Attacking free kick</option>
+                <option value="free-kick-defending">Defending free kick</option>
+                <option value="corner">Corner</option>
+                <option value="goal-kick">Goal kick</option>
+                <option value="throw-in">Throw-in</option>
+              </select>
+            </label>
+            <label class="match-lab-setup-field">
+              Taken by
+              <select id="labRestartTeamSelect">
+                <option value="home">Home</option>
+                <option value="away">Away</option>
+              </select>
+            </label>
+            <label class="match-lab-setup-field" id="labRestartSideField">
+              Side
+              <select id="labRestartSideSelect">
+                <option value="left">Left</option>
+                <option value="right">Right</option>
+              </select>
+            </label>
+            <label class="match-lab-setup-field">
+              Taker
+              <select id="labRestartTakerSelect">
+                <option value="">Auto (best suited)</option>
+              </select>
+            </label>
+            <label class="match-lab-switch">
+              <input type="checkbox" id="labShowRestartRolesCheckbox">
+              <span class="match-lab-switch-track"></span>
+              <span class="match-lab-switch-label">Show restart roles</span>
+            </label>
+            <p class="match-lab-setup-note" id="labRestartNote"></p>
+          </div>
+
+          <div class="match-lab-setup-block" id="labDiagnosticsSetupPanel">
+            <h3 class="match-lab-section-title">Action patterns</h3>
+            <label class="match-lab-switch">
+              <input type="checkbox" id="labShowPatternDiagnosticsCheckbox">
+              <span class="match-lab-switch-track"></span>
+              <span class="match-lab-switch-label">Show pattern matching</span>
+            </label>
+            <div class="match-lab-pattern-diagnostics" id="labPatternDiagnostics" hidden></div>
+            <label class="match-lab-toggle"><input type="checkbox" id="labShowFluidityDiagnostics"> Movement and timeline diagnostics</label>
+            <pre id="labFluidityDiagnostics" hidden style="max-height: 28rem; overflow: auto; white-space: pre-wrap"></pre>
+            <p class="match-lab-setup-note">
+              Development view of the last off-ball pattern evaluation: which
+              declarations matched, which were rejected and why, the abstract
+              participants each bound, and the jobs proposed. Reading it never
+              changes the simulation and consumes no randomness.
+            </p>
+          </div>
+
+          <div class="match-lab-setup-block">
+          <label class="match-lab-attacking-direction" title="Explicit, not inferred from position -- which end each team is attacking, for the Free Play possession runner's progression/goal-target logic">
+            Home attacks
+            <select id="labAttackingDirectionSelect">
+              <option value="down">↓ (away attacks ↑)</option>
+              <option value="up">↑ (away attacks ↓)</option>
+            </select>
+          </label>
+
+            <div class="match-lab-marking" id="labMarkingTacticsPanel" title="Sets each team's own defensive approach for the Free Play possession runner: Man marks an assigned opponent wherever they go, Zonal holds a strip of the pitch instead. Strictness sets how tight the standoff is, 1 (loose) to 5 (hip-to-hip).">
+            <h3 class="match-lab-section-title">Out of possession</h3>
+            <div class="match-lab-marking-team" data-team="home">
+              <span class="match-lab-marking-team-label">Home</span>
+              <div class="match-lab-team-instruction-grid">
+                <label><span>Marking</span><select class="match-lab-marking-scheme" data-team="home" aria-label="Home marking scheme"><option value="man">Man</option><option value="zonal">Zonal</option></select></label>
+                <label><span>Pressing</span><select class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="pressing"><option value="low">Less often</option><option value="standard">Standard</option><option value="high">More often</option></select></label>
+                <label><span>Tackling</span><select class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="tackling"><option value="stay-on-feet">Stay on feet</option><option value="balanced">Balanced</option><option value="get-stuck-in">Get stuck in</option></select></label>
+                <label><span>Defensive line</span><select class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="defensiveLine"><option value="deep">Deeper</option><option value="standard">Standard</option><option value="high">Higher</option></select></label>
+                <label><span>Line of engagement</span><select class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="engagementLine"><option value="low">Lower</option><option value="standard">Standard</option><option value="high">Higher</option></select></label>
+                <label><span>Pressing trap</span><select class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="pressingTrap"><option value="none">No trap</option><option value="inside">Trap inside</option><option value="outside">Trap outside</option></select></label>
+                <label><span>Cross engagement</span><select class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="crossEngagement"><option value="normal">Normal</option><option value="stop">Stop crosses</option><option value="invite">Invite crosses</option></select></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="offsideTrap"><span>Use offside trap</span></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="home" data-section="marking" data-field="preventShortGk"><span>Prevent short goalkeeper distribution</span></label>
+                <div class="match-lab-team-meter-row"><span>Marking tightness</span><div class="match-lab-marking-strictness" data-team="home" role="slider" aria-label="Home marking strictness" aria-valuemin="1" aria-valuemax="5" aria-valuenow="3" tabindex="0">
+                  <button type="button" class="match-lab-marking-bar" data-team="home" data-level="1"></button><button type="button" class="match-lab-marking-bar" data-team="home" data-level="2"></button><button type="button" class="match-lab-marking-bar" data-team="home" data-level="3"></button><button type="button" class="match-lab-marking-bar" data-team="home" data-level="4"></button><button type="button" class="match-lab-marking-bar" data-team="home" data-level="5"></button>
+                </div><span class="match-lab-marking-value" data-team="home">3</span></div>
+              </div>
+            </div>
+            <div class="match-lab-marking-team" data-team="away">
+              <span class="match-lab-marking-team-label">Away</span>
+              <div class="match-lab-team-instruction-grid">
+                <label><span>Marking</span><select class="match-lab-marking-scheme" data-team="away" aria-label="Away marking scheme"><option value="man">Man</option><option value="zonal">Zonal</option></select></label>
+                <label><span>Pressing</span><select class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="pressing"><option value="low">Less often</option><option value="standard">Standard</option><option value="high">More often</option></select></label>
+                <label><span>Tackling</span><select class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="tackling"><option value="stay-on-feet">Stay on feet</option><option value="balanced">Balanced</option><option value="get-stuck-in">Get stuck in</option></select></label>
+                <label><span>Defensive line</span><select class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="defensiveLine"><option value="deep">Deeper</option><option value="standard">Standard</option><option value="high">Higher</option></select></label>
+                <label><span>Line of engagement</span><select class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="engagementLine"><option value="low">Lower</option><option value="standard">Standard</option><option value="high">Higher</option></select></label>
+                <label><span>Pressing trap</span><select class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="pressingTrap"><option value="none">No trap</option><option value="inside">Trap inside</option><option value="outside">Trap outside</option></select></label>
+                <label><span>Cross engagement</span><select class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="crossEngagement"><option value="normal">Normal</option><option value="stop">Stop crosses</option><option value="invite">Invite crosses</option></select></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="offsideTrap"><span>Use offside trap</span></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="away" data-section="marking" data-field="preventShortGk"><span>Prevent short goalkeeper distribution</span></label>
+                <div class="match-lab-team-meter-row"><span>Marking tightness</span><div class="match-lab-marking-strictness" data-team="away" role="slider" aria-label="Away marking strictness" aria-valuemin="1" aria-valuemax="5" aria-valuenow="3" tabindex="0">
+                  <button type="button" class="match-lab-marking-bar" data-team="away" data-level="1"></button><button type="button" class="match-lab-marking-bar" data-team="away" data-level="2"></button><button type="button" class="match-lab-marking-bar" data-team="away" data-level="3"></button><button type="button" class="match-lab-marking-bar" data-team="away" data-level="4"></button><button type="button" class="match-lab-marking-bar" data-team="away" data-level="5"></button>
+                </div><span class="match-lab-marking-value" data-team="away">3</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="match-lab-attacking" id="labAttackingTacticsPanel" title="Sets each team's own on-the-ball approach for the Free Play possession runner: a bias on top of already-legal candidates, never a filter -- it never deletes or invents an option. Directness sets how readily an ambitious ball is chosen over the next free man, 1 (always take the short option) to 5 (look furthest first).">
+            <h3 class="match-lab-section-title">In possession</h3>
+            <div class="match-lab-attacking-team" data-team="home">
+              <span class="match-lab-marking-team-label">Home</span>
+              <div class="match-lab-team-instruction-grid">
+                <label><span>Kickoff approach</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="kickoff"><option value="mixed">Mixed</option><option value="keep-possession">Keep possession</option><option value="play-backwards">Play backwards</option><option value="build-midfield">Build through midfield</option><option value="attack-quickly">Attack quickly</option><option value="play-into-space">Play into space</option><option value="go-wide">Go wide early</option><option value="switch-flank">Switch flank</option><option value="target-forward">Hit target forward</option><option value="go-long">Go long</option><option value="territory">Attacking-third throw-in &amp; press</option></select></label>
+                <label><span>Mentality</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="mentality"><option value="defensive">Defensive</option><option value="cautious">Cautious</option><option value="balanced">Balanced</option><option value="positive">Positive</option><option value="attacking">Attacking</option></select></label>
+                <label><span>Passing style</span><select class="match-lab-attacking-style" data-team="home" aria-label="Home attacking style"><option value="possession">Possession</option><option value="direct">Direct</option><option value="long-ball">Long ball</option><option value="wing">Wing play</option></select></label>
+                <label><span>Attacking width</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="width"><option value="narrow">Narrow</option><option value="balanced">Balanced</option><option value="wide">Wide</option></select></label>
+                <label><span>Focus play</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="focusPlay"><option value="mixed">Mixed</option><option value="left">Left</option><option value="centre">Through middle</option><option value="right">Right</option></select></label>
+                <label><span>Shooting</span><select class="match-lab-team-shooting" data-team="home" aria-label="Home shooting instruction"><option value="discourage">Shoot less</option><option value="balanced" selected>Balanced</option><option value="encourage">Shoot more</option></select></label>
+                <label><span>Tempo</span><select class="match-lab-team-tempo" data-team="home" aria-label="Home tempo"><option value="slow">Slower</option><option value="balanced" selected>Balanced</option><option value="quick">Higher</option></select></label>
+                <label><span>Dribbling</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="dribbling"><option value="less">Dribble less</option><option value="balanced">Balanced</option><option value="more">Run at defence</option></select></label>
+                <label><span>Creative freedom</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="creativity"><option value="disciplined">More disciplined</option><option value="balanced">Balanced</option><option value="expressive">More expressive</option></select></label>
+                <label><span>Final third</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="finalThird"><option value="mixed">Mixed</option><option value="work-ball">Work ball into box</option><option value="shoot-on-sight">Shoot on sight</option><option value="early-crosses">Hit early crosses</option></select></label>
+                <label><span>Time wasting</span><select class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="timeWasting"><option value="never">Never</option><option value="sometimes">Sometimes</option><option value="often">Often</option></select></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="passIntoSpace"><span>Pass into space</span></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="home" data-section="attacking" data-field="playOutOfDefence"><span>Play out of defence</span></label>
+                <div class="match-lab-team-meter-row"><span>Passing directness</span><div class="match-lab-attacking-strictness" data-team="home" role="slider" aria-label="Home directness" aria-valuemin="1" aria-valuemax="5" aria-valuenow="2" tabindex="0">
+                  <button type="button" class="match-lab-attacking-bar" data-team="home" data-level="1"></button><button type="button" class="match-lab-attacking-bar" data-team="home" data-level="2"></button><button type="button" class="match-lab-attacking-bar" data-team="home" data-level="3"></button><button type="button" class="match-lab-attacking-bar" data-team="home" data-level="4"></button><button type="button" class="match-lab-attacking-bar" data-team="home" data-level="5"></button>
+                </div><span class="match-lab-attacking-value" data-team="home">2</span></div>
+              </div>
+            </div>
+            <div class="match-lab-attacking-team" data-team="away">
+              <span class="match-lab-marking-team-label">Away</span>
+              <div class="match-lab-team-instruction-grid">
+                <label><span>Kickoff approach</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="kickoff"><option value="mixed">Mixed</option><option value="keep-possession">Keep possession</option><option value="play-backwards">Play backwards</option><option value="build-midfield">Build through midfield</option><option value="attack-quickly">Attack quickly</option><option value="play-into-space">Play into space</option><option value="go-wide">Go wide early</option><option value="switch-flank">Switch flank</option><option value="target-forward">Hit target forward</option><option value="go-long">Go long</option><option value="territory">Attacking-third throw-in &amp; press</option></select></label>
+                <label><span>Mentality</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="mentality"><option value="defensive">Defensive</option><option value="cautious">Cautious</option><option value="balanced">Balanced</option><option value="positive">Positive</option><option value="attacking">Attacking</option></select></label>
+                <label><span>Passing style</span><select class="match-lab-attacking-style" data-team="away" aria-label="Away attacking style"><option value="possession">Possession</option><option value="direct">Direct</option><option value="long-ball">Long ball</option><option value="wing">Wing play</option></select></label>
+                <label><span>Attacking width</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="width"><option value="narrow">Narrow</option><option value="balanced">Balanced</option><option value="wide">Wide</option></select></label>
+                <label><span>Focus play</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="focusPlay"><option value="mixed">Mixed</option><option value="left">Left</option><option value="centre">Through middle</option><option value="right">Right</option></select></label>
+                <label><span>Shooting</span><select class="match-lab-team-shooting" data-team="away" aria-label="Away shooting instruction"><option value="discourage">Shoot less</option><option value="balanced" selected>Balanced</option><option value="encourage">Shoot more</option></select></label>
+                <label><span>Tempo</span><select class="match-lab-team-tempo" data-team="away" aria-label="Away tempo"><option value="slow">Slower</option><option value="balanced" selected>Balanced</option><option value="quick">Higher</option></select></label>
+                <label><span>Dribbling</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="dribbling"><option value="less">Dribble less</option><option value="balanced">Balanced</option><option value="more">Run at defence</option></select></label>
+                <label><span>Creative freedom</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="creativity"><option value="disciplined">More disciplined</option><option value="balanced">Balanced</option><option value="expressive">More expressive</option></select></label>
+                <label><span>Final third</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="finalThird"><option value="mixed">Mixed</option><option value="work-ball">Work ball into box</option><option value="shoot-on-sight">Shoot on sight</option><option value="early-crosses">Hit early crosses</option></select></label>
+                <label><span>Time wasting</span><select class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="timeWasting"><option value="never">Never</option><option value="sometimes">Sometimes</option><option value="often">Often</option></select></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="passIntoSpace"><span>Pass into space</span></label>
+                <label class="match-lab-team-instruction-toggle"><input type="checkbox" class="match-lab-team-instruction-control" data-team="away" data-section="attacking" data-field="playOutOfDefence"><span>Play out of defence</span></label>
+                <div class="match-lab-team-meter-row"><span>Passing directness</span><div class="match-lab-attacking-strictness" data-team="away" role="slider" aria-label="Away directness" aria-valuemin="1" aria-valuemax="5" aria-valuenow="2" tabindex="0">
+                  <button type="button" class="match-lab-attacking-bar" data-team="away" data-level="1"></button><button type="button" class="match-lab-attacking-bar" data-team="away" data-level="2"></button><button type="button" class="match-lab-attacking-bar" data-team="away" data-level="3"></button><button type="button" class="match-lab-attacking-bar" data-team="away" data-level="4"></button><button type="button" class="match-lab-attacking-bar" data-team="away" data-level="5"></button>
+                </div><span class="match-lab-attacking-value" data-team="away">2</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="match-lab-transition" id="labTransitionTacticsPanel">
+            <h3 class="match-lab-section-title">Transition</h3>
+            <div class="match-lab-transition-team" data-team="home"><span class="match-lab-marking-team-label">Home</span><div class="match-lab-team-instruction-grid">
+              <label><span>When possession is won</span><select class="match-lab-team-instruction-control" data-team="home" data-section="transition" data-field="onGain"><option value="hold-shape">Hold shape</option><option value="balanced">Balanced</option><option value="counter">Counter</option></select></label>
+              <label><span>When possession is lost</span><select class="match-lab-team-instruction-control" data-team="home" data-section="transition" data-field="onLoss"><option value="regroup">Regroup</option><option value="balanced">Balanced</option><option value="counter-press">Counter-press</option></select></label>
+            </div></div>
+            <div class="match-lab-transition-team" data-team="away"><span class="match-lab-marking-team-label">Away</span><div class="match-lab-team-instruction-grid">
+              <label><span>When possession is won</span><select class="match-lab-team-instruction-control" data-team="away" data-section="transition" data-field="onGain"><option value="hold-shape">Hold shape</option><option value="balanced">Balanced</option><option value="counter">Counter</option></select></label>
+              <label><span>When possession is lost</span><select class="match-lab-team-instruction-control" data-team="away" data-section="transition" data-field="onLoss"><option value="regroup">Regroup</option><option value="balanced">Balanced</option><option value="counter-press">Counter-press</option></select></label>
+            </div></div>
+          </div>
+          </div>
+
+          <div class="match-lab-setup-actions">
+            <button type="button" id="labApplySetupButton" class="match-lab-primary-button">Apply Setup</button>
+            <button type="button" id="labSwapTeamsButton">⇄ Swap Teams</button>
+          </div>
+          <p class="match-lab-setup-status" id="labSetupStatus"></p>
+        </div>
+
+        <details class="match-lab-column match-lab-column-search">
+          <summary class="match-lab-search-summary">Find a player (manual edit)</summary>
           <div class="match-lab-search-controls">
             <select id="labDatabaseSelect" aria-label="Database edition"></select>
             <input
@@ -38,16 +368,17 @@
           </div>
           <p class="match-lab-hint" id="labSearchStatus">Type at least 2 characters.</p>
           <ul class="match-lab-search-results" id="labSearchResults"></ul>
-        </div>
+        </details>
 
-        <div class="match-lab-column">
+        <div class="match-lab-column match-lab-column-pitch">
           <h2 class="match-lab-panel-title">Pitch</h2>
           <p class="match-lab-hint">
-            Drag a placed marker to reposition it. The engine only reasons in
-            12 zones, so the exact drop point is bucketed into one — both are
-            shown together, nothing here overstates precision the engine doesn't have.
+            Drag a placed marker to reposition it. Continuous coordinates are
+            authoritative; the 12-zone value remains for legacy lookups, and the
+            optional 5×6 tactical lens is derived without snapping the marker.
           </p>
           <div class="match-lab-pitch">
+            <div id="labMatchInterlude" class="match-lab-interlude" hidden>Between highlights</div>
             <div class="ml-pitch-field" id="labPitch">
               <span class="ml-pitch-halfway" aria-hidden="true"></span>
               <span class="ml-pitch-circle" aria-hidden="true"></span>
@@ -78,31 +409,63 @@
                 <path class="ml-pitch-vision-cone ml-pitch-vision-cone-anticipating" id="labVisionConeAnticipating"></path>
                 <path class="ml-pitch-vision-cone" id="labVisionConeCurrent"></path>
               </svg>
-              <div class="ml-pitch-badge" id="labResultBadge" aria-hidden="true"></div>
+              <svg class="ml-pitch-tactical-regions" id="labTacticalRegionsLayer" viewBox="0 0 75 120" preserveAspectRatio="none" aria-hidden="true" data-visible="false"></svg>
+              <svg class="ml-pitch-shape-layer" id="labTeamShapeLayer" viewBox="0 0 75 120" preserveAspectRatio="none" aria-hidden="true" data-visible="false"></svg>
             </div>
+            <div class="ml-pitch-tactical-regions-hud" id="labTacticalRegionsHud" hidden></div>
+            <div class="ml-pitch-shape-hud" id="labTeamShapeHud" hidden></div>
+            <div class="ml-pitch-badge" id="labResultBadge" aria-hidden="true"></div>
           </div>
+          <section class="match-live-panel" id="labMatchLivePanel" aria-label="Live match commentary and statistics">
+            <div class="match-live-commentary">
+              <span class="match-live-minute" id="labMatchMinute">0'</span>
+              <p id="labLiveCommentary" aria-live="polite">Start a full match to follow the commentary.</p>
+            </div>
+            <div class="match-possession" aria-label="Possession over the last ten minutes">
+              <div class="match-possession-heading">
+                <span>Last 10 minutes</span>
+                <span><b id="labHomePossession">50%</b> possession <b id="labAwayPossession">50%</b></span>
+              </div>
+              <div class="match-possession-bar" role="img" aria-label="Home 50 percent, away 50 percent">
+                <span id="labHomePossessionBar" class="is-home" style="width:50%"></span>
+                <span id="labAwayPossessionBar" class="is-away" style="width:50%"></span>
+              </div>
+            </div>
+            <div class="match-live-actions">
+              <button type="button" id="labHomeTacticsRequest">Home tactics</button>
+              <button type="button" id="labAwayTacticsRequest">Away tactics</button>
+              <button type="button" id="labMatchStatsToggle" aria-expanded="false">Match stats &amp; heat maps</button>
+              <span id="labTacticsRequestStatus" aria-live="polite"></span>
+            </div>
+            <div class="match-stats-panel" id="labMatchStatsPanel" hidden>
+              <div class="match-stats-tabs" role="tablist" aria-label="Match statistics view">
+                <button type="button" id="labPlayerStatsTab" role="tab" aria-selected="true" class="is-selected">Player Stats</button>
+                <button type="button" id="labTeamStatsTab" role="tab" aria-selected="false">Team Stats</button>
+              </div>
+              <label class="match-stats-scope"><span id="labStatsScopeLabel">Player heat map</span>
+                <select id="labStatsScope">
+                  <option value="">No match data</option>
+                </select>
+              </label>
+              <div class="match-heat-map" id="labHeatmapGrid" aria-label="Selected heat map"></div>
+              <div class="match-stats-table-wrap">
+                <table class="match-stats-table">
+                  <thead><tr><th id="labStatsNameHeading">Player</th><th>Distance</th><th>Passes</th><th>Accuracy</th><th>Key</th><th>On target</th><th>Missed</th></tr></thead>
+                  <tbody id="labPlayerStatsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
           <ol class="match-lab-roster" id="labRoster"></ol>
         </div>
 
-        <div class="match-lab-column">
+        <div class="match-lab-column match-lab-column-inspect">
           <div class="match-lab-mode-toggle" role="tablist">
             <button type="button" id="labFreePlayModeButton" role="tab" aria-selected="true">Free Play</button>
             <button type="button" id="labProbeModeButton" role="tab" aria-selected="false">Scenario Probe</button>
           </div>
 
           <div id="labFreePlayPanel">
-            <p class="match-lab-hint">
-              Give a placed player the ball, then ask the engine what it would
-              attempt. The <strong>choice</strong> of action (pass vs. through
-              ball vs. cross vs. dribble vs. carry vs. shoot vs. hold-up play)
-              is new, Match-Lab-only logic — there's
-              no callable "what would the engine try" function to call, so this
-              can't reuse one (see MATCH_LAB_PLAN.md — Spatial Decision
-              Intelligence v1 scores concrete candidates by real geometry:
-              distance, pressure, lane obstruction). Once an action is chosen,
-              its <strong>resolution</strong> always calls the real, unmodified
-              match engine.
-            </p>
             <p class="match-lab-hint" id="labBallOwnerStatus">No ball owner assigned yet.</p>
             <div class="match-lab-action-table" id="labActionTable"></div>
           </div>
@@ -159,17 +522,57 @@
             <span class="match-lab-switch-label">Show ball owner's vision cone</span>
           </label>
 
+          <label class="match-lab-switch" title="Off by default: a small live readout above the ball (amber) AND above the current ball owner (blue) showing their exact positions -- the same 0-100% grid coordinate every ballFrom/ballTo/contact.point in the trace uses, plus a real-yard conversion. Having both side by side answers whether the BALL moved or the PLAYER moved to meet it. Updates every frame during playback and while setting up, so a screenshot at any exact moment carries the precise numbers with it">
+            <input type="checkbox" id="labShowCoordsCheckbox">
+            <span class="match-lab-switch-track"></span>
+            <span class="match-lab-switch-label">Show ball &amp; carrier coordinates</span>
+          </label>
+
+          <label class="match-lab-switch" title="Off by default: a small bar under every player showing their real burst01 -- the Burst Stamina battery that gates full-sprint carries and off-ball jobs (8-20 seconds of explosive work, separate from the 90-minute match-long condition curve). Green above 35%, red at or below it -- the same floor determineCarryGait() itself uses to deny a full sprint. Shown for every player at once, live during playback">
+            <input type="checkbox" id="labShowStaminaCheckbox">
+            <span class="match-lab-switch-track"></span>
+            <span class="match-lab-switch-label">Show players' stamina bars</span>
+          </label>
+
+          <label class="match-lab-switch" title="Developer overlay: team phase, formation anchors, phase shape targets, live intentions, assigned team jobs, lanes, centroid, line heights, width and length. Diagnostics are derived and never affect simulation.">
+            <input type="checkbox" id="labShowTeamShapeCheckbox">
+            <span class="match-lab-switch-track"></span>
+            <span class="match-lab-switch-label">Show team shape diagnostics</span>
+          </label>
+
+          <label class="match-lab-switch" title="Diagnostic-only 5-lane by 6-band tactical regions, relative to the current possession side's attacking direction. Continuous player and ball coordinates remain authoritative; no point is snapped to a cell.">
+            <input type="checkbox" id="labShowTacticalRegionsCheckbox">
+            <span class="match-lab-switch-track"></span>
+            <span class="match-lab-switch-label">Show tactical regions</span>
+          </label>
+
           <div class="match-lab-controls">
             <button type="button" id="labPlayButton" class="match-lab-primary-button" title="Resolve the current authored setup and autoplay it">▶ Resolve &amp; Play</button>
             <button type="button" id="labPlayPauseButton" disabled title="Play/pause the current trace">▶ Play</button>
             <button type="button" id="labReplayButton" title="Replay the identical seed and result">↻ Replay</button>
             <button type="button" id="labRerollButton" title="New seed, same authored setup">🎲 New Outcome</button>
+            <button type="button" id="labStepBackButton" title="Rewind one trace event -- go back and re-watch the last incident without replaying from the start">|‹ Step Back</button>
             <button type="button" id="labStepButton" title="Advance one trace event">›| Step</button>
             <button type="button" id="labResetButton" title="Stop and restore the authored setup">⏮ Back to Setup</button>
+            <button type="button" id="labSaveScenarioButton" title="Download the last run's authored setup + seed as a JSON replay scenario, for tools/test-replay-harness.mjs">💾 Save Scenario</button>
+          </div>
+          <div class="match-lab-highlight-controls">
+            <label for="labHighlightMode">Highlights</label>
+            <select id="labHighlightMode">
+              <option value="full">Full match</option><option value="comprehensive">Comprehensive</option>
+              <option value="extended">Extended</option><option value="key">Key</option>
+              <option value="commentary">Only commentary</option>
+            </select>
+            <label for="labBetweenSpeed">Speed between highlights</label>
+            <select id="labBetweenSpeed"><option value="5">5&times;</option><option value="10">10&times;</option><option value="20" selected>20&times;</option><option value="40">40&times;</option></select>
+            <p id="labHighlightStatus" aria-live="polite"></p>
+            <button type="button" id="labStartMatch">Start 90-minute match</button>
+            <button type="button" id="labStopMatch" disabled>Stop match</button>
+            <p id="labMatchStatus" aria-live="polite"></p>
           </div>
           <div class="match-lab-speed">
             <label class="match-lab-speed-control">
-              Speed
+              Speed during highlights
               <input id="labSpeedSelect" type="range" min="0" max="2" step="1" value="1">
               <span id="labSpeedValue" class="match-lab-speed-value">1×</span>
             </label>
@@ -185,13 +588,9 @@
               </label>
             </div>
           </div>
-          <label class="match-lab-attacking-direction" title="Explicit, not inferred from position -- which end each team is attacking, for the Free Play possession runner's progression/goal-target logic">
-            Home attacks
-            <select id="labAttackingDirectionSelect">
-              <option value="down">↓ (away attacks ↑)</option>
-              <option value="up">↑ (away attacks ↓)</option>
-            </select>
-          </label>
+
+
+
           <div class="match-lab-run-n">
             <label>
               Run
@@ -245,7 +644,37 @@
           </div>
         </div>
       </section>
+
+      <section class="match-lab-tactics-workspace" id="labTacticsWorkspace" role="tabpanel" hidden>
+        <header class="match-lab-tactics-heading">
+          <div>
+            <span class="eyebrow">Tactics</span>
+            <h2>Team shape and player instructions</h2>
+          </div>
+          <p>
+            Set the team defaults, then override individual outfield players only where needed.
+            With-ball and without-ball positions are optional formation overrides.
+          </p>
+        </header>
+        <div class="match-lab-tactics-layout">
+          <section class="match-lab-tactics-section" id="labTeamTacticsHost">
+            <h2 class="match-lab-panel-title" id="labTeamTacticsTitle">Home team tactics</h2>
+          </section>
+          <section class="match-lab-tactics-section match-lab-tactics-shape" id="labShapeTacticsHost">
+            <h2 class="match-lab-panel-title">Positioning</h2>
+          </section>
+          <aside class="match-lab-tactics-section" id="labPlayerTacticsHost">
+            <h2 class="match-lab-panel-title">Player tactics</h2>
+            <p class="match-lab-hint">Select a player on the positioning board.</p>
+          </aside>
+        </div>
+        <div class="match-lab-tactics-actions">
+          <button type="button" id="labApplyTacticsButton" class="match-lab-primary-button">Confirm tactical changes</button>
+          <button type="button" id="labResumeMatchButton" class="match-lab-primary-button" hidden disabled>Resume game</button>
+          <span class="match-lab-setup-status" id="labTacticsStatus"></span>
+        </div>
+      </section>
     </main>
-    <script src="match-lab.js?v=20260821-02" type="module"></script>
+    <script src="match-lab.js?v=20260909-05" type="module"></script>
   </body>
 </html>

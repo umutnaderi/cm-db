@@ -5,6 +5,22 @@ import {
   resolvePotentialAbility,
   rollGenerativeTargetAbility,
 } from "./src/lib/attributeGeneration.js?v=20260809-01";
+// Formation templates, the slot-coordinate model and the role helpers that
+// read it. Extracted 2026-09-04 so Draft and Match Lab share one shape
+// definition. formationSlots() resolves each slot's effective role from the
+// style itself, so this screen no longer needs its own wrapper for that.
+import {
+  FORMATION_TEMPLATES,
+  formationSlots,
+  rolePrefix,
+} from "./src/lib/formationTemplates.js?v=20260904-01";
+// Position-fit scoring, shared with Match Lab's lineup assignment.
+import {
+  isSupportedPitchFit,
+  positionAbilityMultiplier,
+  positionFit,
+  squadLine,
+} from "./src/lib/positionFit.js?v=20260904-01";
 
 const FRIEND_SESSION_KEY = "retroball-friend-session-v1";
 
@@ -40,231 +56,11 @@ function friendSessionFromPage() {
 
 const friendSession = friendSessionFromPage();
 
-const PITCH_ROWS = {
-  F: 14,
-  AM: 30,
-  M: 46,
-  DM: 62,
-  WB: 68,
-  D: 78,
-  SW: 86,
-  GK: 94,
-};
+// Formation templates and the slot-coordinate model now live in
+// src/lib/formationTemplates.js (2026-09-04), shared with Match Lab.
+// Aliased to the original local names so every reader below is unchanged.
+const formations = FORMATION_TEMPLATES;
 
-const STYLE_ROLE_PREFIX = {
-  Defensive: "DM",
-  Balanced: "M",
-  Attacking: "AM",
-};
-
-function slot(role, x, options = {}) {
-  return { role, x, ...options };
-}
-
-const formations = {
-  "4-3-3": [
-    slot("GK", 50),
-    slot("DL", 17),
-    slot("DC", 39),
-    slot("DC", 61),
-    slot("DR", 83),
-    slot("MC", 28, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("MC", 50, {
-      styleRoles: { Defensive: "MC", Balanced: "MC", Attacking: "AMC" },
-    }),
-    slot("MC", 74, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("FL", 17),
-    slot("FC", 50),
-    slot("FR", 83),
-  ],
-  "4-4-2": [
-    slot("GK", 50),
-    slot("DL", 17),
-    slot("DC", 39),
-    slot("DC", 61),
-    slot("DR", 83),
-    slot("ML", 17, {
-      styleRoles: { Defensive: "ML", Balanced: "ML", Attacking: "AML" },
-    }),
-    slot("MC", 40, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("MC", 60, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("MR", 83, {
-      styleRoles: { Defensive: "MR", Balanced: "MR", Attacking: "AMR" },
-    }),
-    slot("FC", 39),
-    slot("FC", 61),
-  ],
-  "4-2-3-1": [
-    slot("GK", 50),
-    slot("DL", 17),
-    slot("DC", 39),
-    slot("DC", 61),
-    slot("DR", 83),
-    slot("DMC", 39),
-    slot("DMC", 61, {
-      styleRoles: { Defensive: "DMC", Balanced: "DMC", Attacking: "MC" },
-    }),
-    slot("AML", 17, {
-      styleRoles: { Defensive: "ML", Balanced: "ML", Attacking: "AML" },
-    }),
-    slot("AMC", 50, {
-      styleRoles: { Defensive: "MC", Balanced: "AMC", Attacking: "AMC" },
-    }),
-    slot("AMR", 83, {
-      styleRoles: { Defensive: "MR", Balanced: "MR", Attacking: "AMR" },
-    }),
-    slot("FC", 50),
-  ],
-  "4-1-2-1-2": [
-    slot("GK", 50),
-    slot("DL", 17),
-    slot("DC", 39),
-    slot("DC", 61),
-    slot("DR", 83),
-    slot("DMC", 50),
-    slot("MC", 34, { flexible: true }),
-    slot("MC", 66, { flexible: true }),
-    slot("AMC", 50),
-    slot("FC", 39),
-    slot("FC", 61),
-  ],
-  "4-2-2-2": [
-    slot("GK", 50),
-    slot("DL", 17),
-    slot("DC", 39),
-    slot("DC", 61),
-    slot("DR", 83),
-    slot("DMC", 39, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("DMC", 61, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("AML", 25, {
-      styleRoles: { Defensive: "ML", Balanced: "AML", Attacking: "FL" },
-    }),
-    slot("AMR", 75, {
-      styleRoles: { Defensive: "MR", Balanced: "AMR", Attacking: "FR" },
-    }),
-    slot("FC", 39),
-    slot("FC", 61),
-  ],
-  "4-5-1": [
-    slot("GK", 50),
-    slot("DL", 17),
-    slot("DC", 39),
-    slot("DC", 61),
-    slot("DR", 83),
-    slot("ML", 14),
-    slot("MC", 32),
-    slot("MC", 50, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "AMC" },
-    }),
-    slot("MC", 68),
-    slot("MR", 86),
-    slot("FC", 50),
-  ],
-  "3-5-2": [
-    slot("GK", 50),
-    slot("DC", 28),
-    slot("DC", 50),
-    slot("DC", 72),
-    slot("ML", 10),
-    slot("MC", 35),
-    slot("MC", 50, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "AMC" },
-    }),
-    slot("MC", 65),
-    slot("MR", 90),
-    slot("FC", 39),
-    slot("FC", 61),
-  ],
-  "3-4-1-2": [
-    slot("GK", 50),
-    slot("DC", 28),
-    slot("DC", 50),
-    slot("DC", 72),
-    slot("ML", 15, {
-      styleRoles: { Defensive: "ML", Balanced: "ML", Attacking: "AML" },
-    }),
-    slot("MC", 40, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("MC", 60, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("MR", 85, {
-      styleRoles: { Defensive: "MR", Balanced: "MR", Attacking: "AMR" },
-    }),
-    slot("AMC", 50),
-    slot("FC", 39),
-    slot("FC", 61),
-  ],
-  "3-4-3": [
-    slot("GK", 50),
-    slot("DC", 28),
-    slot("DC", 50),
-    slot("DC", 72),
-    slot("ML", 15),
-    slot("MC", 40, {
-      styleRoles: { Defensive: "DMC", Balanced: "MC", Attacking: "MC" },
-    }),
-    slot("MC", 60, {
-      styleRoles: { Defensive: "MC", Balanced: "MC", Attacking: "AMC" },
-    }),
-    slot("MR", 85),
-    slot("FL", 17),
-    slot("FC", 50),
-    slot("FR", 83),
-  ],
-  "5-2-1-2": [
-    slot("GK", 50),
-    slot("WBL", 8),
-    slot("DC", 31),
-    slot("DC", 50),
-    slot("DC", 69),
-    slot("WBR", 92),
-    slot("MC", 39, { flexible: true }),
-    slot("MC", 61, { flexible: true }),
-    slot("AMC", 50),
-    slot("FC", 39),
-    slot("FC", 61),
-  ],
-  "5-2-3": [
-    slot("GK", 50),
-    slot("WBL", 8),
-    slot("DC", 31),
-    slot("DC", 50),
-    slot("DC", 69),
-    slot("WBR", 92),
-    slot("MC", 39, { flexible: true }),
-    slot("MC", 61, { flexible: true }),
-    slot("FL", 17),
-    slot("FC", 50),
-    slot("FR", 83),
-  ],
-  "5-3-2": [
-    slot("GK", 50),
-    slot("WBL", 8),
-    slot("DC", 31),
-    slot("DC", 50),
-    slot("DC", 69),
-    slot("WBR", 92),
-    slot("MC", 30, { flexible: true }),
-    slot("MC", 50, { flexible: true }),
-    slot("MC", 70, { flexible: true }),
-    slot("FC", 39),
-    slot("FC", 61),
-  ],
-};
 
 const state = {
   formation: "4-3-3",
@@ -338,56 +134,8 @@ function minimumDraftAbility() {
   return state.mode === "Titan Fight" ? 165 : 100;
 }
 
-function effectiveRole(item) {
-  if (item.styleRoles) return item.styleRoles[state.style] || item.role;
-  if (!item.flexible) return item.role;
-  const side = item.role.endsWith("L")
-    ? "L"
-    : item.role.endsWith("R")
-      ? "R"
-      : "C";
-  return `${STYLE_ROLE_PREFIX[state.style]}${side}`;
-}
-
-function rolePrefix(role) {
-  return (
-    ["GK", "SW", "WB", "DM", "AM", "D", "M", "F"].find((prefix) =>
-      role.startsWith(prefix),
-    ) || role
-  );
-}
-
-function pitchRow(role) {
-  if (role === "FL" || role === "FR") return 18;
-  return PITCH_ROWS[rolePrefix(role)] || 50;
-}
-
 function currentSlots() {
-  const slots = formations[state.formation].map((item, index) => ({
-    ...item,
-    id: `slot-${index}`,
-    effectiveRole: effectiveRole(item),
-    y: item.y ?? pitchRow(effectiveRole(item)),
-  }));
-  const central = slots.filter((item) =>
-    ["DMC", "MC", "AMC"].includes(item.effectiveRole),
-  );
-  if (central.length === 2) {
-    const roles = new Set(central.map((item) => item.effectiveRole));
-    const isMixedPair =
-      (roles.has("AMC") && roles.has("MC")) ||
-      (roles.has("DMC") && roles.has("MC"));
-    if (isMixedPair) {
-      const sharedY = Math.round(averageOverall(central.map((item) => item.y)));
-      central
-        .sort((left, right) => left.x - right.x)
-        .forEach((item, index) => {
-          item.x = index === 0 ? 42 : 58;
-          item.y = sharedY;
-        });
-    }
-  }
-  return slots;
+  return formationSlots(state.formation, state.style);
 }
 
 function candidateKey(candidate) {
@@ -483,12 +231,6 @@ function seasonLabel(candidate) {
     : candidate.database_title || candidate.database_slug;
 }
 
-function squadLine(role) {
-  const prefix = rolePrefix(role);
-  if (prefix === "F") return "attack";
-  if (["D", "WB", "SW", "GK"].includes(prefix)) return "defence";
-  return "midfield";
-}
 
 function draftedOverall(candidate) {
   return Math.min(
@@ -497,19 +239,6 @@ function draftedOverall(candidate) {
   );
 }
 
-function positionAbilityMultiplier(candidate, role) {
-  const fit = positionFit(candidate, role);
-  return (
-    {
-      natural: 1,
-      playable: 0.92,
-      limited: 0.82,
-      weak: 0.7,
-      awkward: 0.55,
-      "very-awkward": 0.35,
-    }[fit.level] || 0.25
-  );
-}
 
 function averageOverall(values) {
   return values.length
@@ -784,162 +513,9 @@ function renderSquadSummary() {
   if (!simulateButton.disabled) persistSquad();
 }
 
-function ratingMap(candidate) {
-  return new Map(
-    (candidate.position_ratings || []).map((item) => [
-      String(item.label || "").toLowerCase(),
-      Number(item.value) || 0,
-    ]),
-  );
-}
-
-function firstRating(ratings, labels) {
-  for (const label of labels) {
-    if (ratings.has(label)) return ratings.get(label) || 0;
-  }
-  return 0;
-}
-
-function roleRatingLabels(role) {
-  const prefix = rolePrefix(role);
-  return (
-    {
-      GK: ["goalkeeper"],
-      SW: ["sweeper"],
-      D: ["defender", "defence"],
-      WB: ["wing back", "defender", "defence"],
-      DM: ["defensive midfielder", "def midfielder", "anchor"],
-      M: ["midfielder", "midfield"],
-      AM: ["attacking midfielder", "att midfielder", "support"],
-      F: ["attacker", "attack"],
-    }[prefix] || []
-  );
-}
-
-function sideRatingLabels(role) {
-  if (role === "GK" || role === "SW") return [];
-  if (role.endsWith("L")) return ["left side", "left sided"];
-  if (role.endsWith("R")) return ["right side", "right sided"];
-  return ["central"];
-}
-
-const SIDE_PREFERENCES = [
-  { letter: "L", labels: ["left side", "left sided"] },
-  { letter: "C", labels: ["central"] },
-  { letter: "R", labels: ["right side", "right sided"] },
-];
-
-function generatedSidePreference(candidate, ratings = ratingMap(candidate)) {
-  const values = [...ratings.values()];
-  if (!values.length || values.some((value) => value > 2)) return null;
-  const hasPositionRating = [
-    "defender",
-    "defence",
-    "wing back",
-    "defensive midfielder",
-    "def midfielder",
-    "anchor",
-    "midfielder",
-    "midfield",
-    "attacking midfielder",
-    "att midfielder",
-    "support",
-    "attacker",
-    "attack",
-  ].some((label) => firstRating(ratings, [label]) > 0);
-  const hasSideRating = SIDE_PREFERENCES.some(
-    ({ labels }) => firstRating(ratings, labels) > 0,
-  );
-  if (!hasPositionRating || hasSideRating) return null;
-
-  const identity = candidateKey(candidate);
-  let hash = 2166136261;
-  for (let index = 0; index < identity.length; index += 1) {
-    hash ^= identity.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return SIDE_PREFERENCES[(hash >>> 0) % SIDE_PREFERENCES.length];
-}
-
-function sideRating(candidate, ratings, labels, base) {
-  const explicit = firstRating(ratings, labels);
-  if (explicit > 0 || base <= 0) return explicit;
-  const generated = generatedSidePreference(candidate, ratings);
-  return generated && labels.some((label) => generated.labels.includes(label))
-    ? base
-    : 0;
-}
-
-function positionFit(candidate, role) {
-  const ratings = ratingMap(candidate);
-  const goalkeeperRating = firstRating(ratings, ["goalkeeper"]);
-  const usesTwentyPointRatings = [...ratings.values()].some(
-    (value) => value > 2,
-  );
-  const isGoalkeeper =
-    /(?:^|[/\s])G\s*K(?:$|[/\s])/i.test(
-      String(candidate.position_text || ""),
-    ) || goalkeeperRating >= (usesTwentyPointRatings ? 15 : 2);
-  if (isGoalkeeper && role === "GK") {
-    return { score: 20, level: "natural", label: "Natural" };
-  }
-  if (isGoalkeeper) {
-    return { score: 2, level: "very-awkward", label: "Very awkward" };
-  }
-  if (!ratings.size) return { score: 0, level: "none", label: "Not rated" };
-  const modern = [...ratings.values()].some((value) => value > 2);
-  let base = firstRating(ratings, roleRatingLabels(role));
-  const sideLabels = sideRatingLabels(role);
-  const side = sideLabels.length
-    ? sideRating(candidate, ratings, sideLabels, base)
-    : base;
-
-  if (rolePrefix(role) === "WB" && !modern && base <= 0) {
-    base = firstRating(ratings, ["defender", "defence"]);
-  }
-
-  let score = sideLabels.length ? Math.min(base, side) : base;
-  const adjacentWideRole = {
-    AML: "FL",
-    AMR: "FR",
-    FL: "AML",
-    FR: "AMR",
-  }[role];
-  if (adjacentWideRole) {
-    const adjacentBase = firstRating(
-      ratings,
-      roleRatingLabels(adjacentWideRole),
-    );
-    const adjacentSideLabels = sideRatingLabels(adjacentWideRole);
-    const adjacentSide = sideRating(
-      candidate,
-      ratings,
-      adjacentSideLabels,
-      adjacentBase,
-    );
-    const adjacentScore = Math.min(adjacentBase, adjacentSide);
-    const secondaryCeiling = modern ? 15 : 1;
-    score = Math.max(score, Math.min(adjacentScore, secondaryCeiling));
-  }
-  const thresholds = modern
-    ? [
-        [18, "natural", "Natural"],
-        [15, "playable", "Playable"],
-        [12, "limited", "Limited"],
-        [9, "weak", "Weak"],
-        [6, "awkward", "Awkward"],
-        [2, "very-awkward", "Very awkward"],
-      ]
-    : [
-        [2, "natural", "Natural"],
-        [1, "limited", "Limited"],
-      ];
-  const match = thresholds.find(([minimum]) => score >= minimum);
-  return match
-    ? { score, level: match[1], label: match[2] }
-    : { score, level: "none", label: "Not rated" };
-}
-
+// Position-fit scoring moved to src/lib/positionFit.js (2026-09-04) so
+// Match Lab's deterministic lineup assignment scores a player exactly the
+// way this screen does, instead of a second copy that can drift.
 function remainingSlots() {
   return currentSlots().filter((item) => !state.drafted.has(item.id));
 }
@@ -957,12 +533,6 @@ function bestFit(candidate, slots = remainingSlots()) {
       level: "none",
       label: "Not rated",
     }
-  );
-}
-
-function isSupportedPitchFit(fit) {
-  return Boolean(
-    fit && fit.score > 0 && !["none", "very-awkward"].includes(fit.level),
   );
 }
 

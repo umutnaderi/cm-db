@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "annotation:v7-show-wide",
+  "name": "Inside lane blocked, so width is offered instead",
+  "attackingDirection": "down",
+  "ball": {
+    "state": "carried",
+    "lanes": ["right-half-space"],
+    "depthBands": ["second-build-up"]
+  },
+  "observations": [
+    {
+      "label": "ballOwner",
+      "primitive": "hold",
+      "trigger": "no forward lane available through the centre",
+      "intention": "hold",
+      "relationships": [],
+      "evidence": ["two defenders occupy the direct forward corridor"],
+      "observationTime": 0,
+      "confidence": 0.85
+    },
+    {
+      "label": "wideRunner",
+      "primitive": "show-wide",
+      "trigger": "inside obstruction above the clog threshold",
+      "intention": "show-wide",
+      "relationships": [{ "relation": "teammate-of-ball-owner", "to": "ballOwner" }],
+      "evidence": [
+        "moves toward the touchline rather than into the congested middle",
+        "the resulting passing lane is clear where the inside one was not"
+      ],
+      "observationTime": 0.6,
+      "confidence": 0.75
+    }
+  ],
+  "source": {
+    "reference": "V7",
+    "note": "Authored observation only. Mirrors cleanly: the same picture on the left flank is the same declaration reflected."
+  }
+}

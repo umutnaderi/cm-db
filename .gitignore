@@ -21,6 +21,14 @@ __pycache__/
 
 audit/
 data/
+# src/data/ is SOURCE, not a bulk dataset: it holds the declarative
+# historical-squad catalogue Draft and Match Lab both import. The
+# blanket data/ rule above matches it, so it is re-included here --
+# the directory must be un-ignored before a file inside it can be.
+!src/data/
+!src/data/**
+!docs/src/data/
+!docs/src/data/**
 db/
 /identity/
 
@@ -40,3 +48,6 @@ tools/CM4PregameEditor/
 # PCM) -- source material for tools/convert-sounds.mjs, never committed
 # itself. sounds/v1/ (the small compressed output) is NOT excluded.
 sounds/*.wav
+
+# Local test run logs
+.test-*-output.txt

@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "engineVersion": "match-lab-freeplay-v1",
+  "capturedAt": "2026-09-03T17:05:49.788Z",
+  "reason": "An attacker on an open pitch carries the ball forward repeatedly; reported that full sprint gets denied a few touches in (\"full-sprint denied (burst 34%)\") faster than feels realistic (new-issues.md, \"full speed denied issue\").",
+  "tags": [
+    "burst-stamina",
+    "carry",
+    "reported-bug"
+  ],
+  "seed": 0,
+  "database": "",
+  "ballOwnerId": "attacker",
+  "attackingDirections": {
+    "home": "down",
+    "away": "up"
+  },
+  "tacticalSettings": {
+    "marking": {
+      "home": {
+        "scheme": "man",
+        "tightness": 3
+      },
+      "away": {
+        "scheme": "man",
+        "tightness": 3
+      }
+    },
+    "attacking": {
+      "home": {
+        "style": "possession",
+        "directness": 2
+      },
+      "away": {
+        "style": "possession",
+        "directness": 2
+      }
+    }
+  },
+  "roster": [
+    {
+      "id": "attacker",
+      "role": "player",
+      "team": "home",
+      "position": {
+        "x": 50,
+        "y": 30
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Breakaway Attacker",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Pace",
+            "value": 15
+          },
+          {
+            "label": "Acceleration",
+            "value": 15
+          },
+          {
+            "label": "Dribbling",
+            "value": 14
+          },
+          {
+            "label": "Technique",
+            "value": 13
+          },
+          {
+            "label": "Stamina",
+            "value": 12
+          },
+          {
+            "label": "Decisions",
+            "value": 14
+          },
+          {
+            "label": "Vision",
+            "value": 12
+          },
+          {
+            "label": "Anticipation",
+            "value": 12
+          },
+          {
+            "label": "Composure",
+            "value": 13
+          },
+          {
+            "label": "Off the Ball",
+            "value": 13
+          }
+        ]
+      }
+    },
+    {
+      "id": "keeper",
+      "role": "keeper",
+      "team": "away",
+      "position": {
+        "x": 50,
+        "y": 97
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Away Keeper",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Reflexes",
+            "value": 13
+          },
+          {
+            "label": "Handling",
+            "value": 12
+          },
+          {
+            "label": "Positioning",
+            "value": 13
+          },
+          {
+            "label": "One On Ones",
+            "value": 12
+          }
+        ]
+      }
+    }
+  ]
+}

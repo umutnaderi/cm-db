@@ -427,13 +427,26 @@ export function contestedRace(attacker, defender, minute, random, zone = -1, { a
 // just be smashed at goal than calmly placed, independent of the shooter's
 // own composure -- pressure erodes the "calm" option and inflates "blast"
 // symmetrically, same shape as the composure term it's added alongside.
-export function selectFinishType(attacker, random, pressure = 0) {
+// Bugfix (2026-09-03) -- a real reported bug: CALM ("composed, facing the
+// keeper in the window") was chosen purely from pressure + attributes, with
+// zero awareness of the actual shot geometry -- a player genuinely alone on
+// the byline (defender outside DUEL_RANGE_YARDS, pressure falls to a flat
+// ~0.1) could be handed a "calm" finish from an angle no real player would
+// ever describe that way. `angleTightness` (0..1, see spatialDecision.js's
+// own shotAngleTightness()) defaults to 0 -- every existing caller that
+// omits it (draft-run.js's own separate engine, and any direct unit test)
+// sees the exact old behavior.
+const CALM_ANGLE_TIGHTNESS_MAX = 0.4;
+export function selectFinishType(attacker, random, pressure = 0, angleTightness = 0) {
   const composure = playerAttribute(attacker, "Composure");
   const technique = playerAttribute(attacker, "Technique");
   const finishing = playerAttribute(attacker, "Finishing");
   const flair = playerAttribute(attacker, "Flair");
+  // A genuinely tight angle makes calm STRUCTURALLY unavailable (weight 0,
+  // never merely disfavored) -- blast/finesse still compete normally.
+  const calmAvailable = angleTightness < CALM_ANGLE_TIGHTNESS_MAX;
   return weightedChoice([
-    { value: "calm", weight: Math.max(1, (composure + technique + finishing) * (1 - pressure * 0.3)) },
+    { value: "calm", weight: calmAvailable ? Math.max(1, (composure + technique + finishing) * (1 - pressure * 0.3)) : 0 },
     { value: "blast", weight: Math.max(1, 20 - composure) + finishing + pressure * 10 },
     { value: "finesse", weight: technique + flair },
   ], random);

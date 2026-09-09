@@ -1,11 +1,50 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  buildMatchLabPlaybackPlan, createMatchLabPlaybackClock, MATCH_LAB_PLAYBACK_BUILD, nextSemanticBoundary,
+  buildMatchLabPlaybackPlan, createMatchLabPlaybackClock, MATCH_LAB_PLAYBACK_BUILD, nextSemanticBoundary, previousSemanticBoundary,
   sampleMatchLabPlaybackPlan, validateMatchLabPlaybackPlan,
+  zeroVelocityAcrossIdleGaps, IDLE_GAP_THRESHOLD_MS,
 } from "../src/lib/matchLabPlayback.js";
 
 const point = (x, y, zone = 0) => ({ x, y, zone });
+
+// Gameplay v3 (2026-08-28) -- the reported strobe's OTHER half: even once
+// resolveCarry()/resolveDribble() stopped re-planning off-ball reactions
+// per touch (Off-Ball Motion v3, ONE continuous call per phase -- see
+// test-possession-runner.mjs's own "ONE off-ball reaction per carry"
+// section), the BALL CARRIER's own touch-to-touch movement is still
+// compiled as a sequence of separate keyframes (one per P.CARRY.TOUCH),
+// each an ordinary MOVEMENT_DURATIONS.touch-ish (~220ms) span apart.
+// zeroVelocityAcrossIdleGaps() used to zero velocity at ANY join wider
+// than 60ms -- BELOW a single touch -- so nearly every genuine
+// touch-to-touch or action-to-reaction join still got flattened to a
+// dead stop and restart, even after the resolver-side fix. Raised well
+// above ordinary action/reaction durations (450ms) so real, continuous
+// play carries velocity through a join; a genuinely long, idle gap still
+// zeroes correctly.
+console.log("=== Gameplay v3 -- zeroVelocityAcrossIdleGaps() only fires on a genuine idle stand ===");
+{
+  const track = [
+    { timeMs: 0, position: point(10, 10), velocity: { x: 3, y: 1 } },
+    { timeMs: 220, position: point(11, 10.3), velocity: { x: 3, y: 1 } },
+    { timeMs: 420, position: point(12, 10.6), velocity: { x: 3, y: 1 } },
+  ];
+  const result = zeroVelocityAcrossIdleGaps(track.map((frame) => ({ ...frame, velocity: { ...frame.velocity } })));
+  assert.deepEqual(result[0].velocity, { x: 3, y: 1 }, "a 220ms touch-to-touch join must not zero the outgoing velocity");
+  assert.deepEqual(result[1].velocity, { x: 3, y: 1 }, "the SAME 220ms join must not zero the incoming velocity either");
+  assert.deepEqual(result[2].velocity, { x: 3, y: 1 }, "a second, also-narrow 200ms join must not zero velocity");
+
+  const idleTrack = [
+    { timeMs: 0, position: point(10, 10), velocity: { x: 3, y: 1 } },
+    { timeMs: 900, position: point(10, 10), velocity: { x: 2, y: -1 } },
+  ];
+  const idleResult = zeroVelocityAcrossIdleGaps(idleTrack.map((frame) => ({ ...frame, velocity: { ...frame.velocity } })));
+  assert.deepEqual(idleResult[0].velocity, { x: 0, y: 0 }, "a genuine 900ms idle gap must still zero the outgoing velocity");
+  assert.deepEqual(idleResult[1].velocity, { x: 0, y: 0 }, "and the incoming velocity on the far side of that same idle gap");
+
+  assert.ok(IDLE_GAP_THRESHOLD_MS >= 400, "the idle-gap threshold must sit comfortably above a single touch/reaction duration");
+}
+console.log("Gameplay v3 zeroVelocityAcrossIdleGaps() tests passed.");
 const initialPositions = {
   crosser: point(10, 60), closer: point(18, 58), receiver: point(45, 25),
   aerialDefender: point(56, 24), keeper: point(50, 6), runner: point(35, 45),
@@ -82,6 +121,55 @@ assert(Object.isFrozen(planA) && Object.isFrozen(planA.tracks.ball), "plan and t
 assert.equal(validateMatchLabPlaybackPlan(planA).valid, true, "all declared contacts must be continuous");
 assert.equal(planA.finalState.ownerId, null, "out-of-play outcome must have no owner");
 assert.equal(planA.finalState.restart, "goal-kick", "out-of-play outcome must retain its restart");
+
+function failedShotPlan(duration) {
+  return buildMatchLabPlaybackPlan({
+    initialPositions: { shooter: point(50, 55), keeper: point(50, 95) },
+    initialBall: point(50, 55),
+    initialOwnerId: "shooter",
+    finalOwnerId: null,
+    restart: "goal-kick",
+    trace: [{
+      code: "F.BLAST.OVER", label: "Off target", movement: "shot", outcome: "fail",
+      duration, ballFrom: point(50, 55), ballTo: point(50, 100),
+      contact: { point: point(50, 55), actorId: "shooter", type: "shot", phase: "start" },
+      ownerBeforeId: "shooter", ownerAfterId: null, badge: "OVER",
+    }],
+  });
+}
+
+const fastMissPlan = failedShotPlan(700);
+const slowMissPlan = failedShotPlan(1_900);
+for (const plan of [fastMissPlan, slowMissPlan]) {
+  const cue = plan.cues[0];
+  const interval = plan.intervals[0];
+  assert.equal(cue.timeMs, interval.startMs,
+    "the visual shot cue still begins at foot contact");
+  assert.equal(cue.audioTimeMs, interval.endMs,
+    "miss audio is scheduled at the shot's real arrival boundary");
+  assert.equal(cue.audioMilestone, "terminal",
+    "the deferred cue selects only the terminal miss sound");
+  assert.notDeepEqual(
+    (({ x, y }) => ({ x, y }))(sampleMatchLabPlaybackPlan(plan, cue.audioTimeMs - 1).ball),
+    { x: 50, y: 100 },
+    "the miss cue cannot fire while the ball is still in flight",
+  );
+  assert.deepEqual(
+    (({ x, y }) => ({ x, y }))(sampleMatchLabPlaybackPlan(plan, cue.audioTimeMs).ball),
+    { x: 50, y: 100 },
+    "the miss cue boundary is the exact ball-arrival frame",
+  );
+}
+assert.equal(
+  slowMissPlan.cues[0].audioTimeMs - slowMissPlan.cues[0].timeMs,
+  1_900,
+  "a slower shot keeps its longer sound delay",
+);
+assert.equal(
+  fastMissPlan.cues[0].audioTimeMs - fastMissPlan.cues[0].timeMs,
+  700,
+  "a faster shot keeps its shorter sound delay",
+);
 
 const delivery = planA.intervals.find((item) => item.code === "CROSS.DELIVERY.CLEAN");
 const aerial = planA.intervals.find((item) => item.code === "X1.R");
@@ -333,6 +421,21 @@ assert.equal(clock.getState().timeMs, pausedAt, "burning wall-clock time while p
 clock.step();
 const expectedBoundary = nextSemanticBoundary(planA, pausedAt);
 assert.equal(clock.getState().timeMs, expectedBoundary.timeMs, "Step must land exactly on the next semantic boundary");
+
+// Step Back v1 (2026-08-31) -- a real, explicit request: rewind to
+// re-watch the last incident instead of replaying the whole trace.
+const afterStep = clock.getState().timeMs;
+clock.stepBack();
+const expectedBackBoundary = previousSemanticBoundary(planA, afterStep);
+assert.equal(
+  clock.getState().timeMs,
+  expectedBackBoundary ? expectedBackBoundary.timeMs : 0,
+  "Step Back must land exactly on the previous semantic boundary",
+);
+clock.stepBack();
+assert.equal(clock.getState().timeMs, 0, "repeatedly stepping back eventually reaches the very start, never negative");
+clock.stepBack();
+assert.equal(clock.getState().timeMs, 0, "Step Back at time 0 is a safe no-op, not an error or a negative time");
 let gameplayRngCalls = 0;
 const gameplayRng = () => { gameplayRngCalls += 1; return 0.5; };
 void gameplayRng;
@@ -347,10 +450,14 @@ assert.throws(() => buildMatchLabPlaybackPlan({
 
 const browserMain = await readFile(new URL("../match-lab.js", import.meta.url), "utf8");
 const browserHtml = await readFile(new URL("../match-lab.html", import.meta.url), "utf8");
-assert.equal(MATCH_LAB_PLAYBACK_BUILD, "20260820-05", "the loaded playback module reports the expected build");
-assert.match(browserMain, /matchLabPlayback\.js\?v=20260820-05/,
+assert.equal(MATCH_LAB_PLAYBACK_BUILD, "20260908-01", "the loaded playback module reports the expected build");
+assert.match(browserMain, /matchLabPlayback\.js\?v=20260908-01/,
   "the browser entry point must cache-bust the expected playback build");
-assert.match(browserHtml, /match-lab\.js\?v=20260821-01/,
+assert.match(browserMain, /scheduledCue\.kind === "audio"\) applyDeferredPlaybackAudio\(event, cue\)/,
+  "the browser renderer must dispatch the planned arrival cue through the deferred audio path");
+assert.match(browserMain, /if \(!hasDeferredTerminalAudio\) playEvent\(event, buildSoundContext\(event\)\)/,
+  "the browser renderer must not also schedule the old fixed-delay miss sound at shot contact");
+assert.match(browserHtml, /match-lab\.js\?v=20260909-04/,
   "the HTML must cache-bust the browser entry module that imports playback");
 
 console.log("Timeline Playback v1 planner/clock tests passed.");

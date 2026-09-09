@@ -252,8 +252,24 @@ assert.equal(sharedSquad.players.filter((player) => player.captain).length, 1);
 assert.equal(createDraftSquad(shareTeam).seed, sharedSquad.seed);
 assert.match(formatDraftSquadText(sharedSquad), /MC · Player 7 \(C\)/);
 
-const setupSource = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8")
-  .replace(/^(?:import[\s\S]*?;\r?\n)+/, "")
+// draft-setup.js's formation templates and slot model were extracted into
+// src/lib/formationTemplates.js (2026-09-04) and are now imported rather
+// than declared inline. This sandbox evaluates the page's source with its
+// imports stripped, so the extracted module's own source is prepended --
+// same definitions, same assertions below, just sourced from where they
+// now live. Stripping is no longer anchored to the top of the file either:
+// the import block is interleaved with comments.
+const stripImports = (source) => source.replace(/^import[\s\S]*?;\s*$/gm, "");
+const asSandboxSource = (modulePath) => stripImports(
+  fs.readFileSync(new URL(modulePath, import.meta.url), "utf8"),
+).replace(/^export (const|function) /gm, "$1 ").replace(/^export {[sS]*?};$/gm, "");
+// Both extracted modules are prepended so the sandbox sees the same
+// definitions draft-setup.js now imports: formation templates and, from
+// 2026-09-04, the shared position-fit scoring.
+const formationModuleSource = asSandboxSource("../src/lib/formationTemplates.js")
+  + asSandboxSource("../src/lib/positionFit.js");
+const setupSource = formationModuleSource
+  .concat(stripImports(readSource("../draft-setup.js")))
   .split("Object.keys(formations).forEach")[0]
   .concat(`
     const expected = {
@@ -914,13 +930,23 @@ vm.runInNewContext(setupSource, {
   URLSearchParams,
   window: { location: { hash: "" } },
 });
-const setupSourceText = fs.readFileSync(new URL("../draft-setup.js", import.meta.url), "utf8");
-const setupHtml = fs.readFileSync(new URL("../draft-setup.html", import.meta.url), "utf8");
-const setupStyles = fs.readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-const draftEntryHtml = fs.readFileSync(new URL("../draft.html", import.meta.url), "utf8");
-const draftEntrySource = fs.readFileSync(new URL("../draft.js", import.meta.url), "utf8");
-const retroballApiSource = fs.readFileSync(new URL("../src/lib/retroballApi.js", import.meta.url), "utf8");
-const localApiSource = fs.readFileSync(new URL("../tools/identity/localApi.js", import.meta.url), "utf8");
+// Source assertions below quote multi-line snippets with newline escapes.
+// Several of this repo's tracked text files are checked out CRLF on Windows
+// (styles.css, for one), which made every such assertion fail on the line
+// ending alone rather than on the content it is actually about. Reading
+// through this normaliser keeps those assertions testing what they mean to.
+function readSource(relativePath) {
+  return fs.readFileSync(new URL(relativePath, import.meta.url), "utf8")
+    .split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
+}
+
+const setupSourceText = readSource("../draft-setup.js");
+const setupHtml = readSource("../draft-setup.html");
+const setupStyles = readSource("../styles.css");
+const draftEntryHtml = readSource("../draft.html");
+const draftEntrySource = readSource("../draft.js");
+const retroballApiSource = readSource("../src/lib/retroballApi.js");
+const localApiSource = readSource("../tools/identity/localApi.js");
 assert.ok(
   !setupSourceText.includes("if (!fit.slot || fit.score <= 0)"),
   "Zero-rated suggestions must remain selectable as emergency cover",
@@ -1004,8 +1030,8 @@ assert.ok(emptyPositionRules.length >= 1);
 assert.ok(emptyPositionRules.filter((match) => match[0].includes("border: 2px solid")).length >= 2);
 assert.ok(emptyPositionRules.every((match) => !match[0].includes("border: 2px dashed")));
 
-const runHtml = fs.readFileSync(new URL("../draft-run.html", import.meta.url), "utf8");
-const runSourceText = fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8");
+const runHtml = readSource("../draft-run.html");
+const runSourceText = readSource("../draft-run.js");
 assert.ok(!/[âÃÂ]/.test(runSourceText), "Draft match UI must not contain mojibake characters");
 assert.ok(!runHtml.includes('id="runClock"'), "The match clock must not remain in the sidebar");
 assert.ok(runSourceText.includes("data-match-clock"), "Every active match must render its own clock");
@@ -1022,13 +1048,33 @@ assert.ok(runSourceText.includes("zoneFrom"));
 assert.ok(runSourceText.includes("zoneTo"));
 assert.ok(runSourceText.includes("data-share-squad"), "Finished runs must offer squad sharing");
 assert.ok(runSourceText.includes("squadSeed: sharedSquad.seed"), "Records must carry the squad seed");
-assert.ok(runSourceText.includes("const TITAN_OPPONENTS = ["));
-assert.equal((runSourceText.match(/key: "titan-/g) || []).length, 8);
-assert.ok(runSourceText.includes('legacyCanonicalId: "23678"'));
-assert.ok(runSourceText.includes('legacyCanonicalId: "81217"'));
-assert.ok(runSourceText.includes('canonicalPublicId: "player_kleberson_brazil_1979"'));
-assert.ok(runSourceText.includes('canonicalPublicId: "player_juan_sebastian_veron_argentina_1975"'));
-assert.ok(runSourceText.includes("returnedCanonicalPublicId === canonicalPublicId"));
+// The Titan Fight catalogue and its resolution logic were extracted into
+// src/data/historicalSquads.js and src/lib/historicalSquadResolver.js
+// (2026-09-04) so Draft and Match Lab share one declaration. The
+// guarantees below are unchanged -- eight curated opponents, the two
+// canonical-id pins, canonical-id-beats-name matching -- they are just
+// asserted where the data and the logic now live. draft-run.js must still
+// consume that catalogue rather than declaring its own.
+// Titan Fight reads its own ladder list, NOT the wider served catalogue:
+// promoting a new historical preset must never lengthen a Titan run.
+assert.ok(runSourceText.includes("const TITAN_OPPONENTS = listTitanFightSquads()"));
+assert.ok(!/const TITAN_OPPONENTS = \[/.test(runSourceText), "draft-run.js must not re-declare the catalogue inline");
+assert.ok(runSourceText.includes("resolveHistoricalSquad(titan, { searchPlayers })"));
+const squadDataSource = readSource("../src/data/historicalSquads.js");
+const squadResolverSource = readSource("../src/lib/historicalSquadResolver.js");
+assert.ok(squadDataSource.includes('legacyCanonicalId: "23678"'));
+assert.ok(squadDataSource.includes('legacyCanonicalId: "81217"'));
+assert.ok(squadDataSource.includes('canonicalPublicId: "player_kleberson_brazil_1979"'));
+assert.ok(squadDataSource.includes('canonicalPublicId: "player_juan_sebastian_veron_argentina_1975"'));
+assert.ok(squadResolverSource.includes("returnedCanonicalPublicId === canonicalPublicId"));
+{
+  const { CURATED_SQUADS, listHistoricalSquads, listTitanFightSquads } = await import("../src/data/historicalSquads.js");
+  const { validateSquadCatalogue } = await import("../src/lib/historicalSquadResolver.js");
+  assert.equal(CURATED_SQUADS.length, 8, "the eight curated Titan opponents must survive extraction");
+  assert.equal(listTitanFightSquads().length, 8, "the Titan Fight ladder stays exactly those eight");
+  assert.ok(listHistoricalSquads().every((squad) => squad.verified), "only verified squads are served");
+  assert.ok(validateSquadCatalogue(CURATED_SQUADS).valid, "every curated squad declaration must validate");
+}
 assert.ok(runSourceText.includes('mode: isTitanFight ? "Titan Fight" : team.mode || "Classic"'));
 assert.ok(runSourceText.includes('? "Titan Fight"\n      : "Classic"'));
 assert.ok(runSourceText.includes('label: `${state.userRecord.played}/${TITAN_OPPONENTS.length}`'));
@@ -1055,11 +1101,11 @@ const playedMatchSource = runSourceText.slice(
 );
 assert.ok(!playedMatchSource.includes("poisson("), "Played match scores must emerge from transitions");
 
-const sharedSquadHtml = fs.readFileSync(new URL("../draft-squad.html", import.meta.url), "utf8");
-const sharedSquadSource = fs.readFileSync(new URL("../draft-squad.js", import.meta.url), "utf8");
-const workerSource = fs.readFileSync(new URL("../worker/src/index.ts", import.meta.url), "utf8");
-const friendRoomSource = fs.readFileSync(new URL("../worker/src/friend-room.ts", import.meta.url), "utf8");
-const workerConfig = fs.readFileSync(new URL("../worker/wrangler.jsonc", import.meta.url), "utf8");
+const sharedSquadHtml = readSource("../draft-squad.html");
+const sharedSquadSource = readSource("../draft-squad.js");
+const workerSource = readSource("../worker/src/index.ts");
+const friendRoomSource = readSource("../worker/src/friend-room.ts");
+const workerConfig = readSource("../worker/wrangler.jsonc");
 assert.ok(sharedSquadHtml.includes('id="sharedSquadList"'));
 assert.ok(sharedSquadSource.includes("getDraftSquad(seed)"));
 assert.ok(workerSource.includes("ps.current_ability BETWEEN 100 AND 200"));
@@ -1159,11 +1205,22 @@ const savedTeam = {
 // an object literal written in the sandboxed test code fails with "same
 // structure but not reference-equal" -- a cross-realm Object.prototype
 // mismatch, not an actual behavior difference.
-const matchEngineCoreSource = fs.readFileSync(new URL("../src/lib/matchEngineCore.js", import.meta.url), "utf8")
+const matchEngineCoreSource = readSource("../src/lib/matchEngineCore.js")
   .replace(/^export (function|const)/gm, "$1");
-const runSource = matchEngineCoreSource + "\n"
-  + fs.readFileSync(new URL("../draft-run.js", import.meta.url), "utf8")
-  .replace(/^(?:import[\s\S]*?;\r?\n)+/, "")
+// draft-run.js now imports its opponent catalogue and resolver rather than
+// declaring them inline (2026-09-04). This sandbox strips imports, so the
+// two names it actually uses at module scope are provided directly: the
+// real curated catalogue, and a resolver call the sandbox never reaches
+// (opponentRoster is stubbed by globalThis.testOpponentRoster below).
+const { CURATED_SQUADS: sandboxSquads } = await import("../src/data/historicalSquads.js");
+const sandboxCataloguePrelude =
+  `const listTitanFightSquads = () => (${JSON.stringify(sandboxSquads)});
+`
+  + "const resolveHistoricalSquad = async () => { throw new Error('not reached in sandbox'); };\n"
+  + "const validHistoricalRoster = (players) => players;\n";
+const runSource = matchEngineCoreSource + "\n" + sandboxCataloguePrelude
+  + readSource("../draft-run.js")
+  .replace(/^import[\s\S]*?;\s*$/gm, "")
   .split("elements.nextButton.addEventListener")[0]
   .concat(`
     (async () => {

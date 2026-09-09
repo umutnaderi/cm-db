@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "annotation:kickoff-short-support",
+  "name": "Possession-oriented kick-off: short support and rest defence together",
+  "attackingDirection": "down",
+  "ball": {
+    "state": "dead",
+    "lanes": ["centre"],
+    "depthBands": ["second-build-up"]
+  },
+  "observations": [
+    {
+      "label": "ballOwner",
+      "primitive": "restart-take",
+      "trigger": "kick-off whistle",
+      "intention": "restart-take",
+      "relationships": [],
+      "evidence": ["stands over the ball on the centre mark"],
+      "observationTime": 0,
+      "confidence": 1
+    },
+    {
+      "label": "supportPlayer",
+      "primitive": "support-short",
+      "trigger": "offering the first safe angle from the kick",
+      "intention": "support-short",
+      "relationships": [{ "relation": "teammate-of-ball-owner", "to": "ballOwner" }],
+      "evidence": ["within a short pass, behind the ball rather than beyond it"],
+      "observationTime": 0.1,
+      "confidence": 0.9
+    },
+    {
+      "label": "restDefender",
+      "primitive": "rest-defence",
+      "trigger": "team in possession from a restart",
+      "intention": "rest-defence",
+      "relationships": [],
+      "evidence": [
+        "stays behind the ball as the shape moves forward",
+        "two players hold this job, not one"
+      ],
+      "observationTime": 0.1,
+      "confidence": 0.9
+    }
+  ],
+  "source": {
+    "reference": "kickoff-possession-short-build-up",
+    "note": "Derived from this repository's own kickoff fixture rather than external footage, so parity can be tested directly."
+  }
+}

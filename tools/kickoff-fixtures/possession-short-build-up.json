@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "possession-oriented short build-up",
+  "seed": 41001,
+  "formation": "4-3-3",
+  "formationStyle": "Balanced",
+  "attackingDirection": "down",
+  "openingStyle": "possession",
+  "restart": { "type": "kickoff", "variant": "short" },
+  "expectedRestartPlan": { "resolver": "pass", "forcedPassType": null, "targetPreference": "short" },
+  "expectedJobs": ["first-support", "second-support", "pivot-recycle", "width-left", "width-right", "rest-defence"]
+}

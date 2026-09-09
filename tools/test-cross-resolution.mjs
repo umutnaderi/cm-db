@@ -11,6 +11,7 @@
 import { hashString, seededRandom } from "../src/lib/matchEngineCore.js";
 import { resolveCrossDelivery, resolveCrossSourceContest } from "../src/lib/matchEngineCore.js";
 import { crossSourceContestDefender, deliveryLandingPoint, yardDistance } from "../src/lib/spatialDecision.js";
+import { buildMatchLabPlaybackPlan, sampleMatchLabPlaybackPlan } from "../src/lib/matchLabPlayback.js";
 
 function fakeStyle() {
   return { setProperty() {}, removeProperty() {}, getPropertyValue() { return ""; } };
@@ -187,13 +188,20 @@ console.log("\n=== spatialDecision.js: deliveryLandingPoint determinism and boun
   const pointB = deliveryLandingPoint(target, 6, randomB);
   check("identical seed reproduces an identical landing point", pointA.x === pointB.x && pointA.y === pointB.y);
   check("zero accuracy error returns the intended target exactly", deliveryLandingPoint(target, 0, () => 0.5).x === target.x);
+  // Ball Out of Bounds v1 (2026-09-01) -- deliveryLandingPoint() is now
+  // deliberately UNclamped (see its own header comment): a genuinely wild
+  // delivery near a corner with a large error must be free to land
+  // off-pitch, so resolvePass/resolveCross/resolveThroughBall can detect
+  // the real exit via classifyPitchExit() instead of the ball silently
+  // stopping dead at the edge. This replaces the old "stays clamped"
+  // assertion this test used to make.
   let outOfBounds = 0;
   for (let i = 0; i < 500; i += 1) {
     const random = seededRandom(hashString(`landing-bounds-${i}`));
     const point = deliveryLandingPoint({ x: 4, y: 96 }, 12, random); // near a corner, large error
     if (point.x < -0.01 || point.x > 100.01 || point.y < -0.01 || point.y > 100.01) outOfBounds += 1;
   }
-  check("landing points near a corner with a large error stay clamped inside playable bounds (500 samples)", outOfBounds === 0);
+  check("landing points near a corner with a large error are free to land off-pitch (500 samples)", outOfBounds > 0);
 }
 
 console.log("\n=== match-lab.js integration: Maldini in the lane materially affects real cross resolution ===");
@@ -275,6 +283,100 @@ console.log("\n=== match-lab.js integration: explicit ball movement plus authori
       && aerialEvent?.moverId === receiver.id
       && aerialEvent.moveTo.x === deliveryEvent.ballTo.x
       && aerialEvent.moveTo.y === deliveryEvent.ballTo.y);
+}
+
+console.log("\n=== match-lab.js integration: a caught header meets the moving goalkeeper ===");
+{
+  let caught = null;
+  for (let seed = 0; seed < 2000 && !caught; seed += 1) {
+    const crosser = entry("header-crosser", { team: "home", x: 84, y: 72, playerObj: GOOD_CROSSER });
+    const receiver = entry("header-receiver", { team: "home", x: 45, y: 86, playerObj: player("Strong Header", {
+      Heading: 18, Technique: 16, Decisions: 15, Composure: 16,
+    }) });
+    const homeKeeper = entry("home-keeper", { team: "home", role: "keeper", x: 50, y: 4, playerObj: ELITE_KEEPER });
+    const keeper = entry("header-keeper", { team: "away", role: "keeper", x: 53, y: 96, playerObj: ELITE_KEEPER });
+    const roster = [crosser, receiver, homeKeeper, keeper];
+    const initialPositions = Object.fromEntries(roster.map((item) => [item.id, pointOf(item)]));
+    setupRoster(roster, crosser.id);
+    const groups = freePlayGroups(crosser.id, state.roster);
+    const trace = [];
+    const result = resolveCross(
+      groups,
+      {},
+      seededRandom(hashString(`caught-header-contact-${seed}`)),
+      trace,
+      true,
+    );
+    const header = trace.find((event) => event.code === "F.HEADER");
+    const save = trace.find((event) => event.code === "K.SAVE.1");
+    const keeperMove = header?.playerMoves?.find((move) => move.playerId === keeper.id);
+    if (save && keeperMove && yardDistance(keeperMove.from, keeperMove.to) > 0.25) {
+      caught = { trace, result, header, save, keeperMove, roster, initialPositions, crosser, receiver, keeper };
+    }
+  }
+  check("a non-trivial caught-header fixture is found within the deterministic search budget", Boolean(caught));
+  if (caught) {
+    const { trace, result, header, save, keeperMove, roster, initialPositions, crosser, receiver, keeper } = caught;
+    check("the regression includes the close-down adjustment that preceded the reported save",
+      trace.some((event) => event.code === "GK.ADJUST"
+        && event.playerMoves.some((move) => move.playerId === keeper.id)));
+    check("the keeper's interception is authored during F.HEADER, not as a late journey in K.SAVE.1",
+      header.duration > 120 && save.duration === 120 && save.playerMoves.length === 0);
+    check("the header endpoint and save contact are the same authoritative ball point",
+      yardDistance(header.ballTo, save.contact.point) < 1e-9);
+    check("the save contact records the exact body endpoint authored during the incoming header",
+      yardDistance(keeperMove.to, save.contact.bodyPoint) < 1e-9
+        && yardDistance(save.contact.point, save.contact.bodyPoint) <= save.contact.reachAllowanceYards + 1e-9);
+
+    const plan = buildMatchLabPlaybackPlan({
+      trace,
+      initialPositions,
+      initialBall: initialPositions[crosser.id],
+      initialOwnerId: crosser.id,
+      finalOwnerId: result.nextOwnerId,
+      restart: result.restart,
+      playerProfiles: Object.fromEntries(roster.map((item) => [item.id, item.player])),
+    });
+    const headerIndex = trace.indexOf(header);
+    const saveIndex = trace.indexOf(save);
+    const headerInterval = plan.intervals.find((interval) => interval.eventIndex === headerIndex);
+    const saveInterval = plan.intervals.find((interval) => interval.eventIndex === saveIndex);
+    const atContact = sampleMatchLabPlaybackPlan(plan, headerInterval.endMs);
+    const afterCatch = sampleMatchLabPlaybackPlan(plan, saveInterval.endMs);
+    check("at the save boundary the displayed keeper is within his declared hand-reach of the displayed ball",
+      yardDistance(atContact.players[keeper.id], atContact.ball) <= save.contact.reachAllowanceYards + 1e-6);
+    check("once the catch completes, the displayed ball is on the displayed goalkeeper",
+      yardDistance(afterCatch.players[keeper.id], afterCatch.ball) < 1e-6
+        && afterCatch.ownerId === keeper.id);
+  }
+}
+
+console.log("\n=== match-lab.js integration: an unreachable keeper cannot be awarded a header save ===");
+{
+  let onTargetHeaders = 0;
+  let impossibleKeeperContacts = 0;
+  for (let seed = 0; seed < 240; seed += 1) {
+    const crosser = entry("far-header-crosser", { team: "home", x: 84, y: 72, playerObj: GOOD_CROSSER });
+    const receiver = entry("far-header-receiver", { team: "home", x: 45, y: 86, playerObj: player("Strong Header", {
+      Heading: 18, Technique: 16, Decisions: 15, Composure: 16,
+    }) });
+    const keeper = entry("far-header-keeper", { team: "away", role: "keeper", x: 20, y: 96, playerObj: ELITE_KEEPER });
+    const trace = [];
+    resolveCross(
+      { owner: crosser, teammates: [receiver], opponents: [], keeper },
+      {},
+      seededRandom(hashString(`unreachable-header-save-${seed}`)),
+      trace,
+    );
+    if (!trace.some((event) => event.code === "F.HEADER")) continue;
+    onTargetHeaders += 1;
+    if (trace.some((event) => event.keeperAction && event.keeperAction !== "beaten")) {
+      impossibleKeeperContacts += 1;
+    }
+  }
+  check("the unreachable-keeper fixture produces real on-target headers", onTargetHeaders > 20);
+  check("none of those headers awards a catch, parry, or tip to the distant goalkeeper",
+    impossibleKeeperContacts === 0);
 }
 
 console.log("\n=== match-lab.js integration: authored setup immutability + Replay determinism ===");

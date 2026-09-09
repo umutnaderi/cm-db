@@ -1,0 +1,270 @@
+{
+  "schemaVersion": 1,
+  "engineVersion": "match-lab-freeplay-v1",
+  "capturedAt": "2026-09-03T17:05:49.892Z",
+  "reason": "Three teammates clustered tightly together circulate short passes/holds among themselves without progressing until the possession hits the 50-action cap without ever organically resolving (new-issues.md, \"congested play, results a short pass loop\").",
+  "tags": [
+    "congestion",
+    "pass-loop",
+    "reported-bug"
+  ],
+  "seed": 0,
+  "database": "",
+  "ballOwnerId": "a",
+  "attackingDirections": {
+    "home": "down",
+    "away": "up"
+  },
+  "tacticalSettings": {
+    "marking": {
+      "home": {
+        "scheme": "man",
+        "tightness": 3
+      },
+      "away": {
+        "scheme": "man",
+        "tightness": 3
+      }
+    },
+    "attacking": {
+      "home": {
+        "style": "possession",
+        "directness": 2
+      },
+      "away": {
+        "style": "possession",
+        "directness": 2
+      }
+    }
+  },
+  "roster": [
+    {
+      "id": "a",
+      "role": "player",
+      "team": "home",
+      "position": {
+        "x": 48,
+        "y": 50
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Cluster Player A",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Passing",
+            "value": 12
+          },
+          {
+            "label": "Technique",
+            "value": 12
+          },
+          {
+            "label": "Teamwork",
+            "value": 14
+          },
+          {
+            "label": "Decisions",
+            "value": 10
+          },
+          {
+            "label": "Vision",
+            "value": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "b",
+      "role": "player",
+      "team": "home",
+      "position": {
+        "x": 52,
+        "y": 48
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Cluster Player B",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Passing",
+            "value": 12
+          },
+          {
+            "label": "Technique",
+            "value": 12
+          },
+          {
+            "label": "Teamwork",
+            "value": 14
+          },
+          {
+            "label": "Decisions",
+            "value": 10
+          },
+          {
+            "label": "Vision",
+            "value": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "c",
+      "role": "player",
+      "team": "home",
+      "position": {
+        "x": 50,
+        "y": 54
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Cluster Player C",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Passing",
+            "value": 12
+          },
+          {
+            "label": "Technique",
+            "value": 12
+          },
+          {
+            "label": "Teamwork",
+            "value": 14
+          },
+          {
+            "label": "Decisions",
+            "value": 10
+          },
+          {
+            "label": "Vision",
+            "value": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "d1",
+      "role": "player",
+      "team": "away",
+      "position": {
+        "x": 47,
+        "y": 55
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Marking Defender 1",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Positioning",
+            "value": 13
+          },
+          {
+            "label": "Anticipation",
+            "value": 12
+          },
+          {
+            "label": "Tackling",
+            "value": 12
+          },
+          {
+            "label": "Decisions",
+            "value": 12
+          }
+        ]
+      }
+    },
+    {
+      "id": "d2",
+      "role": "player",
+      "team": "away",
+      "position": {
+        "x": 53,
+        "y": 55
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Marking Defender 2",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Positioning",
+            "value": 13
+          },
+          {
+            "label": "Anticipation",
+            "value": 12
+          },
+          {
+            "label": "Tackling",
+            "value": 12
+          },
+          {
+            "label": "Decisions",
+            "value": 12
+          }
+        ]
+      }
+    },
+    {
+      "id": "keeper",
+      "role": "keeper",
+      "team": "away",
+      "position": {
+        "x": 50,
+        "y": 97
+      },
+      "velocity": {
+        "x": 0,
+        "y": 0
+      },
+      "facing": null,
+      "player": {
+        "canonical_player_name": "Away Keeper",
+        "current_ability": 150,
+        "attributes": [
+          {
+            "label": "Reflexes",
+            "value": 13
+          },
+          {
+            "label": "Handling",
+            "value": 12
+          },
+          {
+            "label": "Positioning",
+            "value": 13
+          },
+          {
+            "label": "One On Ones",
+            "value": 12
+          }
+        ]
+      }
+    }
+  ]
+}

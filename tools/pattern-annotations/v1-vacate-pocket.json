@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "annotation:v1-vacate-pocket",
+  "name": "Body in the carrier's cone steps out of the lane",
+  "attackingDirection": "up",
+  "ball": {
+    "state": "carried",
+    "lanes": ["centre"],
+    "depthBands": ["progression"]
+  },
+  "observations": [
+    {
+      "label": "ballOwner",
+      "primitive": "carry",
+      "trigger": "carrier has a runnable lane ahead but a teammate is standing in it",
+      "intention": "carry",
+      "relationships": [],
+      "evidence": [
+        "carrier's head is up and the first defender is more than five yards away",
+        "the direct line to the next band is occupied by a team-mate, not an opponent"
+      ],
+      "observationTime": 0,
+      "confidence": 0.9
+    },
+    {
+      "label": "pocketOccupant",
+      "primitive": "vacate-pocket",
+      "trigger": "standing inside the cone directly ahead of the ball",
+      "intention": "vacate-pocket",
+      "relationships": [
+        { "relation": "teammate-of-ball-owner", "to": "ballOwner" }
+      ],
+      "evidence": [
+        "moves perpendicular to the carrying line rather than further forward",
+        "clears the lane without dropping into it again as the carry continues",
+        "the direction chosen is the side they were already leaning toward"
+      ],
+      "observationTime": 0.4,
+      "confidence": 0.85
+    }
+  ],
+  "source": {
+    "reference": "V1",
+    "note": "Authored observation only. No frame images or video are stored in this repository; this records what was seen, not the footage."
+  }
+}

@@ -1,6 +1,7 @@
 import { clamp, playerAttribute } from "./matchEngineCore.js";
 import { reachIn } from "./playerKinetics.js";
-import { yardDistance, laneObstruction } from "./spatialDecision.js";
+import { advanceMotion } from "./worldMotion.js";
+import { yardDistance, laneObstruction, yardDistanceToSegment } from "./spatialDecision.js";
 import {
   movementDistanceYards, pointAlongMovement, CONTACT_REACTION_DELAY_MS,
 } from "./matchMovementTiming.js";
@@ -22,11 +23,70 @@ import {
 
 export const CONTACT_HEIGHT_YARDS = 0.6;
 
+// ---------------------------------------------------------------------------
+// Passing v3, height-eligible contact (2026-08-26) -- see MATCH_LAB_PLAN.md.
+// A real reported bug: earliestReachableContact() only ever let a touch
+// happen while ball.height <= CONTACT_HEIGHT_YARDS (0.6yd, ankle height).
+// A lofted/driven-aerial parabola spends most of its flight well above
+// that, so nobody -- not even a defender standing right under it -- was
+// EVER contact-eligible during the climb/descent; every ordinary lofted
+// pass read as "uncontested" by construction, regardless of Jumping or
+// positioning. Real height bands replace the single flat gate: which part
+// of the body could plausibly reach the ball at THIS height, for THIS
+// player, given their own standing + jump reach.
+// ---------------------------------------------------------------------------
+
+const STANDING_REACH_YARDS = 2.1;
+
+// choice-of-whether-they-can-contest ONLY (the file header's own "no
+// second success roll" rule) -- a real range of extra reach from a real
+// jump, scaled by Jumping, never a probability of winning the contest
+// itself (contestedRace()/localizedDuel() in match-lab.js decide THAT).
+// Exported (2026-08-27, Shot As Projectile v1) -- a keeper's own dive
+// envelope reuses this exact term (1.2yd arm + jumpReachYards) rather
+// than inventing a second jump-height formula.
+export function jumpReachYards(player) {
+  const jumping = clamp(1, 20, playerAttribute(player, "Jumping"));
+  return 0.3 + (jumping / 20) * 0.7;
+}
+
+export function playerMaxReachYards(player) {
+  return STANDING_REACH_YARDS + jumpReachYards(player);
+}
+
+const HEIGHT_BAND_THRESHOLDS = [
+  { band: "foot", max: 0.6 },
+  { band: "thigh", max: 1.3 },
+  { band: "chest", max: 1.9 },
+];
+
+// The band a ball AT this height would need to be played with -- standing
+// reach/jump only decide WHETHER a given player can get a body part up
+// there at all (playerMaxReachYards()), not which band it falls in.
+export function contactBandForHeight(heightYards) {
+  const height = Math.max(0, Number(heightYards) || 0);
+  for (const { band, max } of HEIGHT_BAND_THRESHOLDS) {
+    if (height <= max) return band;
+  }
+  return "head";
+}
+
 const PASS_TYPE_PROFILE = {
   ground: { speedYardsPerSecond: 20, peakHeightYards: () => 0, accuracyMultiplier: 1.0 },
   "driven-ground": { speedYardsPerSecond: 26, peakHeightYards: () => 0, accuracyMultiplier: 1.25 },
   lofted: { speedYardsPerSecond: 16, peakHeightYards: (distanceYards) => clamp(1.5, 6, distanceYards * 0.09), accuracyMultiplier: 1.15 },
   "driven-aerial": { speedYardsPerSecond: 24, peakHeightYards: (distanceYards) => clamp(0.8, 2.5, distanceYards * 0.035), accuracyMultiplier: 1.35 },
+  // A goalkeeper's own hand throw (2026-08-25) -- a real browser round
+  // reported a keeper's "throw" reaching a teammate the length of the
+  // pitch at driven-aerial's own kicked-ball pace, because keeper
+  // distribution routed through this SAME selectPassType()/
+  // PASS_TYPE_PROFILE table with no throw-specific entry -- a hand throw
+  // got booted like a driven kick. An arm throw is genuinely slower than
+  // any kicked ball and arcs more than a flat driven pass; KEEPER_THROW_MAX_YARDS
+  // (match-lab.js, keeperDistributionCandidates()) is what keeps the
+  // TARGET itself realistic -- this only fixes how a throw at any legal
+  // target actually looks once selected.
+  throw: { speedYardsPerSecond: 14, peakHeightYards: (distanceYards) => clamp(0.8, 3, distanceYards * 0.06), accuracyMultiplier: 1.1 },
 };
 
 const GROUND_MAX_YARDS = 15;
@@ -138,13 +198,22 @@ export function reactionDelayMsFor(player, { isIntendedReceiver = false } = {}) 
 // The unified race: every candidate -- the intended receiver treated as
 // ONE candidate among equals, not evaluated on a separate privileged
 // path -- checked against the SAME independent trajectory, height-gated
-// (nobody is contact-eligible while the ball is genuinely in the air --
-// see CONTACT_HEIGHT_YARDS's own comment on why that's a deliberate v1
-// boundary, not an oversight). First (candidate, instant, point) match
-// across the whole set wins. Returns null when nobody qualifies before
-// the flight completes -- a genuinely clean, uncontested arrival, or (if
-// the intended receiver also fails to reach it) a loose ball -- both
-// real outcomes, now reached through one shared mechanism.
+// per PLAYER (playerMaxReachYards()) rather than one flat cutoff for
+// everyone (2026-08-26, Passing v3 -- see this file's own header on the
+// bug this fixes: a flat CONTACT_HEIGHT_YARDS meant nobody was EVER
+// contact-eligible for most of a lofted/driven-aerial parabola's own
+// flight, so an ordinary lofted pass always read as uncontested no matter
+// who was standing under it). First sample where ANYONE qualifies wins;
+// when TWO OR MORE candidates qualify at that SAME sample, all of them
+// come back as `contestants` (plus `band`, the height class the contact
+// happened at) -- match-lab.js decides who actually wins the header/
+// chest/foot duel, this function only ever decides WHO and WHEN a body
+// part could physically be there, same "choice of whether, not a second
+// success roll" boundary the rest of this file already keeps. Returns
+// null when nobody qualifies before the flight completes -- a genuinely
+// clean, uncontested arrival, or (if the intended receiver also fails to
+// reach it) a loose ball -- both real outcomes, reached through one
+// shared mechanism.
 //
 // interceptRadiusYards mirrors earliestReachableInterception()'s own
 // default (matchMovementTiming.js) -- a real "stretch out a leg/foot"
@@ -158,6 +227,39 @@ export function reactionDelayMsFor(player, { isIntendedReceiver = false } = {}) 
 // interceptions (a defender already positioned right in the lane)
 // impossible without this small allowance for redirecting a body part
 // that's already close, not sprinting.
+// ---------------------------------------------------------------------------
+// Ball Release Clearance v1 (2026-09-06) -- a real reported bug: an endless
+// two-man possession loop ("A plays a ground pass toward C, but B gets to
+// it", then B plays the same pass back to A, forever, with neither player
+// nor the ball ever moving).
+//
+// Both contact scans below sample from tMs = 0, and at tMs = 0 the ball is
+// still EXACTLY at flight.from -- the kicker's own foot. Anyone standing
+// within interceptRadiusYards of the kick point therefore qualified for
+// contact before the ball had travelled a single yard, so a teammate a yard
+// away "got to" every pass at 0 ms. Two such players beside each other trade
+// the ball at zero distance until POSSESSION_MAX_ACTIONS cuts the possession
+// off.
+//
+// Skip the launch instant, not a contact-free radius around the passer.
+// A defender can block immediately after release and a short pass is legal.
+// The last toucher is excluded separately from this incoming-contact race.
+function ballHasCleared(flight, ballPoint) {
+  return movementDistanceYards(flight.from, ballPoint) > 1e-6;
+}
+
+// Whoever's body is genuinely closest to the ball at the winning sample --
+// never whichever candidate the caller happened to list first. With two
+// candidates equally able to touch it, array order is not a football fact,
+// and letting it decide is what made the loop above alternate stably instead
+// of breaking itself.
+function closestEligible(eligible) {
+  return eligible.reduce(
+    (best, item) => (item.neededYards < best.neededYards ? item : best),
+    eligible[0],
+  );
+}
+
 export function earliestReachableContact({
   flight, candidates = [], sampleIntervalMs = 40, interceptRadiusYards = 1.5,
 }) {
@@ -167,28 +269,264 @@ export function earliestReachableContact({
   for (let step = 0; step <= steps; step += 1) {
     const tMs = Math.min(duration, step * sampleIntervalMs);
     const ballPoint = ballPositionAtElapsed(flight, tMs);
-    if (ballPoint.height <= CONTACT_HEIGHT_YARDS) {
-      for (const candidate of candidates) {
-        const isIntendedReceiver = candidate.id === flight.intendedReceiverId;
-        const reactionDelayMs = reactionDelayMsFor(candidate.player, { isIntendedReceiver });
-        const availableSeconds = Math.max(0, (tMs - reactionDelayMs) / 1000);
-        const neededYards = movementDistanceYards(candidate, ballPoint);
-        const reachableYards = reachIn(candidate.player, availableSeconds);
-        if (reachableYards + interceptRadiusYards >= neededYards) {
-          return {
-            candidate,
-            isIntendedReceiver,
-            atMs: tMs,
-            atPoint: ballPoint,
-            reactionDelayMs,
-            reachAllowanceYards: interceptRadiusYards,
-            neededYards,
-            reachableYards,
-          };
-        }
+    const band = contactBandForHeight(ballPoint.height);
+    // See Ball Release Clearance v1 above: nobody meets a ball that is still
+    // sitting on the kicker's foot.
+    if (!ballHasCleared(flight, ballPoint, interceptRadiusYards)) {
+      if (tMs >= duration) break;
+      continue;
+    }
+    const eligible = [];
+    for (const candidate of candidates) {
+      if (candidate.id === flight.lastTouchPlayerId) continue;
+      // Not "in the air at all" for THIS candidate -- literally out of
+      // reach even with a full jump, regardless of how close they stand.
+      if (ballPoint.height > playerMaxReachYards(candidate.player)) continue;
+      const isIntendedReceiver = candidate.id === flight.intendedReceiverId;
+      const reactionDelayMs = reactionDelayMsFor(candidate.player, { isIntendedReceiver });
+      const availableSeconds = Math.max(0, (tMs - reactionDelayMs) / 1000);
+      const neededYards = movementDistanceYards(candidate, ballPoint);
+      const reachableYards = reachIn(candidate.player, availableSeconds);
+      if (reachableYards + interceptRadiusYards >= neededYards) {
+        eligible.push({
+          candidate, isIntendedReceiver, reactionDelayMs,
+          reachAllowanceYards: interceptRadiusYards, neededYards, reachableYards,
+        });
       }
+    }
+    if (eligible.length) {
+      const first = closestEligible(eligible);
+      return {
+        candidate: first.candidate,
+        isIntendedReceiver: first.isIntendedReceiver,
+        atMs: tMs,
+        atPoint: ballPoint,
+        reactionDelayMs: first.reactionDelayMs,
+        reachAllowanceYards: interceptRadiusYards,
+        neededYards: first.neededYards,
+        reachableYards: first.reachableYards,
+        band,
+        contestants: eligible,
+      };
     }
     if (tMs >= duration) break;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Kick As Projectile v1 (2026-08-27) -- see match-lab.js's own resolvePass()
+// comment for the full reported-bug rationale: earliestReachableContact()
+// above races every candidate from their FROZEN kick-time pose, which is
+// what let "the ball would meet player X" get decided before anyone
+// actually moved -- a receiver could be credited with reaching a point 20
+// real yards from their kick-time spot purely because the frozen-pose
+// arithmetic said they COULD, never checking where their body genuinely
+// was tick by tick. This is the live equivalent: every candidate's
+// position is re-derived every sampleIntervalMs from where they ACTUALLY
+// were the tick before -- chasing the ball's own live sample when their
+// job says to, or their ordinary tactical job target otherwise (jobs
+// persist; only contact goes live). earliestReachableContact() itself is
+// UNCHANGED and stays available as a pure "frozen-pose" oracle (tests,
+// or any caller that genuinely wants that question answered) -- this is
+// the one match-lab.js's own resolvePass()/resolveThroughBall() call for
+// real contact resolution.
+// ---------------------------------------------------------------------------
+
+// How close (real yards) to the flight's own straight-line corridor
+// (kick point to actualEndpoint) counts as "close enough to reasonably
+// notice and react to this ball," regardless of tactical job -- the
+// anti-Weah-swarm boundary: nobody more than this far from the corridor,
+// not already the aimed-at player, and not on a job that itself says
+// "go get the ball" (press/track/recover) ever abandons their tactical
+// job to chase a pass that was never near them.
+const CHASE_CORRIDOR_YARDS = 8;
+// Same "stretch out a leg/foot" allowance earliestReachableContact() already
+// uses -- both for "is this even worth trying to chase" (the remaining-time
+// check) and for what counts as genuine contact once someone's close.
+const CHASE_INTERCEPT_ALLOWANCE_YARDS = 1.5;
+// Once a chaser is already this close to the ball's own live position,
+// track it precisely for the real touch rather than the flight's fixed
+// endpoint -- close enough that "run to where it's going" and "run to
+// where it is" are basically the same instruction anyway, and precise
+// tracking is what actually lands the final contact.
+const CLOSE_TRACKING_YARDS = 5;
+
+function cloneTickPositions(positions) {
+  const snapshot = {};
+  for (const [id, point] of Object.entries(positions)) snapshot[id] = { ...point };
+  return snapshot;
+}
+
+// ALL of: height reachable, and a real chance of physically arriving before
+// the flight ends (a generous, frozen-pose-style "is this worth it at all"
+// estimate over whatever time remains -- the actual tick-by-tick movement
+// below is what decides the real outcome, this only gates who bothers
+// trying). Plus AT LEAST ONE of: genuinely near the flight's own corridor,
+// the aimed-at player, or a live tactical job that itself means "go get the
+// ball" (press-ball/track/last-man recover) -- never everyone within reach
+// sprinting at it regardless of what they were actually doing.
+function shouldChaseBall(candidate, currentPosition, ball, remainingSeconds, flight, mayChaseByJob, interceptRadiusYards) {
+  if (ball.height > playerMaxReachYards(candidate.player)) return false;
+  // "Can physically arrive" is judged against where the flight is actually
+  // HEADED (actualEndpoint), never the ball's own live sample -- early in
+  // a flight the ball still sits at the kicker's own foot, genuinely far
+  // from anyone it's being delivered TO; gating on "can you sprint to
+  // where the ball IS right now" would fail the aimed-at receiver simply
+  // for not already standing next to the passer. This is "is it plausible
+  // I can get INTO POSITION before the flight arrives," not "can I catch
+  // up to it this instant" -- the tick-by-tick movement below still
+  // chases the ball's own real live position once chasing is true.
+  const neededYards = movementDistanceYards(currentPosition, flight.actualEndpoint);
+  const remainingReach = reachIn(candidate.player, Math.max(0, remainingSeconds));
+  if (remainingReach + interceptRadiusYards < neededYards) return false;
+  if (candidate.id === flight.intendedReceiverId) return true;
+  if (mayChaseByJob) return true;
+  return yardDistanceToSegment(currentPosition, flight.from, flight.actualEndpoint) <= CHASE_CORRIDOR_YARDS;
+}
+
+// The live tick itself. `players` is every candidate who could plausibly
+// touch this ball (both sides, keepers included if they can reach) --
+// treated as equals; the aimed-at teammate is a label and a small chase
+// bias (via shouldChaseBall() above), never a privileged path.
+// `jobTargetFor(playerId)` returns `{ point, mayChase }` for whoever isn't
+// currently chasing the ball: `point` is their ordinary tactical
+// destination for this phase of play (mark/screen/hold width/pin the last
+// line/press-ball/recover -- computed ONCE by the caller, same "jobs
+// persist" contract as the rest of this project's off-ball motion), and
+// `mayChase` tells this function whether THAT job already means "your job
+// is to go get the ball" (press-ball, track, last-man recover), which
+// waives the corridor-distance requirement above. A missing/null return
+// leaves that candidate standing still -- a safe, inert default for a
+// minimal caller (a unit test) that hasn't wired real jobs at all.
+//
+// Reuses reachIn()/movementDistanceYards()/pointAlongMovement() exactly as
+// every other continuous-motion primitive in this project already does --
+// no second locomotion model. Each candidate's own cumulative reach
+// (reachIn(player, elapsedSeconds), the SAME closed-form accelerate-then-
+// cap curve continuousPositionAtElapsed() uses) grows from kick-time, so a
+// player who only starts angling toward the ball once it's already in
+// flight is still genuinely accelerating, not teleporting to a "could
+// technically get there" point.
+export function simulateFlightUntilContact({
+  flight, players = [], jobTargetFor = () => null,
+  sampleIntervalMs = 40, interceptRadiusYards = CHASE_INTERCEPT_ALLOWANCE_YARDS,
+}) {
+  const duration = flight.durationMs;
+  const positions = {};
+  const traveledYards = {};
+  const jobMotions = {};
+  for (const entry of players) {
+    positions[entry.id] = { x: entry.x, y: entry.y, zone: entry.zone ?? null };
+    traveledYards[entry.id] = 0;
+  }
+  const loosePoint = () => {
+    const ball = ballPositionAtElapsed(flight, duration);
+    return {
+      candidate: null,
+      isIntendedReceiver: false,
+      atMs: duration,
+      atPoint: { ...flight.actualEndpoint, height: ball.height },
+      band: contactBandForHeight(ball.height),
+      contestants: [],
+      positions: cloneTickPositions(positions),
+      jobMotions,
+    };
+  };
+  if (!players.length || duration <= 0) return loosePoint();
+
+  const steps = Math.max(1, Math.ceil(duration / Math.max(1, sampleIntervalMs)));
+  for (let step = 0; step <= steps; step += 1) {
+    const tMs = Math.min(duration, step * sampleIntervalMs);
+    const elapsedSeconds = tMs / 1000;
+    const remainingSeconds = (duration - tMs) / 1000;
+    const ball = ballPositionAtElapsed(flight, tMs);
+    const band = contactBandForHeight(ball.height);
+
+    for (const entry of players) {
+      const currentPosition = positions[entry.id];
+      const job = jobTargetFor(entry.id);
+      if (job?.authoritativeMotion) {
+        const motion = advanceMotion({ from: entry, intentionTarget: job.point,
+          player: entry.player, elapsedMs: tMs, incomingVelocity: job.velocity,
+          reactionDelayMs: job.reactionDelayMs ?? 0, intention: job.action,
+          paceToArrival: false, sampleCount: Math.max(4, Math.ceil(tMs / 40)) });
+        positions[entry.id] = motion.position;
+        traveledYards[entry.id] = movementDistanceYards(entry, motion.position);
+        jobMotions[entry.id] = { ...motion, action: job.action };
+        continue;
+      }
+      const mayChaseByJob = Boolean(job?.mayChase);
+      const chasing = shouldChaseBall(
+        entry, currentPosition, ball, remainingSeconds, flight, mayChaseByJob, interceptRadiusYards,
+      );
+      // Run to where the flight is actually HEADED, not the ball's own
+      // live sample, UNLESS already close enough to track it precisely
+      // for the real touch. A real reported bug: chasing the live ball
+      // from the first tick means chasing the passer's own foot early in
+      // the flight (the ball starts there) -- a receiver who barely needs
+      // to move at all would waste their tiny early reachIn() budget
+      // angling toward the KICKER before the ball ever gets close, then
+      // have nothing left once it actually arrived. actualEndpoint sits
+      // on the SAME straight line the ball travels, so heading there
+      // still crosses the ball's own path -- a genuine mid-flight
+      // interception still works once CLOSE_TRACKING_YARDS puts someone
+      // on the corridor within precise range of the ball's real position.
+      const distanceToLiveBall = movementDistanceYards(currentPosition, ball);
+      const target = chasing
+        ? (distanceToLiveBall <= CLOSE_TRACKING_YARDS ? ball : flight.actualEndpoint)
+        : (job?.point ?? currentPosition);
+      // Cumulative reach from kick-time (elapsedSeconds), not a per-tick
+      // reachIn() call -- the SAME distinction continuousPositionAtElapsed()
+      // already draws: querying reachIn() fresh every 40ms would restart
+      // the acceleration curve from a dead stop every single tick, capping
+      // everyone at their very first stride's worth of ground forever.
+      const totalReachable = reachIn(entry.player, elapsedSeconds);
+      const deltaYards = Math.max(0, totalReachable - traveledYards[entry.id]);
+      traveledYards[entry.id] = totalReachable;
+      const distanceToTarget = movementDistanceYards(currentPosition, target);
+      const advance = Math.min(deltaYards, distanceToTarget);
+      positions[entry.id] = pointAlongMovement(currentPosition, target, advance);
+    }
+    const eligible = [];
+    // See Ball Release Clearance v1 above. The tick loop that moves everyone
+    // still runs at tMs = 0 (a player's own reaction and first stride start
+    // the instant the ball is struck) -- only CONTACT is withheld until the
+    // ball has genuinely left the kicker's foot.
+    const cleared = ballHasCleared(flight, ball, interceptRadiusYards);
+    for (const entry of cleared ? players : []) {
+      if (entry.id === flight.lastTouchPlayerId) continue;
+      if (ball.height > playerMaxReachYards(entry.player)) continue;
+      const neededYards = movementDistanceYards(positions[entry.id], ball);
+      if (neededYards <= interceptRadiusYards) {
+        eligible.push({
+          candidate: entry,
+          isIntendedReceiver: entry.id === flight.intendedReceiverId,
+          reactionDelayMs: 0,
+          reachAllowanceYards: interceptRadiusYards,
+          neededYards,
+          reachableYards: traveledYards[entry.id],
+        });
+      }
+    }
+    if (eligible.length) {
+      const first = closestEligible(eligible);
+      return {
+        candidate: first.candidate,
+        isIntendedReceiver: first.isIntendedReceiver,
+        atMs: tMs,
+        atPoint: ball,
+        reactionDelayMs: first.reactionDelayMs,
+        reachAllowanceYards: interceptRadiusYards,
+        neededYards: first.neededYards,
+        reachableYards: first.reachableYards,
+        band,
+        contestants: eligible,
+        positions: cloneTickPositions(positions),
+        jobMotions,
+      };
+    }
+    if (tMs >= duration) break;
+  }
+  return loosePoint();
 }

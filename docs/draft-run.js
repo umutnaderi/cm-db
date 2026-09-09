@@ -7,6 +7,10 @@ import {
   saveDraftSquad,
   searchPlayers,
 } from "./src/lib/retroballApi.js?v=20260801-65";
+import { listTitanFightSquads } from "./src/data/historicalSquads.js?v=20260908-01";
+import {
+  resolveHistoricalSquad, validRoster as validHistoricalRoster,
+} from "./src/lib/historicalSquadResolver.js?v=20260904-01";
 import {
   average,
   clamp,
@@ -262,176 +266,11 @@ const SCENARIOS = {
   },
 };
 
-const TITAN_OPPONENTS = [
-  {
-    key: "titan-brazil-2002",
-    name: "2002 Brazil NT",
-    shortName: "Brazil 2002",
-    database: "cm0102_vanilla_original",
-    filter: { nation: "Brazil" },
-    players: [
-      ["marcos"],
-      ["lucio"],
-      ["edmilson"],
-      ["roque junior"],
-      ["cafu"],
-      ["gilberto silva", "gilberto"],
-      {
-        legacyCanonicalId: "23678",
-        canonicalPublicId: "player_kleberson_brazil_1979",
-        aliases: ["Kléberson", "kleberson"],
-      },
-      ["roberto carlos"],
-      ["ronaldinho"],
-      ["rivaldo"],
-      ["ronaldo"],
-    ],
-  },
-  {
-    key: "titan-france-2000",
-    name: "2000 France NT",
-    shortName: "France 2000",
-    database: "cm0001_vanilla_original",
-    filter: { nation: "France" },
-    players: [
-      ["fabien barthez", "barthez"],
-      ["lilian thuram", "thuram"],
-      ["marcel desailly", "desailly"],
-      ["laurent blanc", "blanc"],
-      ["bixente lizarazu", "lizarazu"],
-      ["patrick vieira", "vieira"],
-      ["didier deschamps", "deschamps"],
-      ["youri djorkaeff", "djorkaeff"],
-      ["zinedine zidane", "zidane"],
-      ["thierry henry", "henry"],
-      ["christophe dugarry", "dugarry"],
-    ],
-  },
-  {
-    key: "titan-real-2000",
-    name: "2000 Real Madrid",
-    shortName: "Real Madrid 2000",
-    database: "cm9900_vanilla_original",
-    filter: { club: "Real Madrid C.F." },
-    players: [
-      ["iker casillas", "casillas"],
-      ["michel salgado", "salgado"],
-      ["aitor karanka", "karanka"],
-      ["ivan helguera", "helguera"],
-      ["roberto carlos"],
-      ["steve mcmanaman", "mcmanaman"],
-      ["fernando redondo", "redondo"],
-      ["ivan campo", "campo"],
-      ["raul"],
-      ["fernando morientes", "morientes"],
-      ["nicolas anelka", "anelka"],
-    ],
-  },
-  {
-    key: "titan-united-1999",
-    name: "1999 Manchester United",
-    shortName: "Manchester United 1999",
-    database: "cm9899_vanilla_original",
-    filter: { club: "Manchester United" },
-    players: [
-      ["peter schmeichel", "schmeichel"],
-      ["gary neville"],
-      ["ronny johnsen"],
-      ["jaap stam", "stam"],
-      ["denis irwin", "irwin"],
-      ["ryan giggs", "giggs"],
-      ["david beckham", "beckham"],
-      ["nicky butt", "butt"],
-      ["jesper blomqvist", "blomqvist"],
-      ["dwight yorke", "yorke"],
-      ["andy cole"],
-    ],
-  },
-  {
-    key: "titan-real-2002",
-    name: "2002 Real Madrid",
-    shortName: "Real Madrid 2002",
-    database: "cm0102_vanilla_original",
-    filter: { club: "Real Madrid C.F." },
-    players: [
-      ["cesar"],
-      ["michel salgado", "salgado"],
-      ["fernando hierro", "hierro"],
-      ["ivan helguera", "helguera"],
-      ["roberto carlos"],
-      ["claude makelele", "makelele"],
-      ["luis figo", "figo"],
-      ["santiago solari", "solari"],
-      ["zinedine zidane", "zidane"],
-      ["raul"],
-      ["fernando morientes", "morientes"],
-    ],
-  },
-  {
-    key: "titan-portugal-2004",
-    name: "2004 Portugal NT",
-    shortName: "Portugal 2004",
-    database: "cm0304_vanilla_original",
-    filter: { nation: "Portugal" },
-    players: [
-      ["ricardo"],
-      ["miguel"],
-      ["jorge andrade"],
-      ["ricardo carvalho"],
-      ["nuno valente"],
-      ["maniche"],
-      ["costinha"],
-      ["cristiano ronaldo"],
-      ["deco"],
-      ["luis figo", "figo"],
-      ["pauleta"],
-    ],
-  },
-  {
-    key: "titan-liverpool-2001",
-    name: "2001 Liverpool",
-    shortName: "Liverpool 2001",
-    database: "cm0102_vanilla_original",
-    filter: { club: "Liverpool" },
-    players: [
-      ["sander westerveld", "westerveld"],
-      ["markus babbel", "babbel"],
-      ["sami hyypia", "hyypia"],
-      ["stephane henchoz", "henchoz"],
-      ["jamie carragher", "carragher"],
-      ["gary mcallister", "mcallister"],
-      ["steven gerrard", "gerrard"],
-      ["dietmar hamann", "hamann"],
-      ["john arne riise", "riise"],
-      ["emile heskey", "heskey"],
-      ["michael owen", "owen"],
-    ],
-  },
-  {
-    key: "titan-lazio-1999",
-    name: "1999 Lazio",
-    shortName: "Lazio 1999",
-    database: "cm9900_vanilla_original",
-    filter: { club: "Lazio" },
-    players: [
-      ["luca marchegiani", "marchegiani"],
-      ["paolo negro", "negro"],
-      ["alessandro nesta", "nesta"],
-      ["sinisa mihajlovic", "mihajlovic"],
-      ["giuseppe pancaro", "pancaro"],
-      ["dejan stankovic", "stankovic"],
-      {
-        legacyCanonicalId: "81217",
-        canonicalPublicId: "player_juan_sebastian_veron_argentina_1975",
-        aliases: ["Juan Sebastián Verón", "veron"],
-      },
-      ["matias almeyda", "almeyda"],
-      ["pavel nedved", "nedved"],
-      ["roberto mancini", "mancini"],
-      ["simone inzaghi", "inzaghi"],
-    ],
-  },
-];
+// Titan Fight's opponent catalogue now lives in src/data/historicalSquads.js
+// (2026-09-04) so Draft and Match Lab read ONE declaration instead of two
+// copies. The shape is unchanged -- key/name/shortName/database/filter/
+// players -- so everything below reads exactly as it did before.
+const TITAN_OPPONENTS = listTitanFightSquads();
 const TITAN_BY_KEY = new Map(
   TITAN_OPPONENTS.map((opponent) => [opponent.key, opponent]),
 );
@@ -610,17 +449,10 @@ function teamLabel(key) {
       : TITAN_BY_KEY.get(key)?.name || CLUBS[key]?.name || NATIONS[key]?.name || key;
 }
 
-function validRoster(players) {
-  return players
-    .filter((player) => {
-      const ability = Number(player.current_ability);
-      return ability > 0 && ability <= 200;
-    })
-    .sort((left, right) =>
-      Number(right.current_ability) - Number(left.current_ability)
-      || playerName(left).localeCompare(playerName(right)))
-    .slice(0, 22);
-}
+// One implementation, shared with Match Lab -- see
+// src/lib/historicalSquadResolver.js. Same ability filter, same ordering,
+// same 22-player cap this function always applied.
+const validRoster = validHistoricalRoster;
 
 async function opponentRoster(key) {
   const titan = TITAN_BY_KEY.get(key);
@@ -634,93 +466,14 @@ async function opponentRoster(key) {
   }
 
   if (titan) {
-    const response = await searchPlayers({
-      database,
-      q: "",
-      ...titan.filter,
-      pageSize: 100,
-    });
-    const available = response.items.slice();
-    const selected = [];
-    const normalize = (value) =>
-      String(value || "")
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLocaleLowerCase("en-US")
-        .replace(/[^a-z0-9]+/g, " ")
-        .trim();
-    const matchesPlayerSpec = (player, playerSpec) => {
-      const aliases = Array.isArray(playerSpec)
-        ? playerSpec
-        : playerSpec.aliases;
-      const canonicalPublicId = Array.isArray(playerSpec)
-        ? ""
-        : String(playerSpec.canonicalPublicId || "");
-      const returnedCanonicalPublicId = String(
-        player.canonical_player_public_id || "",
-      );
-      if (canonicalPublicId && returnedCanonicalPublicId) {
-        return returnedCanonicalPublicId === canonicalPublicId;
-      }
-      const normalizedAliases = aliases.map(normalize);
-      const names = [
-        playerName(player),
-        player.display_name,
-        player.full_name,
-        player.common_name,
-        player.canonical_player_name,
-      ]
-        .map(normalize)
-        .filter(Boolean);
-      return normalizedAliases.some((alias) =>
-        names.some((name) => name === alias || name.endsWith(` ${alias}`)),
-      );
-    };
-    for (const playerSpec of titan.players) {
-      const aliases = Array.isArray(playerSpec)
-        ? playerSpec
-        : playerSpec.aliases;
-      let index = available.findIndex((player) =>
-        matchesPlayerSpec(player, playerSpec),
-      );
-      if (index >= 0) {
-        selected.push(available.splice(index, 1)[0]);
-        continue;
-      }
-      const used = new Set(selected.map(playerIdentity));
-      const fallbackDatabases = [
-        database,
-        "cm0304_vanilla_original",
-        "cm0203_vanilla_original",
-        "cm0102_vanilla_original",
-        "cm0001_vanilla_original",
-        "cm9900_vanilla_original",
-        "cm9899_vanilla_original",
-      ].filter(
-        (item, databaseIndex, items) => items.indexOf(item) === databaseIndex,
-      );
-      let player = null;
-      for (const fallbackDatabase of fallbackDatabases) {
-        const fallback = await searchPlayers({
-          database: fallbackDatabase,
-          q: aliases[0],
-          pageSize: 12,
-        });
-        player = fallback.items.find(
-          (item) =>
-            matchesPlayerSpec(item, playerSpec) &&
-            !used.has(playerIdentity(item)),
-        );
-        if (player) break;
-      }
-      if (!player) {
-        throw new Error(
-          `Could not load ${titan.shortName}: ${aliases[0]} is missing from the database set.`,
-        );
-      }
-      selected.push(player);
-    }
-    const roster = validRoster(selected);
+    // Resolution moved to src/lib/historicalSquadResolver.js (2026-09-04).
+    // Same search calls, same alias/canonical-id matching, same fallback
+    // database order -- Titan Fight keeps its all-or-nothing contract by
+    // throwing on the resolver's own unresolved report, exactly the
+    // message it threw when this logic lived inline.
+    const resolution = await resolveHistoricalSquad(titan, { searchPlayers });
+    if (!resolution.valid) throw new Error(resolution.errors[0]);
+    const roster = resolution.roster;
     rosterMemory.set(cacheKey, roster);
     opponentCache[cacheKey] = roster;
     writeJsonStorage(OPPONENT_CACHE_KEY, opponentCache);

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "direct second-ball opening",
+  "seed": 41002,
+  "formation": "4-4-2",
+  "formationStyle": "Balanced",
+  "attackingDirection": "down",
+  "openingStyle": "long-ball",
+  "restart": { "type": "kickoff", "variant": "long" },
+  "expectedRestartPlan": { "resolver": "pass", "forcedPassType": "lofted", "targetPreference": "long" },
+  "expectedJobs": ["aerial-target", "second-ball", "rest-defence", "width-left", "width-right"]
+}

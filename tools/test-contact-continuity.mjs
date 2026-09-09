@@ -89,6 +89,7 @@ const mod = await import("../match-lab.js");
 const {
   state, resolveCross, resolveShoot, resolveReboundScramble, resolveAerialClearanceContinuation,
   freePlayGroups, pointOf, zoneFromPercent, playbackPositions, applyStepAnimation, seedPlaybackPositions,
+  reboundConversionChance,
 } = mod;
 
 let failures = 0;
@@ -352,15 +353,40 @@ console.log("\n=== match-lab.js integration: rebound continuity + named taker (p
   // point before hitting the rebound; the follow-up shot must begin
   // exactly where he reached it, and a miss must NEVER leave the keeper
   // owning the ball at that out-of-play point.
+  // Real Pace/Acceleration-timed rebound physics (2026-08-23) means WHO
+  // can even contest the loose ball now depends on real distance, not just
+  // attributes -- both are kept genuinely close to originPoint (a stride
+  // or two, not several yards) so this fixture still exercises a real,
+  // physically-reachable contest rather than accidentally landing on the
+  // NEW "too far away, it just gets away from both of them" behavior
+  // (which has its own dedicated coverage below).
+  // Rebound v2 (2026-08-26, Passing v3) -- resolveReboundScramble() now
+  // times each contestant's own REAL physical arrival
+  // (contactArrivalTiming()), so the event's own duration is only ever as
+  // long as the WINNER's genuine arrival needs, floored at
+  // MOVEMENT_DURATIONS.scramble. A slower loser is honestly shown reaching
+  // only as far as reachIn() lets them inside that same short window --
+  // never teleported the rest of the way to originPoint just because the
+  // winner got there. Both eligible players still explicitly appear in
+  // playerMoves (nobody is left behind at their pre-scramble spot), but
+  // only the WINNER is guaranteed to actually reach originPoint.
   const attacker = entry("gerrard", { team: "home", x: 50, y: 10, playerObj: POACHER });
   const defender = entry("terry", { team: "away", x: 52, y: 8, playerObj: WEAK_DEFENDER });
   const keeper = entry("keeper", { role: "keeper", team: "away", x: 50, y: 2, playerObj: WEAK_DEFENDER });
-  const originPoint = { x: 48, y: 4, zone: zoneFromPercent(48, 4) };
+  const originPoint = { x: 51, y: 9, zone: zoneFromPercent(51, 9) };
+  // distanceToGoalYards() (Rebound v2's own conversion tier) reads real
+  // field position against state.attackingDirection -- this fixture sits
+  // right on the y:0 goal line (keeper at y:2), so home must genuinely be
+  // attacking THAT end here, not whatever an earlier test in this file's
+  // sequential run last left state.attackingDirection set to.
+  const savedAttackingDirection = state.attackingDirection;
+  state.attackingDirection = { home: "up", away: "down" };
 
   let sawWon = false;
   let sawMiss = false;
   let sawLost = false;
-  let bothConverge = true;
+  let bothAppear = true;
+  let winnerReachesOrigin = true;
   let winnerNamed = true;
   let shotBeginsAtOrigin = true;
   let missNeverOwnedByKeeper = true;
@@ -372,7 +398,9 @@ console.log("\n=== match-lab.js integration: rebound continuity + named taker (p
     const wonEvent = trace.find((event) => event.code === "REBOUND.WON");
     if (wonEvent) {
       sawWon = true;
-      if (!(wonEvent.playerMoves.length === 2 && wonEvent.playerMoves.every((m) => m.to.x === originPoint.x && m.to.y === originPoint.y))) bothConverge = false;
+      if (wonEvent.playerMoves.length !== 2) bothAppear = false;
+      const winnerMove = wonEvent.playerMoves.find((m) => m.playerId === attacker.id);
+      if (!(winnerMove && winnerMove.to.x === originPoint.x && winnerMove.to.y === originPoint.y)) winnerReachesOrigin = false;
       if (!(wonEvent.contact.actorId === attacker.id && wonEvent.contact.type === "recovery")) winnerNamed = false;
       const shotEvent = trace[trace.indexOf(wonEvent) + 1];
       if (!(shotEvent.ballFrom.x === originPoint.x && shotEvent.ballFrom.y === originPoint.y)) shotBeginsAtOrigin = false;
@@ -392,60 +420,129 @@ console.log("\n=== match-lab.js integration: rebound continuity + named taker (p
   check("exercised at least one won rebound within the search budget", sawWon);
   check("exercised at least one missed rebound shot within the search budget", sawMiss);
   check("exercised at least one lost rebound duel within the search budget", sawLost);
-  check("across every won-rebound trial: both eligible players are shown converging on the SAME explicit loose-ball point", bothConverge);
+  check("across every won-rebound trial: both eligible players are named in playerMoves (nobody left behind)", bothAppear);
+  check("across every won-rebound trial: the winner genuinely reaches the loose-ball point", winnerReachesOrigin);
   check("across every won-rebound trial: the winner is explicitly named in the contact record", winnerNamed);
   check("across every won-rebound trial: the rebound shot begins exactly where the winner reached the ball", shotBeginsAtOrigin);
   check("across every missed-rebound trial: genuinely out of play -- no owner, a real restart, NEVER the keeper owning the miss point", missNeverOwnedByKeeper);
   check('across every lost-rebound trial: never described as "clearing" it -- no destination/flight was claimed', lostNeverSaysClears);
+  state.attackingDirection = savedAttackingDirection;
 }
 
-console.log("\n=== match-lab.js integration: uncontested rebound scorer genuinely moves to meet the ball (reported bug) ===");
+console.log("\n=== Passing v3, Section E acceptance: rebound scramble timing + conversion + unreachable stop ===");
 {
-  // A browser round reported a scored uncontested rebound where the ball
-  // visibly stayed in the keeper's hands -- the "contact" record already
-  // named the scorer as the contacting actor, but nothing ever moved
-  // their own MARKER to the rebound spot before the goal. No opponent
-  // placed at all (the uncontested branch, distinct from
-  // resolveReboundScramble()'s own already-fixed contested path).
-  // Keep the shooter just outside the dedicated <=24yd one-on-one gate:
-  // this regression is specifically about the generic shot resolver's
-  // uncontested-rebound continuation, not isolated-chance routing.
-  const shooter = entry("shooter", { team: "home", x: 50, y: 75, playerObj: POACHER });
-  const keeper = entry("keeper", { role: "keeper", team: "away", x: 50, y: 97, playerObj: WEAK_DEFENDER });
-  const shootGroups = { owner: shooter, teammates: [], opponents: [], keeper };
-  let sawShootGoal = false;
-  let shootMoverCorrect = true;
-  for (let i = 0; i < 800 && !sawShootGoal; i += 1) {
-    const random = seededRandom(hashString(`uncontested-rebound-shoot-${i}`));
+  // (6) Genuinely close together (both well within 8yd of the loose ball)
+  // must resolve FAST -- the reported bug was a flat 2200ms stretch no
+  // matter how close either contestant started.
+  const closeAttacker = entry("close-attacker", { team: "home", x: 51, y: 8, playerObj: POACHER });
+  const closeDefender = entry("close-defender", { team: "away", x: 49, y: 9, playerObj: WEAK_DEFENDER });
+  const closeKeeper = entry("close-keeper", { role: "keeper", team: "away", x: 50, y: 2, playerObj: WEAK_DEFENDER });
+  const closeOrigin = { x: 50, y: 8, zone: zoneFromPercent(50, 8) };
+  const savedDir1 = state.attackingDirection;
+  state.attackingDirection = { home: "up", away: "down" };
+  let allFast = true;
+  let sawEvent = false;
+  for (let i = 0; i < 200; i += 1) {
+    const random = seededRandom(hashString(`rebound-fast-${i}`));
     const trace = [];
-    const result = resolveShoot(shootGroups, {}, random, trace);
-    if (result.reason === "rebound-goal-uncontested") {
-      sawShootGoal = true;
-      const goalEvent = trace.find((event) => event.code === "REBOUND.GOAL");
-      if (!(goalEvent.moverId === shooter.id && goalEvent.moveTo.x === goalEvent.ballFrom.x && goalEvent.moveTo.y === goalEvent.ballFrom.y)) shootMoverCorrect = false;
-    }
+    resolveReboundScramble(closeAttacker, closeDefender, closeKeeper, closeAttacker.zone, random, trace, closeOrigin);
+    const ev = trace.find((event) => event.code === "REBOUND.WON" || event.code === "REBOUND.LOST");
+    if (!ev) continue;
+    sawEvent = true;
+    if (!(ev.duration < 900)) allFast = false;
   }
-  check("exercised a scored uncontested rebound (resolveShoot) within the search budget", sawShootGoal);
-  check("the scorer's own marker genuinely moves to the rebound spot before the goal -- not left behind at the keeper", shootMoverCorrect);
+  check("exercised at least one contested rebound within the search budget", sawEvent);
+  check("both contestants starting within 8yd of the loose ball resolve in under 900ms -- never the old flat 2200ms stretch",
+    allFast);
 
-  const crosser = entry("rc-crosser", { team: "home", x: 85, y: 60, playerObj: GOOD_CROSSER });
-  const receiver = entry("rc-receiver", { team: "home", x: 50, y: 90, playerObj: POACHER });
-  const rcKeeper = entry("rc-keeper", { role: "keeper", team: "away", x: 50, y: 97, playerObj: WEAK_DEFENDER });
-  const crossGroups = { owner: crosser, teammates: [receiver], opponents: [], keeper: rcKeeper };
-  let sawCrossGoal = false;
-  let crossMoverCorrect = true;
-  for (let i = 0; i < 800 && !sawCrossGoal; i += 1) {
-    const random = seededRandom(hashString(`uncontested-rebound-cross-${i}`));
+  // (7a) reboundConversionChance() itself, direct: close range (<=14yd) sits
+  // in a real tap-in tier (floor 0.50), clearly above the reported bug's
+  // flat ~0.32 ceiling regardless of range.
+  check("reboundConversionChance() for a close-range (10yd) rebound exceeds 0.40",
+    reboundConversionChance(10, POACHER, ELITE_KEEPER) > 0.40);
+  check("reboundConversionChance() genuinely tiers by distance -- a close-range chance beats a mid-range one for the identical players",
+    reboundConversionChance(10, POACHER, ELITE_KEEPER) > reboundConversionChance(18, POACHER, ELITE_KEEPER));
+  // (7b) Integration, seed-stable: across many independent seeds, a won
+  // rebound genuinely inside 12yd converts more than 40% of the time -- not
+  // fragile to any one particular seed.
+  const nearAttacker = entry("near-attacker", { team: "home", x: 50, y: 5, playerObj: POACHER });
+  const nearDefender = entry("near-defender", { team: "away", x: 70, y: 40, playerObj: WEAK_DEFENDER });
+  const nearKeeper = entry("near-keeper", { role: "keeper", team: "away", x: 50, y: 2, playerObj: WEAK_DEFENDER });
+  const nearOrigin = { x: 50, y: 5, zone: zoneFromPercent(50, 5) };
+  let nearWon = 0;
+  let nearScored = 0;
+  for (let i = 0; i < 300; i += 1) {
+    const random = seededRandom(hashString(`rebound-close-convert-${i}`));
     const trace = [];
-    const result = resolveCross(crossGroups, {}, random, trace);
-    if (result.reason === "rebound-goal-uncontested") {
-      sawCrossGoal = true;
-      const goalEvent = trace.find((event) => event.code === "REBOUND.GOAL");
-      if (!(goalEvent.moverId === receiver.id && goalEvent.moveTo.x === goalEvent.ballFrom.x && goalEvent.moveTo.y === goalEvent.ballFrom.y)) crossMoverCorrect = false;
+    resolveReboundScramble(nearAttacker, nearDefender, nearKeeper, nearAttacker.zone, random, trace, nearOrigin);
+    if (trace.some((event) => event.code === "REBOUND.WON")) {
+      nearWon += 1;
+      if (trace.some((event) => event.code === "REBOUND.GOAL")) nearScored += 1;
     }
   }
-  check("exercised a scored uncontested rebound (resolveCross) within the search budget", sawCrossGoal);
-  check("the receiver's own marker genuinely moves to the rebound spot before the goal -- not left behind at the keeper", crossMoverCorrect);
+  check("exercised won rebounds inside 12yd within the search budget", nearWon >= 30);
+  check("a won rebound genuinely inside 12yd converts more than 40% of the time -- a real tap-in rate, not the old ~0.32 cap",
+    nearWon > 0 && nearScored / nearWon > 0.40);
+  state.attackingDirection = savedDir1;
+
+  // (8) One genuinely unreachable contestant (far away, no realistic path
+  // to the ball inside the event's own real duration) must stop at their
+  // own physically-reached point -- never teleported to originPoint just
+  // because the OTHER contestant made it.
+  const reachableAttacker = entry("reachable-attacker", { team: "home", x: 51, y: 9, playerObj: POACHER });
+  const farDefender = entry("far-defender", { team: "away", x: 95, y: 95, playerObj: WEAK_DEFENDER });
+  const farKeeper = entry("far-keeper", { role: "keeper", team: "away", x: 50, y: 2, playerObj: WEAK_DEFENDER });
+  const farOrigin = { x: 50, y: 9, zone: zoneFromPercent(50, 9) };
+  let sawWonAgainstUnreachable = false;
+  let defenderStoppedShort = true;
+  let winnerIsReachableOne = true;
+  for (let i = 0; i < 200; i += 1) {
+    const random = seededRandom(hashString(`rebound-unreachable-${i}`));
+    const trace = [];
+    resolveReboundScramble(reachableAttacker, farDefender, farKeeper, reachableAttacker.zone, random, trace, farOrigin);
+    const wonEvent = trace.find((event) => event.code === "REBOUND.WON");
+    if (!wonEvent) continue;
+    sawWonAgainstUnreachable = true;
+    const defenderMove = wonEvent.playerMoves.find((m) => m.playerId === farDefender.id);
+    if (defenderMove && (defenderMove.to.x === farOrigin.x && defenderMove.to.y === farOrigin.y)) defenderStoppedShort = false;
+    if (wonEvent.contact.actorId !== reachableAttacker.id) winnerIsReachableOne = false;
+  }
+  check("exercised a won rebound against a genuinely unreachable opponent within the search budget", sawWonAgainstUnreachable);
+  check("the unreachable contestant's own authored move stops short of the loose-ball point -- never teleported there",
+    defenderStoppedShort);
+  check("the contact actor is always the one contestant who was actually reachable",
+    winnerIsReachableOne);
+}
+
+console.log("\n=== physical rebounds remain loose until Dynamic Ball Claim runs ===");
+{
+  const shooter = entry("shooter", { team: "home", x: 50, y: 93, playerObj: POACHER });
+  const nearby = entry("nearby", { team: "away", x: 50, y: 87, playerObj: WEAK_DEFENDER });
+  const keeper = entry("keeper", { role: "keeper", team: "away", x: 50, y: 97, playerObj: WEAK_DEFENDER });
+  const crosser = entry("crosser", { team: "home", x: 85, y: 60, playerObj: GOOD_CROSSER });
+  const receiver = entry("receiver", { team: "home", x: 50, y: 90, playerObj: POACHER });
+  for (const [name, resolver, groups] of [
+    ["shot", resolveShoot, {owner:shooter,teammates:[],opponents:[nearby],keeper}],
+    ["cross", resolveCross, {owner:crosser,teammates:[receiver],opponents:[],keeper}],
+  ]) {
+    let seen=0, honest=true, continuous=true;
+    for(let i=0;i<800;i++) {
+      const trace=[];
+      const result=resolver(groups,{},seededRandom(hashString(`physical-rebound-${name}-${i}`)),trace);
+      const rebound=trace.find(event=>event.metrics?.rebound);
+      if(!rebound)continue;
+      seen++;
+      honest &&= result.nextOwnerId===null && (result.possession==="loose" || Boolean(result.restart));
+      if(!result.restart) honest &&= result.ballVelocityPhase==="rolling" && Math.hypot(result.ballVelocity.x,result.ballVelocity.y)>0;
+      honest &&= !trace.some(event=>event.code==="REBOUND.GOAL");
+      const prior=[...trace.slice(0,trace.indexOf(rebound))].reverse().find(event=>event.ballTo);
+      continuous &&= prior && Math.abs(prior.ballTo.x-rebound.ballFrom.x)<0.001 && Math.abs(prior.ballTo.y-rebound.ballFrom.y)<0.001;
+      honest &&= rebound.lastTouch.playerId===keeper.id && rebound.lastTouch.bodyPart==="hand";
+    }
+    check(`${name}: physical rebounds are exercised`,seen>0);
+    check(`${name}: no preselected owner or automatic follow-up goal; live rebounds carry roll velocity`,honest);
+    check(`${name}: rebound starts where the incoming ball actually ended`,continuous);
+  }
 }
 
 console.log("\n=== match-lab.js integration: Replay/Step produce identical geometry ===");

@@ -110,7 +110,7 @@ function tacticalFit(action, ctx) {
       return clamp(0, 0.25, ctx.distance != null ? (12 - Math.min(12, ctx.distance)) * 0.01 : 0)
         + ctx.defenderPressure * 0.15;
     case "shoot-early":
-      return ctx.defenderPressure * 0.25;
+      return ctx.defenderPressure * 0.25 + clamp(0, 0.3, (k.closingSpeed ?? 0) / 25);
     case "square-pass":
       return ctx.availableTeammates?.length ? 0.05 : -0.4;
     default:

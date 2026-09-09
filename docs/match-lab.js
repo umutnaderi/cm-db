@@ -1,3 +1,22 @@
+import { PENALTY_SPOT_DEPTH_PCT as RESTART_PENALTY_DEPTH } from "./src/lib/pitchGeometry.js";
+import { createMatchSession } from "./src/lib/matchSession.js?v=20260909-02";
+import {
+  createMatchTelemetry,
+  observeMatchFrame,
+  observeMatchEvent,
+  lastTenMinutePossession,
+  heatForScope,
+} from "./src/lib/matchTelemetry.js?v=20260909-02";
+import { buildHighlightWindows, isHighlightTime, advanceHighlightTime } from "./src/lib/matchHighlights.js?v=20260909-01";
+import { applyKickoffInstructions } from "./src/lib/kickoffInstructions.js?v=20260909-01";
+import {
+  assessKeeperCloseDown,
+  planKeeperResponse,
+  chooseGoalCover,
+  outfieldPositionAheadOfKeeper,
+  observeKeeperMotion,
+  executeKeeperSweep,
+} from "./src/lib/keeperDecision.js?v=20260909-03";
 import {
   getDatabases,
   getDraftCandidates,
@@ -7,6 +26,7 @@ import {
 import {
   clamp,
   computePressure,
+  conditionMultiplier,
   contestedRace,
   engineAttributeDetail,
   freeKickContextMultiplier,
@@ -30,12 +50,9 @@ import {
   resolveCrossSourceContest,
   resolveKeeperSave,
   resolveOneOnOne,
-  resolvePlacedFinish,
   resolveReceive,
   resolveRoundKeeper,
-  resolveShotBlock,
   resolveSquarePass,
-  resolveTargetedKeeperResponse,
   resolveWall,
   seededRandom,
   selectEngagement,
@@ -43,9 +60,10 @@ import {
   selectFreeKickShotType,
   selectReceiver,
   transitionShotChance,
+  weightedChoice,
   weightedPlayer,
   ZONE_CENTERS,
-} from "./src/lib/matchEngineCore.js?v=20260820-02";
+} from "./src/lib/matchEngineCore.js?v=20260827-01";
 import {
   getMasterVolume,
   isSoundEnabled,
@@ -67,6 +85,7 @@ import {
   approachPoint,
   canSlidingTackle,
   canStandingTackle,
+  carrySteeringWaypoint,
   chooseCandidate,
   classifyOutfieldBand,
   clearanceDanger,
@@ -74,43 +93,83 @@ import {
   decisionOptionMetrics,
   deliveryLandingPoint,
   determineCarryGait,
+  effectiveCarryPressure,
+  staminaScaledPlayer,
   DUEL_RANGE_YARDS,
   engagingOpponent,
+  heldKeeperStandoffTarget,
   generateClearanceCandidates,
   generateFreePlayCandidates,
   isCrossTargetZone,
   keeperPositioningPoint,
+  laneObstruction,
   nearestLaneInterceptor,
   PITCH_LENGTH_YARDS,
   offsideSnapshotForTarget,
   planAttackerRepositioning,
   planCarryDestination,
-  planCarryTouches,
   planDefensiveRepositioning,
+  identifyLineBreakingRunnerId,
   pressureAt,
+  progressionYards,
+  longRangeShotConfidence,
+  shootingInstructionFor,
+  CONGESTION_SHORT_PASS_YARDS,
+  CONGESTION_MIN_PROGRESSION_YARDS,
+  shotAngleTightness,
   distanceToGoalYards,
+  effortScaledAdvance,
   fromYardPoint,
+  pointAheadYards,
+  reflectIntoRange,
+  simulateCarryTouches,
   toYardPoint,
   yardDistance,
-} from "./src/lib/spatialDecision.js?v=20260819-06";
+  classifyPitchExit,
+} from "./src/lib/spatialDecision.js?v=20260908-05";
 import {
   buildMatchLabPlaybackPlan,
+  sampleMatchLabPlaybackPlan,
   createMatchLabPlaybackClock,
   MATCH_LAB_PLAYBACK_BUILD,
-} from "./src/lib/matchLabPlayback.js?v=20260820-05";
+} from "./src/lib/matchLabPlayback.js?v=20260908-01";
 import {
   contactArrivalTiming,
   sampleContinuousTrajectory,
   earliestReachableInterception,
   CONTACT_REACTION_DELAY_MS,
-} from "./src/lib/matchMovementTiming.js?v=20260820-03";
-import { timeToReach } from "./src/lib/playerKinetics.js?v=20260820-01";
+  movementDistanceYards,
+  pointAlongMovement,
+} from "./src/lib/matchMovementTiming.js?v=20260827-01";
+import {
+  rollStopDistanceYards,
+  rollStopDurationMs,
+  rollTraveledYards,
+  rollDurationForDistance,
+} from "./src/lib/ballRollPhysics.js";
+import {
+  claimLooseBall,
+  CLAIM_MIN_ROLL_SPEED_YPS,
+} from "./src/lib/ballClaim.js";
+import { timeToReach, topSpeed, reachIn,
+} from "./src/lib/playerKinetics.js?v=20260828-01";
+import {
+  motionEffortCost, isRecoveryMotion, netBurstChange,
+} from "./src/lib/motionEffort.js?v=20260906-02";
+import { measurePlaybackFluidity, createRendererGapMonitor } from "./src/lib/matchFluidityDiagnostics.js";
+const rendererGapMonitor = createRendererGapMonitor();
+import { goalFrameContact, reflectBallVelocity, parryBallVelocity, projectRebound, reboundGoalCrossing,
+  FRAME_RESTITUTION } from "./src/lib/ballReboundPhysics.js";
 import {
   selectPassType,
   passFlightProfile,
   buildPassFlight,
   earliestReachableContact,
-} from "./src/lib/matchPassFlight.js?v=20260820-03";
+  simulateFlightUntilContact,
+  playerMaxReachYards,
+  jumpReachYards,
+  reactionDelayMsFor,
+} from "./src/lib/matchPassFlight.js?v=20260827-02";
 import {
   createMotionState,
   resolveMotionBatch,
@@ -123,8 +182,74 @@ import {
 } from "./src/lib/matchBallCore.js?v=20260818-06";
 import {
   GOAL_WIDTH_YARDS,
+  GOAL_HEIGHT_YARDS,
   PITCH_WIDTH_YARDS,
+  PENALTY_AREA,
+  attackingGoalYForDirection,
+  defendingGoalYForDirection,
 } from "./src/lib/pitchGeometry.js";
+import { onsideLineTargetY } from "./src/lib/matchOffside.js";
+import { captureScenario } from "./src/lib/replayHarness.js?v=20260908-03";
+// World Motion Contract v1 (2026-09-03) -- see MATCH_ENGINE_ARCHITECTURE.md.
+// advanceMotion() is the ONLY sanctioned way to turn a tactical target
+// into an authoritative position: it moves a player from where they
+// actually are, at the speed they are actually carrying, for the window
+// they actually get -- never straight onto the target.
+import {
+  advanceMotion, advanceKeeperSaveMotion, keeperSaveTravel, readMotionRecord, speedYpsFromVelocity, writeMotionRecord, continueMotionIntentions, velocityAlong,
+} from "./src/lib/worldMotion.js?v=20260909-01";
+// Match Setup Integration v1 (2026-09-04). Every one of these is a pure,
+// DOM-free module -- Match Lab is the CONSUMER of the setup model, never a
+// second copy of it. In particular the historical squad catalogue is never
+// redeclared here; it is read from src/data/historicalSquads.js.
+import {
+  findHistoricalSquad, listHistoricalSquads,
+} from "./src/data/historicalSquads.js?v=20260908-01";
+import { resolveHistoricalSquad } from "./src/lib/historicalSquadResolver.js?v=20260904-02";
+import {
+  FORMATION_NAMES, MATCH_FORMAT_NAMES, orientSlots, projectFormation, roleBand,
+} from "./src/lib/formationTemplates.js?v=20260904-01";
+import {
+  DUTIES, SHOOTING_INSTRUCTIONS, TEMPO_INSTRUCTIONS,
+  GOALKEEPER_DISTRIBUTIONS, GOALKEEPER_SWEEPING,
+  assignPlayer as assignSetupPlayer, createMatchSetup, createTeamSetup,
+  setSlotInstruction, tacticalRoleLabel, tacticalRolesForPosition, validateMatchSetup,
+} from "./src/lib/matchSetup.js?v=20260908-05";
+import {
+  applyTacklingInstruction, DEFAULT_TEAM_ATTACKING, DEFAULT_TEAM_DEFENDING,
+  DEFAULT_TEAM_TRANSITION, normalizeTeamAttacking, normalizeTeamDefending,
+  normalizeTeamTransition,
+} from "./src/lib/teamInstructions.js?v=20260908-02";
+import {
+  createRestartSetup, validateGeneratedRestartSetup, validateRestartSetup, wallPositions,
+} from "./src/lib/restartSetup.js?v=20260904-04";
+import { assignLineup } from "./src/lib/lineupAssignment.js?v=20260908-01";
+// Action Pattern Schema v1 (2026-09-05) -- read-only diagnostics. The
+// registry itself is consumed inside spatialDecision.js; Match Lab only
+// displays what the last evaluation decided.
+import { lastActionPatternDiagnostics } from "./src/lib/spatialDecision.js?v=20260908-05";
+import { executeRestart } from "./src/lib/restartExecution.js?v=20260904-05";
+import {
+  assignRestartRoles, isWallCandidate, selectRestartTaker, wallSizeFor,
+} from "./src/lib/restartRoles.js?v=20260904-04";
+import { candidateKey, isGoalkeeperCandidate } from "./src/lib/positionFit.js?v=20260904-01";
+import {
+  resolveCornerAttack, resolveCornerDefence, resolveCornerPlan, createTeamCornerPlan,
+} from "./src/lib/cornerSetup.js?v=20260906-01";
+import { resolveBodyOverlaps } from "./src/lib/playerBody.js?v=20260906-01";
+import {
+  createTeamPhaseState, phaseForTeam, updateTeamPhaseState,
+} from "./src/lib/teamPhase.js?v=20260908-02";
+import {
+  coordinateTeamShape, phaseAnchorSelectionFor, teamShapeMetrics,
+} from "./src/lib/teamShape.js?v=20260908-06";
+import {
+  buildRoleOccupancyMap,
+} from "./src/lib/roleOccupancyMap.js?v=20260908-02";
+import {
+  classifyTacticalRegion, DEPTH_BOUNDARIES_YARDS, LANE_BOUNDARIES_YARDS,
+  TACTICAL_DEPTH_BANDS, VERTICAL_LANES, tacticalRegionId,
+} from "./src/lib/pitchRegions.js?v=20260904-01";
 
 if (document.documentElement)
   document.documentElement.dataset.matchLabPlaybackBuild =
@@ -140,10 +265,10 @@ setTrainingMode(true);
 // Match Lab -- a probe for the real match engine (see MATCH_LAB_PLAN.md).
 // Every scenario/resolution below calls the exact resolver functions
 // draft-run.js itself calls; nothing here re-derives or approximates engine
-// logic. The pitch is a 12-zone grid because that's genuinely all the
-// engine reasons about today -- placement is free-dragged for a natural
-// feel, but every marker's engine zone is shown right alongside its visual
-// position rather than implying precision the engine doesn't have.
+// logic. Continuous `{x,y}` coordinates are the authoritative physics
+// world. The legacy 12-zone index remains beside them for unmigrated engine
+// lookups, while pitchRegions.js supplies a separate 5x6 tactical diagnostic
+// lens; neither classification ever replaces or snaps the real coordinate.
 //
 // Two modes:
 // - Free Play: given a constructed roster, a new Match-Lab-only chooser
@@ -225,6 +350,14 @@ function pointOf(entry) {
 function zoneCenterPoint(zone) {
   const [x, y] = ZONE_CENTERS[zone] || ZONE_CENTERS[7];
   return { zone, x, y };
+}
+
+// "plays a throw pass" reads oddly for the one passType that isn't
+// actually kicked -- a keeper's own hand throw (2026-08-25). Every other
+// passType keeps the exact existing phrasing.
+function passVerbPhrase(passType, verb) {
+  if (passType !== "throw") return `${verb} a ${passType.replace("-", " ")} pass`;
+  return verb === "attempts" ? "attempts a throw" : "throws it";
 }
 
 // A keeper who is further from their OWN goal line than the shooter is
@@ -336,6 +469,389 @@ function shotPlacementSpread(shooterEntry, keeperEntry, pressure, random) {
 // every REBOUND.GOAL site below used to share.
 const REBOUND_SHOT_PRESSURE = 0.5;
 
+// CHOICE weight only (2026-08-26, Passing v3) -- picking WHICH of several
+// eligible defenders contests an aerial/chest ball, never a second success
+// roll (that's contestedRace()/localizedDuel()'s own job once the picked
+// pair actually duels).
+function sumPlayerAttributes(player, labels) {
+  return labels.reduce((sum, label) => sum + playerAttribute(player, label), 0);
+}
+
+// The shared transitionShotChance() (matchEngineCore.js) is also used by
+// draft-run.js's own counter-attack mechanic, which already compensates
+// for what's fixed here with its own local tactical/momentum/man-down
+// multiplier stack before re-clamping to a HIGHER ceiling of its own (see
+// that file's shotChance() wrapper) -- so this stays LOCAL to Match Lab's
+// own uncontested-rebound call sites (resolveReboundScramble and its 4
+// near-duplicates below) rather than changing the shared formula itself,
+// which stays exactly as draft-run.js's own real-world-benchmarked
+// calibration (tools/keeper_save_audit.mjs) expects it.
+//
+// Every one of those call sites used transitionShotChance()'s raw result
+// with no such compensation (2026-08-25 -- reported directly: "the
+// subsequent shoot accuracy is too low" for a close-range chance right
+// after a keeper parry). The root cause: transitionShotChance()'s own
+// internal (0.45 + share*1.1) * 0.4 scaling means its real achievable
+// range for a baseChance of 0.32 is only ~5.8%-19.8% -- the 32% figure
+// passed in is never actually reachable, even for a fully attacker-
+// dominant matchup. REBOUND_SHOT_CHANCE_SCALE (1 / 0.62, the exact
+// maximum of that internal scaling factor) restores baseChance as a
+// genuinely reachable ceiling again.
+const REBOUND_SHOT_CHANCE_SCALE = 1 / 0.62;
+function reboundShotChance(shooterPlayer, keeperPlayer) {
+  return clamp(
+    0.008,
+    0.32,
+    transitionShotChance(shooterPlayer, keeperPlayer, FIXED_MINUTE, 0.32, poacherScore)
+      * REBOUND_SHOT_CHANCE_SCALE,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shot As Projectile v1 (2026-08-27) -- the shot-side twin of Kick As
+// Projectile v1's own simulateFlightUntilContact() (matchPassFlight.js).
+// The old pipeline rolled "is it on target" (resolveFinishAttempt()),
+// THEN separately rolled "is the keeper beaten clean" (resolveKeeperSave()'s
+// own beatenCleanChance) -- two independent coin flips standing in for
+// what is, physically, ONE question: where does the struck ball actually
+// cross the goal plane, and can a real body (defender first, keeper
+// second) get there before it does. Below: a shot's own aim (still
+// brain-driven -- Finishing/Technique/pressure, same skill shape the OLD
+// shotPlacementSpread()/shotPlacementQuality() already used) plus a
+// genuine geometric error (same "scatter around an intended point" shape
+// resolvePassAccuracy()/resolveThroughBallAccuracy() already established
+// for the pass side) decide the ACTUAL point in the 8yd x 2.6667yd goal
+// mouth the shot is really headed for -- off target is now nothing more
+// than that point landing outside the frame, never a separate roll.
+// Whether a real body meets it before it gets there is answered by
+// genuine reach (a static geometric check for a defender already
+// standing on the shot's own line -- a shot is struck too fast for
+// meaningful outfield repositioning, so unlike Slice A's receivers,
+// defenders here are NOT re-ticked -- and a real, reaction-delayed,
+// speed-capped tick for the keeper, who alone has to travel to meet it).
+// EXISTING production formulas resolveFinishAttempt()/resolveKeeperSave()/
+// resolveShotBlock() (matchEngineCore.js) are explicitly untouched --
+// draft-run.js and the remaining deferred Match Lab paths (chip,
+// round-keeper and free kicks) keep calling them exactly as before. Crossed
+// headers retain those established finish/save rolls, but now use this same
+// physical keeper envelope to decide whether the selected save can happen.
+// The fully geometric aim/error model itself feeds resolveShoot()'s open-play
+// path and resolveFreePlayOneOnOne()'s place-*/blast execution.
+//
+// Deliberately kept in match-lab.js, not matchPassFlight.js -- every OTHER
+// shot-mouth-only geometry helper (shotPlacementSpread/Quality,
+// postPointFor, missPointFor, GOAL_LEFT_POST_X, etc, all just above) is
+// already local to this file for the same reason: a shot's own "mouth"
+// coordinate system (a signed lateral yard offset from goal center, plus
+// a height in yards) is not the pitch-plane world matchPassFlight.js
+// models, and forcing it in there would blur that file's own scope
+// rather than share it.
+const SHOT_MOUTH_HALF_WIDTH_YARDS = GOAL_WIDTH_YARDS / 2;
+// A short, reactive lunge -- a defender is not chasing the shot the way
+// an off-ball teammate chases a pass, they are already standing
+// somewhere and either their body is close enough to the shot's own
+// line or it isn't. Gameplay v3's own spec figure ("body within ~1.2yd
+// of the segment") -- a real body's own effective width/reach, not a
+// tactical radius (the same order of magnitude as Slice A's own
+// CHASE_INTERCEPT_ALLOWANCE_YARDS, but shots earn their own constant
+// rather than sharing that name across two different contexts).
+const SHOT_BLOCK_REACH_YARDS = 1.2;
+// "1.2yd arm" -- a keeper's own short dive/reach beyond their standing
+// body, BEFORE jumpReachYards() (matchPassFlight.js, exported for this)
+// adds whatever extra height a real leap contributes. Combined, this is
+// the keeper's own save envelope radius, checked against the ball's
+// LATERAL gap only (heightReachable below is the separate, existing
+// playerMaxReachYards() vertical gate Slice A's own contact bands
+// already use) -- two independent gates, not one combined sphere, so a
+// keeper standing right under a shot that's sailing in above their own
+// max reach can't "borrow" lateral slack to somehow still get there.
+const KEEPER_DIVE_ARM_YARDS = 1.2;
+// Open-play shot pace, yards/second -- well above any pass type
+// (matchPassFlight.js's own fastest, driven-ground, tops out at 26) since
+// a struck shot is a fundamentally harder-hit ball than any delivery
+// meant to be received. Blast trades placement for genuine extra pace,
+// same tradeoff resolvePlacedFinish()'s own power:true branch already
+// encodes.
+const SHOT_SPEED_YARDS_PER_SECOND = { calm: 27, finesse: 25, blast: 37 };
+// A headed finish is slower than a clean foot strike, but its flight still
+// has to own real time. The old fixed 350ms header beat completed the ball's
+// whole journey before the goalkeeper began a separate save animation. That
+// left the ball waiting near the post while the eventual catcher was still
+// several yards away. This speed gives the existing header outcome a physical
+// flight window without changing the delivery or aerial-contest rolls.
+const HEADER_SHOT_SPEED_YARDS_PER_SECOND = 22;
+const HEADER_SHOT_HEIGHT_YARDS = 1.35;
+// A geometric miss that clips the frame's own bar always reuses
+// F.BLAST.OVER -- the one open-play code MISS_BADGE (above) maps to the
+// "OVER" badge at all. Its raw string is never rendered to the user
+// (traceEvent()'s own label is hardcoded "Off target", not derived from
+// the code) so reusing it for a calm/finesse attempt that genuinely
+// balloons over is a real accuracy improvement over the OLD flat
+// per-finishType table, not a mismatch -- and blast keeps its OLD
+// unconditional "F.BLAST.OVER" for ANY off-target result (wide or high),
+// exactly matching resolveFinishAttempt()'s own previous behavior for
+// blast, since there is no separate "wide" badge scoped to it.
+const GEOMETRIC_WIDE_MISS_CODE = { calm: "F.CALM.WEAK", finesse: "F.FINESSE.WIDE" };
+
+function percentXToCenterYards(percentX) {
+  return ((percentX - 50) / 100) * PITCH_WIDTH_YARDS;
+}
+function centerYardsToPercentX(offsetYards) {
+  return 50 + (offsetYards / PITCH_WIDTH_YARDS) * 100;
+}
+
+// Height component of the shot's own INTENDED aim -- Finishing/Technique
+// driven, same skill shape shotPlacementQuality() already uses for the
+// lateral side. A weak/rushed effort stays low (an honest, saveable
+// height); a composed, technical finisher picks genuine elevation,
+// capped well under the bar so INTENTION alone is never what beats it --
+// that's what the geometric error below is for.
+function shotIntentHeightYards(shooterPlayer, quality, pressure) {
+  const composed = clamp(0, 1, quality - pressure * 0.2);
+  return clamp(0.2, GOAL_HEIGHT_YARDS * 0.75, 0.25 + composed * 1.55);
+}
+
+// Real, non-zero geometric error -- see resolvePassAccuracy()'s own
+// comment on the reported bug this same shape fixed for passing (a
+// laser-guided delivery every time regardless of skill). Scattered as a
+// single radius in the (lateral yards, height yards) plane below, exactly
+// like deliveryLandingPoint() already scatters a pass's own landing
+// point in the (pitch x, pitch y) plane -- same principle, different
+// plane. `power` (blast) both raises the penalty AND is the one case
+// that keeps resolveFinishAttempt()'s own real calibration note relevant
+// here: "blast sacrifices accuracy for power."
+function resolveShotAccuracy(shooterPlayer, { pressureFactor = 0, power = false } = {}, random) {
+  const finishing = playerAttribute(shooterPlayer, "Finishing");
+  const technique = playerAttribute(shooterPlayer, "Technique");
+  const composure = playerAttribute(shooterPlayer, "Composure");
+  const skill = (finishing * 0.45 + technique * 0.35 + composure * 0.2) / 20;
+  const powerPenalty = power ? 0.24 : 0;
+  const pressurePenalty = clamp(0, 0.3, pressureFactor * 0.4);
+  const quality = clamp(0.05, 0.95, skill - powerPenalty - pressurePenalty);
+  // A real spread even at elite quality -- no two shots, even from a
+  // maxed-out finisher, land at exactly the same spot. A base term that
+  // never fully vanishes (0.15 + skill-scaled) combined with a genuinely
+  // wide random multiplier keeps a real range of outcomes even for the
+  // best strikers, rather than every attempt landing within a fraction
+  // of a yard of the same point (which made "on target and geometrically
+  // reachable" collapse into a near-binary threshold instead of a real
+  // distribution).
+  const errorYards = clamp(0.2, 4.8, (0.15 + (1 - quality) * 4.3) * (0.35 + random() * 1.15));
+  return { quality, errorYards };
+}
+
+// The full shot-mouth descriptor: an intended point (brain-driven aim,
+// reusing shotPlacementSpread()'s own proven "away from the keeper's
+// current x" horizontal logic UNCHANGED, plus the new height term above)
+// scattered by a real geometric error into an ACTUAL point -- which may
+// or may not still be inside the frame. Consumes exactly 2 random() calls
+// beyond shotPlacementSpread()'s own (the error magnitude, then the
+// scatter angle), same "one shot, one deterministic draw" contract every
+// other accuracy model in this project already holds.
+function resolveShotDescriptor(shooterEntry, keeperEntry, finishType, pressure, random) {
+  const quality = shotPlacementQuality(shooterEntry.player);
+  const intendedSpread = shotPlacementSpread(shooterEntry, keeperEntry, pressure, random);
+  const intendedOffsetYards = percentXToCenterYards(intendedSpread.x);
+  const intendedHeightYards = shotIntentHeightYards(shooterEntry.player, quality, pressure);
+  const accuracy = resolveShotAccuracy(shooterEntry.player, { pressureFactor: pressure, power: finishType === "blast" }, random);
+  const angle = random() * Math.PI * 2;
+  const actualOffsetYards = intendedOffsetYards + Math.cos(angle) * accuracy.errorYards;
+  const actualHeightYards = Math.max(0, intendedHeightYards + Math.sin(angle) * accuracy.errorYards);
+  const onTarget = Math.abs(actualOffsetYards) <= SHOT_MOUTH_HALF_WIDTH_YARDS
+    && actualHeightYards <= GOAL_HEIGHT_YARDS;
+  const goalY = goalLineY(shooterEntry);
+  const actualPoint = {
+    zone: shooterEntry.zone,
+    x: clamp(0, 100, centerYardsToPercentX(actualOffsetYards)),
+    y: goalY,
+  };
+  const missCode = actualHeightYards > GOAL_HEIGHT_YARDS || finishType === "blast"
+    ? "F.BLAST.OVER"
+    : (GEOMETRIC_WIDE_MISS_CODE[finishType] || "F.CALM.WEAK");
+  const speedYardsPerSecond = SHOT_SPEED_YARDS_PER_SECOND[finishType] || SHOT_SPEED_YARDS_PER_SECOND.calm;
+  const distanceYards = movementDistanceYards(pointOf(shooterEntry), actualPoint);
+  const durationMs = Math.max(80, (distanceYards / speedYardsPerSecond) * 1000);
+  return {
+    onTarget,
+    missCode,
+    actualPoint,
+    actualHeightYards,
+    quality: accuracy.quality,
+    flight: {
+      from: pointOf(shooterEntry),
+      actual: actualPoint,
+      peakHeightYards: actualHeightYards,
+      speedYardsPerSecond,
+      durationMs,
+    },
+  };
+}
+
+// Rises from the shooter's own foot (height 0) to EXACTLY the shot's own
+// actual height at the goal line (progress 1) -- deliberately NOT the
+// symmetric up-then-down arc buildPassFlight()'s ballHeightAtProgress()
+// uses for a pass (which has to come back down to land ON the pitch); a
+// shot only ever needs its height AT the goal plane, and a real struck
+// ball's height accelerates as it travels rather than peaking partway.
+function shotHeightAtProgress(actualHeightYards, progress) {
+  const p = clamp(0, 1, progress);
+  return Math.max(0, actualHeightYards) * p * p;
+}
+
+function shotPositionAtElapsed(flight, elapsedMs) {
+  const progress = flight.durationMs > 0 ? clamp(0, 1, elapsedMs / flight.durationMs) : 1;
+  const traveled = movementDistanceYards(flight.from, flight.actual) * progress;
+  const point = pointAlongMovement(flight.from, flight.actual, traveled);
+  return { ...point, height: shotHeightAtProgress(flight.peakHeightYards, progress) };
+}
+
+function headerShotFlight(contactPoint, aimPoint) {
+  const distanceYards = movementDistanceYards(contactPoint, aimPoint);
+  return {
+    // The receiver may have moved from their authored setup coordinate to
+    // meet the cross. The aerial event's contactPoint is where the header is
+    // actually struck and is therefore the only legal flight origin.
+    from: { ...contactPoint },
+    actual: aimPoint,
+    peakHeightYards: HEADER_SHOT_HEIGHT_YARDS,
+    speedYardsPerSecond: HEADER_SHOT_SPEED_YARDS_PER_SECOND,
+    durationMs: Math.max(
+      120,
+      (distanceYards / HEADER_SHOT_SPEED_YARDS_PER_SECOND) * 1000,
+    ),
+  };
+}
+
+// A defender is not re-ticked during a shot -- see this section's own
+// header comment for why (too fast an event for meaningful outfield
+// repositioning). A STATIC check: the closest point on the shot's own
+// straight line to where this defender is already standing, and whether
+// the ball's real height AT that specific point (not at the goal line --
+// a close-range block happens well before the shot has climbed toward
+// its own eventual mouth height) is inside their own reach band.
+function shotBlockingDefender(flight, defenderEntry) {
+  if (!defenderEntry) return null;
+  const fromYard = toYardPoint(flight.from);
+  const toYard = toYardPoint(flight.actual);
+  const defenderYard = toYardPoint(defenderEntry);
+  const dx = toYard.x - fromYard.x;
+  const dy = toYard.y - fromYard.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared === 0
+    ? 0
+    : clamp(0, 1, ((defenderYard.x - fromYard.x) * dx + (defenderYard.y - fromYard.y) * dy) / lengthSquared);
+  const closestX = fromYard.x + t * dx;
+  const closestY = fromYard.y + t * dy;
+  const lateralGapYards = Math.hypot(defenderYard.x - closestX, defenderYard.y - closestY);
+  if (lateralGapYards > SHOT_BLOCK_REACH_YARDS) return null;
+  const heightAtPoint = shotHeightAtProgress(flight.peakHeightYards, t);
+  if (heightAtPoint > playerMaxReachYards(defenderEntry.player)) return null;
+  return { atMs: flight.durationMs * t, atPoint: shotPositionAtElapsed(flight, flight.durationMs * t) };
+}
+
+// The keeper alone genuinely travels -- reaction delay
+// (reactionDelayMsFor(), the same Anticipation/Decisions-driven term
+// Slice A's own race uses) then a physical run or committed dive toward the
+// shot's own fixed actual point (known in advance, unlike Slice A's
+// evolving job targets -- there is nobody else to race here, only a
+// single reach-or-don't question). Ticked in the same 40ms steps as
+// every other live contact resolver in this project for one reason: if
+// keeper travel time exceeds the flight's own remaining time at every
+// tick, they never register as reached, regardless of Reflexes --
+// attributes decide the SAVE once reached, never whether they get there
+// at all.
+function simulateShotKeeperEnvelope(flight, keeperEntry, sampleIntervalMs = 40) {
+  if (!keeperEntry) return { reached: false };
+  const reactionMs = reactionDelayMsFor(keeperEntry.player);
+  // The envelope is body travel plus what the keeper can reach beyond it.
+  // Reach used to be static (arm + jump), which meant a keeper facing a shot
+  // they had two or three tenths of a second to deal with had an envelope of
+  // barely two yards -- reachIn() gives a standing start almost no ground in
+  // that time, and the arm allowance does not grow. Measured, that made an
+  // isolated one-on-one convert 87.3%, with 1758 of 1758 shots to the
+  // keeper's open side scoring because they never physically arrived.
+  //
+  // worldMotion owns both the run/dive reach query and its authored path.
+  // The dive uses the existing playerKinetics action impulse; ordinary
+  // travel still uses Pace/Acceleration. Playback must reach this same body
+  // point when the hand contact is declared.
+  const staticReachYards = KEEPER_DIVE_ARM_YARDS + jumpReachYards(keeperEntry.player);
+  const duration = flight.durationMs;
+  const steps = Math.max(1, Math.ceil(duration / Math.max(1, sampleIntervalMs)));
+  for (let step = 0; step <= steps; step += 1) {
+    const tMs = Math.min(duration, step * sampleIntervalMs);
+    const ball = shotPositionAtElapsed(flight, tMs);
+    const availableSeconds = Math.max(0, (tMs - reactionMs) / 1000);
+    // A dive COSTS the time it takes -- it is not free ground on top of a
+    // full run. The keeper picks whichever the clock actually allows: stay on
+    // their feet the whole window, or run for what is left and commit the
+    // last DIVE_COMMIT_SECONDS to a launch. Diving wins when there is too
+    // little time to build running speed, which is the case this exists for;
+    // staying up wins over a long window, where topSpeed beats a dive.
+    const traveledYards = keeperSaveTravel(keeperEntry.player, availableSeconds).distanceYards;
+    const keeperPoint = pointAlongMovement(keeperEntry, flight.actual, traveledYards);
+    const lateralGapYards = movementDistanceYards(keeperPoint, ball);
+    const heightReachable = ball.height <= playerMaxReachYards(keeperEntry.player);
+    if (lateralGapYards <= staticReachYards && heightReachable) {
+      return { reached: true, atMs: tMs, atPoint: keeperPoint, ballPoint: ball };
+    }
+    if (tMs >= duration) break;
+  }
+  return { reached: false };
+}
+
+// Kept intentionally PARALLEL to resolveKeeperSave()'s own K.SAVE.1-8
+// options table (matchEngineCore.js) -- NOT a refactor of it, and NOT
+// called instead of it anywhere production-facing. That function stays
+// exactly as draft-run.js and the deferred Match Lab paths still use it,
+// untouched. Crossed headers retain it for save flavor only after this file's
+// physical envelope confirms contact. This differs in exactly
+// one way: no beatenCleanChance/K.SAVE.0 gate -- geometric reachability
+// (simulateShotKeeperEnvelope() above) already answered "did the keeper
+// even get there" before this is ever called; Handling/Reflexes/
+// Positioning only ever decide the FLAVOR of a save that's already
+// physically happening, the same two-layer split Slice A's own duels use.
+function geometricKeeperSaveFlavor(keeperPlayer, finishType, random) {
+  const handling = playerAttribute(keeperPlayer, "Handling");
+  const reflexes = playerAttribute(keeperPlayer, "Reflexes");
+  const positioning = playerAttribute(keeperPlayer, "Positioning");
+  const isPower = finishType === "blast";
+  const power = isPower ? 1.4 : 1;
+  const postProne = !isPower;
+  const options = [
+    { value: "K.SAVE.1", weight: handling * 2 },
+    { value: "K.SAVE.2", weight: Math.max(1, 20 - handling) * power },
+    { value: "K.SAVE.3", weight: reflexes + positioning },
+    { value: "K.SAVE.4", weight: Math.max(1, 20 - handling) * 0.6 },
+    { value: "K.SAVE.5", weight: Math.max(1, 20 - handling) * 0.5 * power },
+  ];
+  if (postProne) {
+    options.push(
+      { value: "K.SAVE.6", weight: Math.max(0.5, 8 - positioning * 0.3) },
+      { value: "K.SAVE.7", weight: Math.max(0.5, 6 - positioning * 0.2) },
+      { value: "K.SAVE.8", weight: Math.max(0.1, 2 - positioning * 0.15) },
+    );
+  }
+  const code = weightedChoice(options, random);
+  const rebound = code === "K.SAVE.2" || code === "K.SAVE.5" || code === "K.SAVE.6";
+  const goal = code === "K.SAVE.8";
+  return { code, goal, rebound };
+}
+
+// Same PARALLEL relationship to resolveShotBlock() -- geometry
+// (shotBlockingDefender() above) already decided WHETHER a block
+// happens; resolveShotBlock()'s own "behind/loose/safe" outcome table
+// has no attribute weighting at all (a flat 3/3/2 split), so reusing it
+// here directly, with no gate, is a straight copy of 3 numbers, not a
+// calibration this project needs to protect two copies of.
+function geometricBlockOutcome(random) {
+  return weightedChoice([
+    { value: "behind", weight: 3 },
+    { value: "loose", weight: 3 },
+    { value: "safe", weight: 2 },
+  ], random);
+}
+
 // How far past the goal line a net/corner endpoint travels, in the same
 // 0-100 units -- stays inside .ml-pitch-field's 4% outer margin (see
 // .match-lab-pitch/.ml-pitch-field in styles.css) so it's still visible,
@@ -352,6 +868,234 @@ const GOAL_NET_DEPTH_MARGIN = 1.15;
 const WIDE_OF_POST_X = { left: 8, right: 92 };
 // How far inside the goal line a loose-ball rebound settles.
 const REBOUND_INSET = 7;
+
+// A parry/rebound/loose ball never teleports to its landing spot -- it
+// genuinely travels there, a real (if quick) roll/bounce, not the shot's
+// own struck-ball pace. Floored at MOVEMENT_DURATIONS.scramble (the same
+// floor every other scramble-for-a-loose-ball beat already uses) --
+// anything shorter leaves less real time than CONTACT_REACTION_DELAY_MS
+// itself, which would make every close-range rebound structurally
+// unreachable (nobody can even finish reacting before the ball "arrives"),
+// never a genuine contest.
+const LOOSE_BALL_SPEED_YARDS_PER_SECOND = 12;
+function looseBallFlightMs(distanceYards) {
+  return Math.max(
+    MOVEMENT_DURATIONS.scramble,
+    Math.round((Math.max(0, distanceYards) / LOOSE_BALL_SPEED_YARDS_PER_SECOND) * 1000),
+  );
+}
+
+// Real duration + trajectory for a player genuinely moving to meet the
+// ball at `to` (2026-08-25) -- traceEvent()'s own mover/moveTo shorthand
+// (see its header comment) has no trajectory field and falls back to a
+// flat MOVEMENT_DURATIONS[movement] duration regardless of real distance.
+// Harmless for a short, local adjustment, but a real browser round
+// reported a player visibly TELEPORTING specifically because a genuinely
+// long move (a rebound scramble spanning real yards, a knock-forward
+// reception that can span up to ~75% of the pitch via
+// ZONE_TRANSITION_MATRIX's own "bypass" case) rendered in that same flat,
+// distance-blind window with no interpolation to speak of. Returns a
+// { duration, playerMoves } pair a caller spreads directly into its own
+// trace event options in place of a bare mover/moveTo pair.
+// World Motion Contract v1 (2026-09-03) -- reactionDelayMs/initialSpeedYps/
+// incomingVelocity are optional and default to today's exact behavior
+// (react first, then accelerate from rest). A caller that KNOWS this
+// player is already running -- a carry's final leg continuing its own
+// touches -- passes their real momentum in instead, so the leg continues
+// the stride rather than restarting it.
+function realMoverTrajectory(mover, to, {
+  from = pointOf(mover), floorMs = MOVEMENT_DURATIONS.reposition, action = "advance",
+  reactionDelayMs = CONTACT_REACTION_DELAY_MS, initialSpeedYps = 0, incomingVelocity = null,
+} = {}) {
+  const duration = Math.max(
+    floorMs,
+    Math.ceil(reactionDelayMs + timeToReach(mover.player, yardDistance(from, to), initialSpeedYps) * 1000),
+  );
+  const motion = advanceMotion({ from, intentionTarget: to, player: mover.player,
+    elapsedMs: duration, reactionDelayMs,
+    incomingVelocity: incomingVelocity ?? velocityAlong(from, to, initialSpeedYps), paceToArrival: false,
+    intention: action, sampleCount: Math.max(10, Math.min(24, Math.ceil(duration / 160))) });
+  return {
+    duration,
+    playerMoves: [{
+      player: mover,
+      from,
+      to: motion.position,
+      action,
+      trajectory: motion.trajectory,
+      intention: { action, target: to }, reactionDelayMs,
+    }],
+  };
+}
+
+// Ground Roll v2 follow-up (2026-08-28) -- a real reported bug: a
+// P.CARRY/P.PROGRESS.WON leg (the carrier's own continuous run, no
+// additional touch) used to leave buildBallTrajectory()'s own default
+// "controlled-ground" curve to shape the ball's track independently of
+// realMoverTrajectory()'s own hermite-blended carrier path -- two
+// separately-shaped curves sharing only their two endpoints. When the
+// carrier's own path curves into this leg's heading (inheriting velocity
+// from whatever direction the LAST touch happened to exit at -- see
+// buildMatchLabPlaybackPlan()'s own zeroVelocityAcrossIdleGaps() comment
+// on why that velocity is deliberately carried through, not zeroed), the
+// RELATIVE vector between the ball's straight/independent curve and the
+// carrier's curving one visibly swings around -- read as "the ball
+// rotating in front of him" with no real touch to explain it, because
+// there wasn't one: this leg has no new contact.
+// Fix: derive the ball's own trajectory FROM the exact same trajectory
+// array the carrier's own path already uses (byte-identical shape), offset
+// by a small real-world lead in this leg's own FIXED overall direction
+// (cursor -> destination, computed once, never re-derived per frame) --
+// ramped to exactly zero at both ends so it never disturbs the contact
+// pin or the chained continuity check against the previous leg's own real
+// endpoint. This ball track is rendered directly now (Ball Realism v1,
+// 2026-08-31 -- see renderPlaybackFrame()'s own comment), so a fixed,
+// non-rotating heading here is what keeps the lead itself reading as one
+// smooth arc rather than swinging direction mid-leg.
+const CARRY_BALL_LEAD_YARDS = 1.6;
+function carryLegBallTrajectory(playerTrajectory, from, to) {
+  const dxYards = ((to.x - from.x) / 100) * PITCH_WIDTH_YARDS;
+  const dyYards = ((to.y - from.y) / 100) * PITCH_LENGTH_YARDS;
+  const length = Math.hypot(dxYards, dyYards) || 1;
+  const unitX = dxYards / length;
+  const unitY = dyYards / length;
+  // A real reported bug: unitX/unitY above is a pure DIRECTION, full
+  // magnitude (1.0) the instant `from`/`to` differ by ANY nonzero amount
+  // -- even a leftover residual leg of a few THOUSANDTHS of a yard
+  // (simulateCarryTouches()'s own spacing threshold routinely leaves one;
+  // a real, common case, not a rare edge). That full-strength direction
+  // times the FIXED CARRY_BALL_LEAD_YARDS put a 1.6-yard round-trip
+  // swing on a ball whose owner barely moved at all -- visually the ball
+  // darting out almost two yards and snapping straight back "into" a
+  // carrier who never went anywhere, exactly the reported "goes in front
+  // then teleports back inside the circle." The lead itself is now
+  // capped at the real distance this leg is actually covering, so a
+  // near-stationary leg gets a near-zero lead (nothing to visibly swing),
+  // while any ordinary multi-yard carry keeps the full, intended 1.6-yard
+  // lead unchanged (length comfortably exceeds it already).
+  const leadYards = Math.min(CARRY_BALL_LEAD_YARDS, length);
+  const samples = playerTrajectory.map((sample) => {
+    const ramp = Math.sin(Math.PI * clamp(0, 1, sample.progress));
+    const offsetXPct = ((unitX * leadYards * ramp) / PITCH_WIDTH_YARDS) * 100;
+    const offsetYPct = ((unitY * leadYards * ramp) / PITCH_LENGTH_YARDS) * 100;
+    return {
+      progress: sample.progress,
+      position: {
+        x: clamp(0, 100, sample.position.x + offsetXPct),
+        y: clamp(0, 100, sample.position.y + offsetYPct),
+        height: 0,
+      },
+      velocity: sample.velocity,
+      verticalVelocity: 0,
+      mode: "controlled-ground",
+    };
+  });
+  if (samples.length) {
+    samples[0].position = { ...from, height: 0 };
+    samples[samples.length - 1].position = { ...to, height: 0 };
+  }
+  return samples;
+}
+
+// A ball IN A PLAYER'S HANDS has no path of its own: it is wherever he is.
+//
+// A real reported bug (2026-09-07): during GK.HOLD the keeper walks the ball
+// around his box, and the event supplied only ballFrom/ballTo. Playback then
+// interpolated the ball along a straight line between those two points while
+// the keeper followed his real accelerate-and-settle trajectory over the same
+// window, so the two started and finished together and visibly drifted apart
+// in between -- the ball outside the keeper's own circle for most of the walk.
+//
+// This is carryLegBallTrajectory()'s problem without the lead. A carried ball
+// is knocked ahead of the carrier and deserves CARRY_BALL_LEAD_YARDS; a held
+// ball is not knocked anywhere, so it takes the holder's samples exactly.
+// The first sample is pinned to the ball's own previous resting point so the
+// ball track stays continuous across the seam (addBallTrajectory() rejects a
+// discontinuity outright), and every sample after it is the holder's.
+function heldBallTrajectory(playerTrajectory, from) {
+  const samples = (playerTrajectory ?? []).map((sample) => ({
+    progress: sample.progress,
+    position: { x: sample.position.x, y: sample.position.y, height: 0 },
+    velocity: sample.velocity,
+    verticalVelocity: 0,
+    mode: "held",
+  }));
+  if (samples.length && from) samples[0].position = { x: from.x, y: from.y, height: 0 };
+  return samples;
+}
+
+// Body Avoidance v1 (2026-08-28) -- a real reported bug: a carrier's own
+// body walked straight through an opponent standing directly in the way
+// during the FINAL P.CARRY/P.PROGRESS.WON leg (no additional touch left
+// to steer with -- simulateCarryTouches()'s own per-touch steering only
+// ever reaches as far as the last touch's own contact point). Builds a
+// real, momentum-preserving two-segment run through a steering waypoint
+// (carrySteeringWaypoint()) when the direct line to `to` would pass
+// through someone's body radius, carrying leg 1's own exit velocity into
+// leg 2 (sampleContinuousTrajectory()'s own incomingVelocity -- no dead
+// stop-then-restart at the steering point). Falls straight through to the
+// plain single-leg realMoverTrajectory() when the line is already clear
+// -- zero behavior change for the ordinary, unobstructed case.
+// World Motion Contract v1 (2026-09-03) -- `entrySpeedYps`/`entryVelocity`
+// (both optional, both default to "started from rest", so every existing
+// caller keeps identical behavior) let the final leg of a carry continue
+// the run the touches before it were already making. Without them this
+// leg charged a fresh CONTACT_REACTION_DELAY_MS (a stationary dead zone)
+// and re-accelerated from 0 yd/s, which is the second half of the
+// reported go-stop-go carry: a player mid-sprint does not stop, wait
+// 120ms and set off again just because the touches ran out. A genuine
+// new stimulus still gets its reaction delay -- a carrier continuing
+// their own run is not one.
+function carryLegMoverTrajectory(mover, to, opponents, {
+  from = pointOf(mover), action = "advance", entrySpeedYps = 0, entryVelocity = null,
+} = {}) {
+  const via = carrySteeringWaypoint(from, to, opponents);
+  let cursor = from, incomingVelocity = entryVelocity ?? velocityAlong(from, to, entrySpeedYps);
+  let elapsedMs = 0;
+  const samples = [];
+  for (const target of via ? [via, to] : [to]) {
+    const initial = advanceMotion({from:cursor,intentionTarget:target,player:mover.player,
+      elapsedMs:0,incomingVelocity}).entrySpeedYps;
+    const duration = Math.ceil(timeToReach(mover.player, yardDistance(cursor,target), initial) * 1000);
+    if (!duration) continue;
+    const motion = advanceMotion({from:cursor,intentionTarget:target,player:mover.player,
+      elapsedMs:duration,incomingVelocity,continuesAfter:true,paceToArrival:false,intention:"carry"});
+    for (const sample of motion.trajectory) samples.push({...sample,timeMs:elapsedMs+sample.progress*duration});
+    elapsedMs += duration;
+    cursor = motion.position;
+    incomingVelocity = motion.velocity;
+  }
+  const trajectory = elapsedMs ? samples.map(sample=>({...sample,progress:sample.timeMs/elapsedMs}))
+    : [{progress:0,position:{...from},velocity:incomingVelocity},{progress:1,position:{...from},velocity:incomingVelocity}];
+  return {duration:elapsedMs,playerMoves:[{player:mover,from,to:cursor,action,trajectory,
+    reactionDelayMs:0,intention:{action:"carry",target:to}}]};
+}
+
+// An executed touch can pass the tactical destination. End there instead of
+// reversing the runner to recover a coordinate that was only an intention.
+function acceptCarryOvershoot(origin, target, touches) {
+  const last = touches.at(-1)?.ballTo;
+  if (!last) return;
+  const a=toYardPoint(origin), b=toYardPoint(target), c=toYardPoint(last);
+  const dx=b.x-a.x, dy=b.y-a.y;
+  if ((c.x-a.x)*dx+(c.y-a.y)*dy >= dx*dx+dy*dy) {
+    Object.assign(target,last,{zone:zoneFromPercent(last.x,last.y)});
+  }
+}
+
+// Off-Ball Motion v3 (2026-08-26) -- the WHOLE carry/dribble window's own
+// real duration (origin to the final destination, the SAME kinetics
+// formula realMoverTrajectory() uses for a single leg), for the ONE
+// off-ball reaction call that now covers a multi-touch carry, replacing
+// the old per-touch reactOffBall() beat (see resolveCarry()/
+// resolveDribble()'s own comment on the reported "go-stop-go" bug this
+// fixes).
+function carryWindowDurationMs(mover, from, to) {
+  return Math.max(
+    MOVEMENT_DURATIONS.dribble,
+    Math.round(CONTACT_REACTION_DELAY_MS + timeToReach(mover.player, yardDistance(from, to)) * 1000),
+  );
+}
 
 // A player's frame of reference comes from the team's declared attacking
 // direction, never from where the marker happens to be standing. Inferring
@@ -534,6 +1278,7 @@ const KEEPER_SAVE_PRESENTATION = {
 // branches silently handed the live ball to the keeper. Centralizing the
 // transition makes that contradiction impossible at those call sites.
 function keeperSaveTransition(save, keeperEntry, ballEnd, context = "shot") {
+  if (save.reboundTransition) return save.reboundTransition;
   const presentation = KEEPER_SAVE_PRESENTATION[save.code];
   if (save.goal || presentation?.ballResult === "goal") {
     return {
@@ -576,7 +1321,105 @@ function keeperSaveTransition(save, keeperEntry, ballEnd, context = "shot") {
     reason: deadBallRestart
       ? `${context}-save-${deadBallRestart}`
       : "keeper-catch",
+    // A clean catch holds the ball in the hands (see GK_HOLD_MS / the main
+    // loop's own GK.HOLD push) -- never set for a dead-ball restart, where
+    // there's no next in-possession decision for it to matter to.
+    held: deadBallRestart ? undefined : true,
   };
+}
+
+// Contact impulse and airborne evolution are shared physics. Ground motion is
+// handed back to the possession runner's Dynamic Ball Claim v2, with its real
+// velocity (no delivery attenuation and no preselected rebound shooter).
+function pushPhysicalReboundEvent(trace, { shooterEntry, keeperEntry, save, contactPoint, strikeMechanics }) {
+  const physicsCode = save.physicsCode ?? save.code;
+  const previous = [...trace].reverse().find(event => event.ballFrom && event.ballTo);
+  const shotFrom = previous?.ballFrom ?? pointOf(shooterEntry);
+  const incomingSample = previous?.ballTrajectory?.at(-1);
+  const fallbackMs = previous?.duration || 400;
+  const incoming = {
+    x: (incomingSample?.velocity?.x ?? (contactPoint.x - shotFrom.x) / fallbackMs) * PITCH_WIDTH_YARDS * 10,
+    y: (incomingSample?.velocity?.y ?? (contactPoint.y - shotFrom.y) / fallbackMs) * PITCH_LENGTH_YARDS * 10,
+    z: (incomingSample?.verticalVelocity ?? 0) * 1000,
+  };
+  const goalY = goalLineY(shooterEntry);
+  const impact = { ...contactPoint, height: incomingSample?.position?.height ?? contactPoint.height ?? 0 };
+  let origin = impact, outgoing, kind, normal = null, incidentVelocity = incoming;
+  let tipMs = 0;
+  if (physicsCode === "K.SAVE.6") {
+    const frame = goalFrameContact({ point: impact, goalY, incomingVelocity: incoming });
+    origin = frame.point; normal = frame.normal; kind = frame.kind;
+    // The already-selected keeper tip delivers the ball to the closest frame
+    // surface. The tip leg has its own direction and impact speed.
+    const dx = (origin.x - impact.x) * PITCH_WIDTH_YARDS / 100;
+    const dy = (origin.y - impact.y) * PITCH_LENGTH_YARDS / 100;
+    const dz = origin.height - impact.height;
+    const distance = Math.hypot(dx, dy, dz), speed = Math.hypot(incoming.x, incoming.y, incoming.z);
+    const frameIncoming = distance > 0.001 && speed > 0
+      ? { x: dx / distance * speed, y: dy / distance * speed, z: dz / distance * speed }
+      : incoming;
+    tipMs = speed > 0 ? distance / speed * 1000 : 0;
+    incidentVelocity = frameIncoming;
+    outgoing = reflectBallVelocity(frameIncoming, normal, FRAME_RESTITUTION);
+  } else {
+    const parry = parryBallVelocity({ incomingVelocity: incoming, point: impact,
+      keeperPoint: pointOf(keeperEntry), goalY, handling: playerAttribute(keeperEntry.player, "Handling"),
+      spilled: physicsCode === "K.SAVE.5" });
+    outgoing = parry.velocity; kind = parry.kind;
+  }
+  const projection = projectRebound({ from: origin, velocity: outgoing });
+  const span = tipMs + projection.rollStartMs;
+  let duration = Math.max(1, span);
+  let samples = [ { progress: 0, position: impact } ];
+  if (tipMs) samples.push({ progress: tipMs / duration, position: origin });
+  for (const sample of projection.samples) {
+    if (sample.timeMs > projection.rollStartMs + 0.001) break;
+    samples.push({ ...sample, progress: (tipMs + sample.timeMs) / duration });
+  }
+  let endpoint = { ...projection.rollFrom, zone: zoneFromPercent(projection.rollFrom.x, projection.rollFrom.y) };
+  const ballVelocity = { x: projection.rollVelocity.x / PITCH_WIDTH_YARDS / 10,
+    y: projection.rollVelocity.y / PITCH_LENGTH_YARDS / 10 };
+  samples.push({ progress: 1, position: endpoint, velocity: ballVelocity, verticalVelocity: 0, mode: "rolling" });
+  let exit = null, goalCrossing = null;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1], b = samples[i];
+    const crossing = classifyPitchExit({ from: a.position, to: b.position,
+      lastTouchTeam: keeperEntry.team, attackingDirectionByTeam: state.attackingDirection });
+    if (!crossing) continue;
+    const ratio = yardDistance(a.position, crossing.ballEnd) / Math.max(0.000001, yardDistance(a.position, b.position));
+    const progress = a.progress + (b.progress - a.progress) * ratio;
+    endpoint = { ...crossing.ballEnd, height: (a.position.height || 0) + ((b.position.height || 0) - (a.position.height || 0)) * ratio };
+    goalCrossing = reboundGoalCrossing(a.position, b.position, goalY);
+    exit = { ...crossing, ballEnd: endpoint };
+    samples = samples.slice(0, i).map(sample => ({ ...sample, progress: progress > 0 ? sample.progress / progress : 0 }));
+    samples.push({ progress: 1, position: endpoint, mode: "out" });
+    duration *= progress;
+    break;
+  }
+  trace.push(traceEvent(save.code, `${playerName(keeperEntry.player)}: ${kind}`, {
+    actor: shooterEntry, keeper: keeperEntry, movement: "save", outcome: goalCrossing ? "goal" : "save", duration,
+    ballFrom: contactPoint, ballTo: endpoint, ballTrajectory: samples,
+    keeperAction: KEEPER_SAVE_PRESENTATION[physicsCode].keeperAction,
+    ballResult: goalCrossing ? "goal" : kind,
+    badge: goalCrossing ? "GOAL" : kind === "crossbar" ? "BAR" : kind === "post" ? "POST" : "PARRIED",
+    ...(goalCrossing ? { restart: "kickoff" } : {}),
+    ownerBefore: null, ownerAfter: null,
+    // The contact is a hand impulse, not a command to relocate the goalkeeper.
+    lastTouch: { playerId: keeperEntry.id, team: keeperEntry.team, bodyPart: "hand", deliberate: false },
+    metrics: { rebound: { kind, incoming: incidentVelocity, shotIncoming: incoming, outgoing, normal, impactPoint: origin,
+      impactMs: tipMs, restitution: physicsCode === "K.SAVE.6" ? FRAME_RESTITUTION : physicsCode === "K.SAVE.5" ? 0.18 : 0.38,
+      turfContacts: projection.contacts, rollStartMs: span } },
+  }));
+  save.reboundTransition = goalCrossing ? {
+    outcome: "GOAL", code: save.code, resolved: true, terminal: true, possession: "dead",
+    nextOwnerId: null, ballEnd: endpoint, restart: "kickoff", reason: "rebound-goal-plane-crossing",
+  } : exit ? pushPitchExitRestart(trace, { actor: keeperEntry,
+    ballFrom: endpoint, exit, movement: "save", duration: 0, pinActorToExit: false }) : {
+    outcome: "REBOUND", code: save.code, resolved: true, terminal: false, possession: "loose",
+    nextOwnerId: null, ballEnd: endpoint, ballVelocity, ballVelocityPhase: "rolling",
+    restart: null, reason: `${kind}-loose`,
+  };
+  return endpoint;
 }
 
 // Per-code path from the keeper/ball contact point onward (the leg BEFORE
@@ -659,6 +1502,29 @@ function missPointFor(shooterEntry, keeperEntry, curveHint, missCode) {
   };
 }
 
+// Curved shot -> real ball TRACK, not just the visual guide (2026-08-24) --
+// a reported bug: the trail line drawn by showTrail()/applyPlaybackCue()
+// (curveControlPoint()'s own quadratic bezier) genuinely curls, but the
+// ball marker itself travelled dead straight during playback. Root cause:
+// resolvedBallTrajectory below always builds a real ballTrajectory via
+// buildBallTrajectory() (matchBallCore.js) for any event with ballFrom/
+// ballTo, and matchLabPlayback.js's buildMatchLabPlaybackPlan() always
+// prefers a non-empty ballTrajectory over its own curve-aware
+// segmentPath()/addBallPath() fallback -- so that fallback's curve code
+// was already correct but structurally unreachable; the ball's REAL
+// track was always the straight buildBallTrajectory() default (pathSegments
+// left at its [] default, which buildBallTrajectory reads as a plain
+// [from, to] line). Same control-point math as curveControlPoint() (the
+// guide trail), sampled here into real waypoints buildBallTrajectory() can
+// walk, so the drawn guide and the actual ball path can never disagree
+// again.
+function curvedShotPathSegments(ballFrom, ballTo, strikingFoot, contactType) {
+  const control = curveControlPoint(ballFrom, ballTo, strikingFoot, contactType);
+  return Array.from({ length: 9 }, (_, index) =>
+    quadraticBezierPoint(ballFrom, control, ballTo, index / 8),
+  );
+}
+
 function traceEvent(code, label, opts = {}) {
   const {
     actor = null,
@@ -669,6 +1535,10 @@ function traceEvent(code, label, opts = {}) {
     outcome = "neutral",
     ballFrom = null,
     ballTo = null,
+    // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- where the
+    // passer AIMED, kept as its own fact alongside where the ball actually
+    // ended. Optional and inert: only diagnostics and tests read it.
+    intendedPoint = null,
     duration,
     // Explicit participant-movement data -- which ENTITY (if any) actually
     // relocates to which point, stated directly by the call site that
@@ -774,6 +1644,7 @@ function traceEvent(code, label, opts = {}) {
         from: entry.from ?? pointOf(entry.player),
         to: entry.to,
         action: entry.action,
+        motionModel: entry.motionModel ?? "running",
         role: entry.role ?? null,
         trajectory: entry.trajectory
           ? entry.trajectory.map((sample) => ({
@@ -789,7 +1660,20 @@ function traceEvent(code, label, opts = {}) {
                 ? { ...entry.intention.target }
                 : null,
             }
-          : null,
+          : entry.intentionTarget ? { action: entry.action, target: { ...entry.intentionTarget } } : null,
+        teamJob: entry.teamJob ?? null,
+        teamPhase: entry.teamPhase ?? null,
+        formationAnchor: entry.formationAnchor ? { ...entry.formationAnchor } : null,
+        shapeTarget: entry.shapeTarget ? { ...entry.shapeTarget } : null,
+        occupiedLane: entry.occupiedLane ?? null,
+        occupiedDepthBand: entry.occupiedDepthBand ?? null,
+        currentRegion: entry.currentRegion ?? null,
+        shapeRegion: entry.shapeRegion ?? null,
+        intendedRegion: entry.intendedRegion ?? null,
+        regionMove: entry.regionMove ?? null,
+        targetRegionOccupancy: entry.targetRegionOccupancy ?? null,
+        tacticalRole: entry.tacticalRole ?? null,
+        duty: entry.duty ?? null,
         authoritative: entry.authoritative !== false,
         reactionDelayMs: Number.isFinite(entry.reactionDelayMs)
           ? entry.reactionDelayMs
@@ -797,6 +1681,17 @@ function traceEvent(code, label, opts = {}) {
         reachAllowanceYards: Number.isFinite(entry.reachAllowanceYards)
           ? entry.reachAllowanceYards
           : 0,
+        // Stamina Bars v1 (2026-08-31) -- reads whatever burst01/match01
+        // the REAL simulatedRoster entry already carries at this exact
+        // instant (drainOnBallAction()/applyBurstOffBallJob() both mutate
+        // it in place before their own trace.push()), never recomputed or
+        // fabricated. Omitted entirely (not even `undefined`) for any
+        // fixture that never carries the battery at all -- buildMatchLabPlaybackPlan()
+        // depends on the key's ABSENCE to leave every existing (burst-less)
+        // playback plan byte-identical.
+        ...(typeof entry.player.burst01 === "number"
+          ? { burst01: entry.player.burst01, match01: entry.player.match01 ?? null }
+          : {}),
       }))
     : mover && moveTo
       ? [
@@ -829,6 +1724,12 @@ function traceEvent(code, label, opts = {}) {
       ? 0
       : ((movement ? MOVEMENT_DURATIONS[movement] : undefined) ??
         DEFAULT_DURATION));
+  const resolvedPathSegments =
+    pathSegments.length >= 2
+      ? pathSegments
+      : movement === "shot" && strikingFoot && contactType && ballFrom && ballTo
+        ? curvedShotPathSegments(ballFrom, ballTo, strikingFoot, contactType)
+        : pathSegments;
   const resolvedBallTrajectory =
     ballTrajectory ||
     (!cueOnly && ballFrom && ballTo
@@ -837,7 +1738,7 @@ function traceEvent(code, label, opts = {}) {
           to: ballTo,
           movement,
           durationMs: resolvedDuration,
-          pathSegments,
+          pathSegments: resolvedPathSegments,
           ballResult,
           keeperAction,
           heightCue,
@@ -888,6 +1789,7 @@ function traceEvent(code, label, opts = {}) {
     contact: contact
       ? {
           point: contact.point,
+          ...(contact.bodyPoint ? { bodyPoint: { ...contact.bodyPoint }, reachAllowanceYards: contact.reachAllowanceYards ?? 0 } : {}),
           actorId: contact.actor.id,
           type: contact.type,
           // Kick/header/save/clearance contacts begin their outgoing flight;
@@ -895,6 +1797,12 @@ function traceEvent(code, label, opts = {}) {
           // The producing call site must state which one -- playback never
           // infers it from an event code or label.
           phase: contact.phase,
+          // How far into a "start"-phase contact's own event the contact
+          // actually happens (2026-08-25) -- see matchLabPlayback.js's own
+          // comment on the contact-pin timing bug this fixes. Optional;
+          // absent/0 for every caller that doesn't supply one, identical
+          // to the original always-at-the-first-instant behavior.
+          delayMs: contact.delayMs ?? 0,
         }
       : null,
     ownerBeforeId:
@@ -913,6 +1821,7 @@ function traceEvent(code, label, opts = {}) {
     offside,
     ballFrom,
     ballTo,
+    intendedPoint,
     movement,
     outcome,
     duration: resolvedDuration,
@@ -1043,6 +1952,40 @@ const KEEPER_ACTION_PHRASE = {
   SPILLED: "spills it",
   POST: "turns it against the post",
 };
+// The ball's own explicit progress-timed path for a save with a genuine
+// rebound leg (2026-08-25) -- see pushKeeperSaveEvent()'s own comment on
+// the reported bug this fixes. Ordinary pathSegments-based timing
+// (addBallPath() in matchLabPlayback.js) is purely distance-proportional
+// across the WHOLE event window, so with no way to express "hold here for
+// a while, THEN travel," the ball appeared to start bouncing away the
+// instant the event began -- before the keeper had even reached it -- and
+// crawled through what should be a quick bounce because that instant-start
+// travel was stretched across diveMs+bounceMs combined, not just
+// bounceMs. This builds real progress/timeMs samples instead: held exactly
+// at segments[0] through progress = diveMs/totalMs (matching the contact
+// pin's own delayMs below), then distance-proportional across the
+// remaining segments for the rest.
+function buildSaveBallTrajectory(segments, diveMs, totalMs) {
+  if (segments.length <= 1 || totalMs <= 0) return null;
+  const holdProgress = clamp(0, 1, diveMs / totalMs);
+  const samples = [
+    { progress: 0, position: { ...segments[0] } },
+    { progress: holdProgress, position: { ...segments[0] } },
+  ];
+  const lengths = segments.slice(1).map((point, index) => yardDistance(segments[index], point));
+  const total = lengths.reduce((sum, value) => sum + value, 0) || lengths.length;
+  let elapsed = 0;
+  for (let index = 1; index < segments.length; index += 1) {
+    elapsed += lengths[index - 1] || 1;
+    const localRatio = elapsed / total;
+    samples.push({
+      progress: index === segments.length - 1 ? 1 : holdProgress + (1 - holdProgress) * localRatio,
+      position: { ...segments[index] },
+    });
+  }
+  return samples;
+}
+
 function pushKeeperSaveEvent(
   trace,
   {
@@ -1053,6 +1996,7 @@ function pushKeeperSaveEvent(
     movement = "save",
     label,
     contactPoint: contactPointOverride = null,
+    keeperContactResolved = false,
   },
 ) {
   const presentation =
@@ -1066,32 +2010,65 @@ function pushKeeperSaveEvent(
   // Defaults to the OLD exact behavior for any caller that doesn't supply
   // one (header/rebound/free-kick save paths, not upgraded this round).
   const contactPoint = contactPointOverride || pointOf(keeperEntry);
+  if (save.rebound) {
+    return pushPhysicalReboundEvent(trace, { shooterEntry, keeperEntry, save, contactPoint, strikeMechanics });
+  }
   const side = choosePostSide(
     pointOf(shooterEntry),
     contactPoint,
     strikeMechanics?.strikingFoot,
     strikeMechanics?.contactType,
   );
-  const segments = buildKeeperSaveSegments(
+  let segments = buildKeeperSaveSegments(
     save.code,
     shooterEntry,
     keeperEntry,
     contactPoint,
     side,
   );
+  if (keeperContactResolved && presentation.ballResult === "held") {
+    segments = [contactPoint, pointOf(keeperEntry)];
+  }
   const endpoint = segments[segments.length - 1];
   const defaultLabel = save.goal
     ? `${playerName(shooterEntry.player)} scores`
     : `${playerName(keeperEntry.player)} ${KEEPER_ACTION_PHRASE[presentation.badge] ?? "saves it"}`;
+  // A real duration for the whole beat -- the keeper's own dive/reach to
+  // contactPoint (Pace/Acceleration-timed, same timeToReach() every other
+  // physically-limited move already uses) plus however long the parry/
+  // rebound then actually takes to travel its own path afterward. Never
+  // an implicit zero -- a save with no explicit duration compresses the
+  // dive AND the whole post/net/rebound path into one instant.
+  const diveMs = keeperContactResolved ? 0 : Math.max(
+    180,
+    Math.round(
+      timeToReach(keeperEntry.player, yardDistance(pointOf(keeperEntry), contactPoint)) * 1000,
+    ),
+  );
+  let bounceMs = 0;
+  for (let index = 1; index < segments.length; index += 1) {
+    bounceMs += looseBallFlightMs(yardDistance(segments[index - 1], segments[index]));
+  }
+  const saveDuration = keeperContactResolved && presentation.ballResult === "held"
+    ? 120 : Math.max(120, diveMs + bounceMs);
+  // Explicit progress-timed ball path (2026-08-25) -- see
+  // buildSaveBallTrajectory()'s own comment for the reported bug this
+  // fixes (a keeper that never visibly reacts, plus an artificially slow
+  // rebound/parry bounce). null whenever there's no real bounce leg
+  // (segments.length <= 1 -- a clean catch/fumble-and-hold), which falls
+  // straight back to the original pathSegments-based path unchanged.
+  const saveBallTrajectory = buildSaveBallTrajectory(segments, diveMs, saveDuration);
   trace.push(
     traceEvent(save.code, label ?? defaultLabel, {
       actor: shooterEntry,
       keeper: keeperEntry,
       movement,
       outcome: save.goal ? "goal" : "save",
+      duration: saveDuration,
       ballFrom: contactPoint,
       ballTo: endpoint,
       pathSegments: segments,
+      ballTrajectory: saveBallTrajectory,
       // The keeper genuinely dives/reaches to the real contact point,
       // never merely asserted to be there (2026-08-20 fix -- a real
       // contact-continuity violation caught by the full-possession fuzz
@@ -1102,17 +2079,28 @@ function pushKeeperSaveEvent(
       // track never actually reached). A no-op when contactPoint already
       // equals their current position (every pre-existing caller that
       // doesn't supply contactPointOverride).
-      mover: keeperEntry,
-      moveFrom: pointOf(keeperEntry),
-      moveTo: contactPoint,
+      mover: keeperContactResolved ? null : keeperEntry,
+      moveFrom: keeperContactResolved ? null : pointOf(keeperEntry),
+      moveTo: keeperContactResolved ? null : contactPoint,
       contact:
         presentation.keeperAction === "beaten"
           ? null
           : {
               point: contactPoint,
+              ...(keeperContactResolved ? { bodyPoint: pointOf(keeperEntry),
+                reachAllowanceYards: KEEPER_DIVE_ARM_YARDS + jumpReachYards(keeperEntry.player) } : {}),
               actor: keeperEntry,
               type: presentation.keeperAction,
               phase: "start",
+              // delayMs (2026-08-25 fix, matchLabPlayback.js's own
+              // contact-pin) -- without this, the pin landed at this
+              // event's literal first instant, unconditionally overwriting
+              // the keeper's own authored start-of-dive position and
+              // collapsing their whole reach to a single frozen frame at
+              // the save point for the ENTIRE event -- "the keeper does
+              // not even react." Now pinned at however far into the event
+              // their own dive actually takes, matching diveMs exactly.
+              delayMs: diveMs,
             },
       ownerBefore: null,
       ownerAfter: presentation.ballResult === "held" ? keeperEntry : null,
@@ -1142,6 +2130,39 @@ function pushKeeperSaveEvent(
 // attacking/defending pool to pick a *different* player from), so this
 // reuses the same attacker/defender already involved -- a simplification
 // (real players, real attributes, real functions), not a fabrication.
+// Rebound v2 (2026-08-26, Passing v3) -- distance-tiered conversion,
+// see reboundConversionChance()'s own comment.
+const REBOUND_CLOSE_RANGE_YARDS = 14;
+const REBOUND_MID_RANGE_YARDS = 22;
+const REBOUND_CLOSE_RANGE_CHANCE = { floor: 0.5, ceiling: 0.72 };
+const REBOUND_MID_RANGE_CHANCE = { floor: 0.28, ceiling: 0.48 };
+// A generous outer cap for the initial "who can even physically get
+// there" pass ONLY -- never the event's own authored duration (see
+// contestDurationMs below, which is the real, earlier arrival time,
+// floored at MOVEMENT_DURATIONS.scramble). This just needs to be well
+// beyond any realistic box-scramble arrival so contactArrivalTiming()'s
+// own naturalEtaMs comes back genuine, not artificially clipped.
+const REBOUND_CONTEST_MAX_MS = 3000;
+// Genuinely simultaneous arrivals (within about one reaction beat of each
+// other) duel for it; a real gap means whoever's there first just takes
+// it -- no coin flip for an attacker who arrived a full second later.
+const REBOUND_TIE_TOLERANCE_MS = 150;
+
+// Finishing/Composure vs the keeper's own Reflexes, mapped into the
+// distance tier's own [floor, ceiling] range -- close-range rebounds in
+// real football are tap-ins (a real reported bug: reboundShotChance()'s
+// own flat ~0.32 cap made them mostly misses regardless of range), not a
+// fixed number regardless of how presentable the chance actually was.
+function reboundConversionChance(distanceYards, shooter, keeperPlayer) {
+  const tier = distanceYards <= REBOUND_CLOSE_RANGE_YARDS
+    ? REBOUND_CLOSE_RANGE_CHANCE
+    : REBOUND_MID_RANGE_CHANCE;
+  const attackPower = (playerAttribute(shooter, "Finishing") + playerAttribute(shooter, "Composure")) / 2;
+  const keeperPower = playerAttribute(keeperPlayer, "Reflexes");
+  const share = attackPower / Math.max(1, attackPower + keeperPower);
+  return clamp(tier.floor, tier.ceiling, tier.floor + (tier.ceiling - tier.floor) * share);
+}
+
 function resolveReboundScramble(
   attacker,
   defender,
@@ -1151,31 +2172,131 @@ function resolveReboundScramble(
   trace,
   originPoint = pointOf(keeper),
 ) {
-  const reboundDuel = localizedDuel(
-    attacker.player,
-    defender.player,
-    ["Anticipation", "Acceleration", "Off the Ball"],
-    ["Positioning", "Anticipation", "Strength"],
-    FIXED_MINUTE,
-    random,
-    zone,
-  );
-  const winner = reboundDuel.won ? attacker : defender;
+  // Real physics, not a teleport (2026-08-23) -- pushKeeperSaveEvent()
+  // already gave the ball itself a real bounce duration to REACH
+  // originPoint (its own pathSegments/duration fix, immediately before
+  // this event on the trace); this function starts from the ball already
+  // loose and settled there, and asks who can physically get to it.
+  //
+  // Real event duration, not a flat REBOUND_SCRAMBLE_WINDOW_MS (2026-08-26
+  // fix -- a real reported bug: stretching BOTH chasers across a flat
+  // 2200ms even when they started 6-10yd away read as slow motion, and any
+  // off-ball ADJUST overlapping that window crawled with them). Both
+  // eligible players' own REAL, physical arrival time
+  // (contactArrivalTiming(), the same Pace/Acceleration-limited timing
+  // every other continuous move in this project already obeys) decides
+  // both WHO gets there and HOW LONG this event actually takes -- the
+  // earliest genuine arrival, floored at MOVEMENT_DURATIONS.scramble
+  // (the same "a loose ball scramble is still a real beat, never an
+  // instant snap" floor every other scramble already uses), never the
+  // old flat ceiling.
+  const arrivalFor = (entry, contactTimeMs) => contactArrivalTiming({
+    player: entry.player,
+    from: pointOf(entry),
+    to: originPoint,
+    contactTimeMs,
+  });
+  const attackerProbe = arrivalFor(attacker, REBOUND_CONTEST_MAX_MS);
+  const defenderProbe = arrivalFor(defender, REBOUND_CONTEST_MAX_MS);
+  if (!attackerProbe.reachable && !defenderProbe.reachable) {
+    const looseDurationMs = MOVEMENT_DURATIONS.scramble;
+    trace.push(
+      traceEvent(
+        "REBOUND.LOOSE",
+        "The loose ball drops beyond anyone who can reach it",
+        {
+          actor: attacker,
+          defender,
+          movement: "scramble",
+          outcome: "loose",
+          duration: looseDurationMs,
+          ballFrom: originPoint,
+          ballTo: originPoint,
+          ownerBefore: null,
+          ownerAfter: null,
+        },
+      ),
+    );
+    return {
+      outcome: "NO GOAL",
+      code: "REBOUND.LOOSE",
+      resolved: true,
+      terminal: true,
+      possession: "loose",
+      nextOwnerId: null,
+      ballEnd: originPoint,
+      restart: null,
+      reason: "rebound-unreachable",
+    };
+  }
+  // Real total wall-clock arrival, not naturalEtaMs alone -- naturalEtaMs is
+  // pure locomotion time and excludes the reaction beat contactArrivalTiming()
+  // itself charges before a player is judged reachable at all (same
+  // CONTACT_REACTION_DELAY_MS + travel-time pattern already used elsewhere in
+  // this file, e.g. formationHomePosition's own mover ETA). Leaving the
+  // reaction beat out here made contestDurationMs land ~120ms short of what
+  // the SAME arrivalFor() call would then require to call the winner
+  // "reachable," so even the winner fell short of originPoint on re-probe.
+  const attackerEtaMs = attackerProbe.reachable ? CONTACT_REACTION_DELAY_MS + attackerProbe.naturalEtaMs : Infinity;
+  const defenderEtaMs = defenderProbe.reachable ? CONTACT_REACTION_DELAY_MS + defenderProbe.naturalEtaMs : Infinity;
+  const earliestEtaMs = Math.min(attackerEtaMs, defenderEtaMs);
+  const contestDurationMs = Math.max(MOVEMENT_DURATIONS.scramble, Math.round(earliestEtaMs));
+  // Re-timed against the REAL, final event duration -- not the generous
+  // probe window above -- so each contestant's own authored move/
+  // trajectory reflects how far they genuinely got inside the ACTUAL
+  // event, never a distance implied by a longer window that was only
+  // ever used to decide timing.
+  const attackerArrival = arrivalFor(attacker, contestDurationMs);
+  const defenderArrival = arrivalFor(defender, contestDurationMs);
+  const contestingNow = [
+    attackerEtaMs <= earliestEtaMs + REBOUND_TIE_TOLERANCE_MS ? attacker : null,
+    defenderEtaMs <= earliestEtaMs + REBOUND_TIE_TOLERANCE_MS ? defender : null,
+  ].filter(Boolean);
+  let winner;
+  if (contestingNow.length > 1) {
+    const reboundDuel = localizedDuel(
+      attacker.player,
+      defender.player,
+      ["Anticipation", "Acceleration", "Off the Ball"],
+      ["Positioning", "Anticipation", "Strength"],
+      FIXED_MINUTE,
+      random,
+      zone,
+    );
+    winner = reboundDuel.won ? attacker : defender;
+  } else {
+    winner = contestingNow[0];
+  }
+  const contestPoint = originPoint;
+  const attackerWon = winner.id === attacker.id;
+  const moveFor = (entry, arrival, action) => ({
+    player: entry,
+    from: pointOf(entry),
+    to: arrival.reachablePoint,
+    action,
+    trajectory: sampleContinuousTrajectory({
+      from: pointOf(entry),
+      to: arrival.reachablePoint,
+      player: entry.player,
+      totalMs: contestDurationMs,
+      reactionDelayMs: CONTACT_REACTION_DELAY_MS,
+      sampleCount: Math.max(6, Math.min(14, Math.ceil(contestDurationMs / 140))),
+    }),
+  });
   trace.push(
     traceEvent(
-      reboundDuel.won ? "REBOUND.WON" : "REBOUND.LOST",
-      reboundDuel.won
-        ? `${playerName(attacker.player)} reacts fastest and reaches the loose ball first`
-        : `${playerName(defender.player)} reaches the loose ball first`,
+      attackerWon ? "REBOUND.WON" : "REBOUND.LOST",
+      attackerWon
+        ? `${playerName(attacker.player)} reaches the loose ball first`
+        : `${playerName(winner.player)} reaches the loose ball first`,
       {
         actor: attacker,
         defender,
         movement: "scramble",
-        outcome: reboundDuel.won ? "success" : "turnover",
+        outcome: attackerWon ? "success" : "turnover",
         // Contact, Ownership & Continuation (2026-08-18) -- explicit
-        // loose-ball point (originPoint, the preceding save event's own
-        // real endpoint, not a zone-center approximation), BOTH eligible
-        // players shown genuinely converging on it (not the ball
+        // loose-ball point, BOTH eligible players shown genuinely
+        // converging on it at their own physical pace (not the ball
         // teleporting to whichever one wins), and a named contact/winner --
         // "Every rebound attempt must name who took it." Neither
         // "clears the danger" (defender) nor any destination/flight is
@@ -1183,45 +2304,93 @@ function resolveReboundScramble(
         // clearance (see resolveAerialClearanceContinuation() for the real
         // clearance decision, which the winning DEFENDER never gets here --
         // a genuine gap, this is a rebound scramble, not an aerial win).
+        duration: contestDurationMs,
         playerMoves: [
-          { player: attacker, to: originPoint, action: "attack-ball" },
-          { player: defender, to: originPoint, action: "challenge" },
+          moveFor(attacker, attackerArrival, "attack-ball"),
+          moveFor(defender, defenderArrival, "challenge"),
         ],
         contact: {
-          point: originPoint,
+          point: contestPoint,
           actor: winner,
           type: "recovery",
           phase: "end",
         },
         ownerBefore: null,
         ownerAfter: winner,
-        ballFrom: originPoint,
-        ballTo: originPoint,
+        ballFrom: contestPoint,
+        ballTo: contestPoint,
+        // A real reported bug (2026-08-28): matchLabPlayback.js's own
+        // stationaryContact shortcut ("arrivals at the end of an already-
+        // authored incoming flight (block/recovery)") is meant for a
+        // contact that happens exactly as an EXISTING flight ends, sharing
+        // that flight's own already-claimed timeline slot. This scramble
+        // is the opposite: the ball has ALREADY settled (the preceding
+        // save/deflection event is fully over), and THIS event is its own
+        // genuinely separate contest -- two players physically racing the
+        // real contestDurationMs above, not an instant arrival. Without
+        // this flag, ballFrom===ballTo (a real, loose, not-yet-owned
+        // ball) plus contact.phase:"end" accidentally matched that same
+        // shortcut anyway, silently reusing the PRECEDING save event's own
+        // already-consumed interval instead of claiming this event's own
+        // -- the ball (and both contestants) appeared frozen at the save's
+        // own endpoint for the whole scramble, then snapped, exactly the
+        // teleport LOOSE.RECOVERED's own contactTiming:"sequential" fix
+        // (below in this file) already exists to prevent for a fumbled
+        // pass; this resolver's own rebound scramble was simply never
+        // given the same flag.
+        contactTiming: "sequential",
       },
     ),
   );
-  if (!reboundDuel.won) {
+  if (!attackerWon) {
     return {
       outcome: "NO GOAL",
       code: "REBOUND.LOST",
       resolved: true,
       terminal: true,
       possession: "turnover",
-      nextOwnerId: defender.id,
-      ballEnd: originPoint,
+      nextOwnerId: winner.id,
+      ballEnd: contestPoint,
       restart: null,
       reason: "rebound-lost",
     };
   }
-  const scored =
-    random() <
-    transitionShotChance(
-      attacker.player,
-      keeper.player,
-      FIXED_MINUTE,
-      0.32,
-      poacherScore,
+  // Conversion v2 -- distance-tiered, and a genuinely far-out win no
+  // longer forces a scramble shot at all (2026-08-26 fix: "rebounds never
+  // score AND never become play" -- an attacker who wins the ball outside
+  // real shooting range just OWNS it, possession continues, exactly like
+  // any other loose-ball recovery).
+  const distanceToGoal = distanceToGoalYards(contestPoint, state.attackingDirection[attacker.team]);
+  if (distanceToGoal > REBOUND_MID_RANGE_YARDS) {
+    trace.push(
+      traceEvent(
+        "REBOUND.CONTROL",
+        `${playerName(attacker.player)} controls the loose ball -- too far out for an instinctive shot`,
+        {
+          actor: attacker,
+          movement: "reception",
+          outcome: "success",
+          ballFrom: contestPoint,
+          ballTo: contestPoint,
+          contact: { point: contestPoint, actor: attacker, type: "control", phase: "end" },
+          ownerBefore: attacker,
+          ownerAfter: attacker,
+        },
+      ),
     );
+    return {
+      outcome: "CONTROLLED",
+      code: "REBOUND.CONTROL",
+      resolved: true,
+      terminal: false,
+      possession: "retained",
+      nextOwnerId: attacker.id,
+      ballEnd: contestPoint,
+      restart: null,
+      reason: "rebound-controlled",
+    };
+  }
+  const scored = random() < reboundConversionChance(distanceToGoal, attacker.player, keeper.player);
   const reboundShotMiss = scored ? null : missPointFor(attacker, keeper, null);
   const reboundShotEnd = scored
     ? netPointFor(attacker, shotPlacementSpread(attacker, keeper, REBOUND_SHOT_PRESSURE, random).x)
@@ -1237,14 +2406,14 @@ function resolveReboundScramble(
         keeper,
         movement: "shot",
         outcome: scored ? "goal" : "fail",
-        // Begins exactly at originPoint -- attacker.moveTo above already put
-        // them there; not pointOf(attacker), which (before this fix) reread
-        // their stale pre-scramble spot instead of where they actually won
-        // the ball.
-        ballFrom: originPoint,
+        // Begins exactly at contestPoint -- attacker.moveTo above already
+        // put them there; not pointOf(attacker), which (before this fix)
+        // reread their stale pre-scramble spot instead of where they
+        // actually won the ball.
+        ballFrom: contestPoint,
         ballTo: reboundShotEnd,
         contact: {
-          point: originPoint,
+          point: contestPoint,
           actor: attacker,
           type: "rebound-shot",
           phase: "start",
@@ -1280,23 +2449,6 @@ function resolveReboundScramble(
 // wiring as the geometry conversion above -- oneOnOneDecision.js only ever
 // decides WHICH action; this decides how match-lab.js's own roster
 // entries/RNG streams map onto the resolvers that execute it.
-const ONE_ON_ONE_MAX_GOAL_DISTANCE_YARDS = 24;
-const ONE_ON_ONE_MIN_GOAL_ANGLE_DEGREES = 16;
-const ONE_ON_ONE_DEFENDER_RECOVERY_YARDS = 9;
-
-function goalMouthAngleDegrees(shooterEntry) {
-  const goalY = goalLineY(shooterEntry);
-  const shooterYards = toYardPoint(shooterEntry);
-  const goalYards = goalY === 0 ? 0 : PITCH_LENGTH_YARDS;
-  const vertical = Math.max(0.01, Math.abs(shooterYards.y - goalYards));
-  const leftPost = (GOAL_LEFT_POST_X / 100) * PITCH_WIDTH_YARDS;
-  const rightPost = (GOAL_RIGHT_POST_X / 100) * PITCH_WIDTH_YARDS;
-  return Math.abs(
-    Math.atan2(rightPost - shooterYards.x, vertical)
-      - Math.atan2(leftPost - shooterYards.x, vertical),
-  ) * 180 / Math.PI;
-}
-
 // Builds the one factual view of an isolated attacker/keeper situation.
 // Eligibility is geometry, never reputation: a close, reasonably open
 // angle; the keeper genuinely between attacker and goal; and no outfield
@@ -1305,29 +2457,16 @@ function freePlayOneOnOneContext(groups) {
   const shooter = groups?.owner;
   const keeper = groups?.keeper;
   if (!shooter || !keeper || isKeeperBeaten(shooter, keeper)) return null;
-  const attackingDirection = state.attackingDirection[shooter.team];
   const goalY = goalLineY(shooter);
-  const distanceYards = distanceToGoalYards(shooter, attackingDirection);
-  const shotAngleDegrees = goalMouthAngleDegrees(shooter);
-  const keeperBetween = attackingDirection === "up"
-    ? keeper.y < shooter.y
-    : keeper.y > shooter.y;
-  const goalCenter = { x: 50, y: goalY, zone: shooter.zone };
-  const laneDefender = nearestLaneInterceptor(
-    shooter,
-    goalCenter,
-    groups.opponents,
-  );
-  const recoveryDefender = groups.opponents.find(
-    (entry) => yardDistance(shooter, entry) <= ONE_ON_ONE_DEFENDER_RECOVERY_YARDS,
-  ) || null;
-  if (
-    !keeperBetween
-    || distanceYards > ONE_ON_ONE_MAX_GOAL_DISTANCE_YARDS
-    || shotAngleDegrees < ONE_ON_ONE_MIN_GOAL_ANGLE_DEGREES
-    || laneDefender
-    || recoveryDefender
-  ) return null;
+  const closeDown = assessKeeperCloseDown({
+    keeper,
+    ball: shooter,
+    attacker: shooter,
+    defenders: groups.opponents,
+    defendingDirection: state.attackingDirection[keeper.team],
+  });
+  if (!closeDown.isolated) return null;
+  const { goalDistanceYards: distanceYards, shotAngleDegrees } = closeDown;
 
   const keeperPoint = toYardPoint(keeper);
   const shooterPoint = toYardPoint(shooter);
@@ -1346,9 +2485,7 @@ function freePlayOneOnOneContext(groups) {
       : keeperLateralYards > 1
         ? "left"
         : "balanced",
-    movementDirection: null,
-    closingSpeed: null,
-    set: null,
+    ...observeKeeperMotion(keeper, shooter, keeper.keeperVelocity),
   };
   return {
     actualKeeperState,
@@ -1361,6 +2498,143 @@ function freePlayOneOnOneContext(groups) {
   };
 }
 
+// Shot As Projectile v1, Slice B3 (2026-08-27) -- place-left/place-right/
+// blast execution migrated onto the SAME geometric mouth-point machinery
+// resolveShoot() uses above (resolveShotDescriptor()'s own header
+// comment has the full rationale). Stage 1 (chooseOneOnOneAction(),
+// oneOnOneDecision.js) is completely untouched -- the BRAIN still picks
+// the action from a perceived read; only its EXECUTION, for these three
+// actions specifically, is now geometric. chip/round-keeper/square-pass
+// deliberately stay on resolveChipAttempt()/resolveRoundKeeper()/
+// resolveSquarePass() (matchEngineCore.js) exactly as before -- see this
+// file's own executeOneOnOneAction() switch below.
+function targetSideOffsetYards(targetSide) {
+  if (targetSide === "left") return -SHOT_MOUTH_HALF_WIDTH_YARDS;
+  if (targetSide === "right") return SHOT_MOUTH_HALF_WIDTH_YARDS;
+  return 0;
+}
+
+// "far post height ~0.3-0.8yd" (place-*) / "a corner, faster" (blast) --
+// the spec's own aim intention. Placed effort aims 80% of the way to the
+// post (a real corner, not the frame's own edge); blast aims fractionally
+// tighter to the post still (92%) since it trades the same accuracy for
+// genuine extra pace (SHOT_SPEED_YARDS_PER_SECOND.blast below), not for
+// an even more extreme angle.
+function resolveOneOnOneShotDescriptor(shooterEntry, keeperEntry, targetSide, power, pressure, random) {
+  const quality = shotPlacementQuality(shooterEntry.player);
+  const intendedOffsetYards = targetSideOffsetYards(targetSide) * (power ? 0.62 : 0.5);
+  const intendedHeightYards = power
+    ? clamp(0.2, 1.1, 0.35 + (1 - quality) * 0.5)
+    : clamp(0.3, 0.8, 0.3 + quality * 0.5);
+  const accuracy = resolveShotAccuracy(shooterEntry.player, { pressureFactor: pressure, power }, random);
+  const angle = random() * Math.PI * 2;
+  const actualOffsetYards = intendedOffsetYards + Math.cos(angle) * accuracy.errorYards;
+  const actualHeightYards = Math.max(0, intendedHeightYards + Math.sin(angle) * accuracy.errorYards);
+  const onTarget = Math.abs(actualOffsetYards) <= SHOT_MOUTH_HALF_WIDTH_YARDS
+    && actualHeightYards <= GOAL_HEIGHT_YARDS;
+  const goalY = goalLineY(shooterEntry);
+  const actualPoint = {
+    zone: shooterEntry.zone,
+    x: clamp(0, 100, centerYardsToPercentX(actualOffsetYards)),
+    y: goalY,
+  };
+  const speedYardsPerSecond = power ? SHOT_SPEED_YARDS_PER_SECOND.blast : SHOT_SPEED_YARDS_PER_SECOND.calm;
+  const distanceYards = movementDistanceYards(pointOf(shooterEntry), actualPoint);
+  const durationMs = Math.max(80, (distanceYards / speedYardsPerSecond) * 1000);
+  return {
+    onTarget,
+    actualPoint,
+    actualHeightYards,
+    elevation: actualHeightYards > GOAL_HEIGHT_YARDS ? "high" : "low",
+    executionQuality: accuracy.quality,
+    flight: { from: pointOf(shooterEntry), actual: actualPoint, peakHeightYards: actualHeightYards, speedYardsPerSecond, durationMs },
+  };
+}
+
+// Same vocabulary resolveTargetedKeeperResponse()'s own TARGETED_RESPONSE_OUTCOMES
+// table (matchEngineCore.js) already established -- kept as a LOCAL,
+// PARALLEL copy for the same reason geometricKeeperSaveFlavor() keeps
+// its own K.SAVE table local: nothing here is a refactor of protected
+// production code, and this file's own presentation code (resolveFreePlayOneOnOne(),
+// oneOnOneTargetPoint()) already reads these exact keys.
+const GEOMETRIC_ONE_V_ONE_OUTCOMES = {
+  "ONE_V_ONE.BEATEN": { keeperAction: "beaten", ballResult: "goal", goal: true, rebound: false },
+  "ONE_V_ONE.CAUGHT": { keeperAction: "catch", ballResult: "held", goal: false, rebound: false },
+  "ONE_V_ONE.PARRIED": { keeperAction: "parry", ballResult: "rebound-in-play", goal: false, rebound: true },
+  "ONE_V_ONE.CLEARED": { keeperAction: "tip", ballResult: "corner", goal: false, rebound: false },
+  "ONE_V_ONE.POST_REBOUND": { keeperAction: "tip", ballResult: "post-rebound", goal: false, rebound: true },
+  "ONE_V_ONE.POST_GOAL": { keeperAction: "tip", ballResult: "post-goal", goal: true, rebound: false },
+};
+
+// PARALLEL to resolveTargetedKeeperResponse()'s own post-beaten-gate
+// options table (matchEngineCore.js) -- same Handling/Reflexes/
+// Positioning-driven weights, same `difficulty` shape, just fed a REAL
+// keeperTravelYards (the keeper's own actual starting distance from the
+// actual mouth point) instead of the old actualKeeperState.lateralOffsetYards
+// abstraction, and with no beatenCleanChance gate -- geometric
+// reachability (simulateShotKeeperEnvelope()) already decided that.
+function geometricOneOnOneSaveFlavor(keeperEntry, actualPoint, power, random) {
+  const keeperTravelYards = movementDistanceYards(keeperEntry, actualPoint);
+  const reflexScore = (
+    playerAttribute(keeperEntry.player, "Reflexes")
+    + playerAttribute(keeperEntry.player, "Positioning")
+    + playerAttribute(keeperEntry.player, "One On Ones")
+  ) / 3 / 20;
+  const speedFactor = power ? 1.25 : 1;
+  const difficulty = clamp(0.05, 0.85, (keeperTravelYards / 8) * speedFactor * (1 - reflexScore * 0.5));
+  const handling = playerAttribute(keeperEntry.player, "Handling");
+  const options = [
+    { value: "ONE_V_ONE.CAUGHT", weight: Math.max(1, handling * 2 * (1 - difficulty)) },
+    { value: "ONE_V_ONE.PARRIED", weight: Math.max(1, 20 - handling) * (0.6 + difficulty) },
+    { value: "ONE_V_ONE.CLEARED", weight: Math.max(0.5, difficulty * 6) },
+    { value: "ONE_V_ONE.POST_REBOUND", weight: Math.max(0.3, difficulty * 2.5) },
+    { value: "ONE_V_ONE.POST_GOAL", weight: Math.max(0.15, difficulty * 1.2) },
+  ];
+  const code = weightedChoice(options, random);
+  return { code, ...GEOMETRIC_ONE_V_ONE_OUTCOMES[code], keeperTravelYards };
+}
+
+// The full place-*/blast execution -- mirrors resolvePlacedFinish() +
+// resolveTargetedKeeperResponse()'s own combined return shape exactly
+// (code/goal/rebound/keeperAction/ballResult/keeperTravelYards/shot) so
+// resolveFreePlayOneOnOne() downstream needs no changes beyond
+// oneOnOneTargetPoint()'s own small addition (see its updated comment).
+function executeGeometricOneOnOneShot({
+  shooter, keeper, targetSide, power, defenderPressure, executionRandom, keeperResponseRandom,
+}) {
+  const descriptor = resolveOneOnOneShotDescriptor(shooter, keeper, targetSide, power, defenderPressure, executionRandom);
+  const shot = {
+    onTarget: descriptor.onTarget,
+    intendedTarget: targetSide,
+    actualTarget: descriptor.onTarget ? targetSide : (descriptor.elevation === "high" ? "over" : "wide"),
+    actualPoint: descriptor.onTarget ? descriptor.actualPoint : null,
+    targetHeight: descriptor.actualHeightYards > 1.3 ? "high" : "low",
+    elevation: descriptor.elevation,
+    executionQuality: descriptor.executionQuality,
+    shooterAbility: Number(shooter.player?.current_ability) || 100,
+    speed: power ? "power" : "placed",
+    flight: descriptor.flight,
+  };
+  if (!descriptor.onTarget) {
+    return {
+      code: "ONE_V_ONE.OFF_TARGET", goal: false, rebound: false,
+      keeperAction: null, ballResult: descriptor.elevation === "high" ? "over" : "wide",
+      keeperTravelYards: 0, shot,
+    };
+  }
+  const keeperEnvelope = simulateShotKeeperEnvelope(descriptor.flight, keeper);
+  shot.keeperEnvelope = keeperEnvelope;
+  if (!keeperEnvelope.reached) {
+    return {
+      code: "ONE_V_ONE.BEATEN",
+      ...GEOMETRIC_ONE_V_ONE_OUTCOMES["ONE_V_ONE.BEATEN"],
+      keeperTravelYards: movementDistanceYards(keeper, descriptor.actualPoint),
+      shot,
+    };
+  }
+  return { ...geometricOneOnOneSaveFlavor(keeper, descriptor.actualPoint, power, keeperResponseRandom), shot };
+}
+
 function executeOneOnOneAction(
   action,
   {
@@ -1371,7 +2645,6 @@ function executeOneOnOneAction(
     actualKeeperState,
     perceivedKeeperState,
     defenderPressure,
-    chanceContext = null,
     executionRandom,
     keeperResponseRandom,
   },
@@ -1380,23 +2653,10 @@ function executeOneOnOneAction(
     case "place-left":
     case "place-right": {
       const targetSide = action === "place-left" ? "left" : "right";
-      const shot = resolvePlacedFinish({
-        shooter: shooter.player,
-        targetSide,
-        power: false,
-        pressure: defenderPressure,
-        random: executionRandom,
+      return executeGeometricOneOnOneShot({
+        shooter, keeper, targetSide, power: false,
+        defenderPressure, executionRandom, keeperResponseRandom,
       });
-      return {
-        ...resolveTargetedKeeperResponse({
-          shot,
-          keeper: keeper.player,
-          actualKeeperState,
-          chanceContext,
-          random: keeperResponseRandom,
-        }),
-        shot,
-      };
     }
     case "blast": {
       // Explicit target, not implicitly central -- carries Stage 1's own
@@ -1407,23 +2667,10 @@ function executeOneOnOneAction(
         perceivedKeeperState.exposedSide === "balanced"
           ? "center"
           : perceivedKeeperState.exposedSide;
-      const shot = resolvePlacedFinish({
-        shooter: shooter.player,
-        targetSide,
-        power: true,
-        pressure: defenderPressure,
-        random: executionRandom,
+      return executeGeometricOneOnOneShot({
+        shooter, keeper, targetSide, power: true,
+        defenderPressure, executionRandom, keeperResponseRandom,
       });
-      return {
-        ...resolveTargetedKeeperResponse({
-          shot,
-          keeper: keeper.player,
-          actualKeeperState,
-          chanceContext,
-          random: keeperResponseRandom,
-        }),
-        shot,
-      };
     }
     case "chip":
       return resolveChipAttempt({
@@ -1470,27 +2717,20 @@ function executeOneOnOneAction(
       // is rushing or unset. It simply gives up a little placement time and
       // strikes toward the side the attacker currently perceives as open.
       // The real keeper response still reads ground-truth geometry.
+      // Same geometric execution as place-*/blast (mechanically this IS a
+      // placed, non-power shot, just under elevated pressure) -- migrated
+      // alongside them rather than left as an odd third dice-driven
+      // variant of the exact same action shape.
       const targetSide = perceivedKeeperState.exposedSide === "balanced"
         ? "center"
         : perceivedKeeperState.exposedSide;
-      const shot = resolvePlacedFinish({
-        shooter: shooter.player,
-        targetSide,
-        power: false,
-        pressure: clamp(0, 1, defenderPressure * 0.75 + 0.08),
-        random: executionRandom,
+      const result = executeGeometricOneOnOneShot({
+        shooter, keeper, targetSide, power: false,
+        defenderPressure: clamp(0, 1, defenderPressure * 0.75 + 0.08),
+        executionRandom, keeperResponseRandom,
       });
-      shot.speed = "early";
-      return {
-        ...resolveTargetedKeeperResponse({
-          shot,
-          keeper: keeper.player,
-          actualKeeperState,
-          chanceContext,
-          random: keeperResponseRandom,
-        }),
-        shot,
-      };
+      result.shot.speed = "early";
+      return result;
     }
     default:
       return {
@@ -1947,7 +3187,7 @@ const SCENARIOS = [
           saveEndpoint,
           "scenario-shot",
         );
-      if (!save.rebound)
+      if (save.reboundTransition || !save.rebound)
         return keeperSaveTransition(
           save,
           keeper,
@@ -1955,15 +3195,7 @@ const SCENARIOS = [
           "scenario-shot",
         );
       if (!defender) {
-        const scored =
-          random() <
-          transitionShotChance(
-            shooter.player,
-            keeper.player,
-            FIXED_MINUTE,
-            0.32,
-            poacherScore,
-          );
+        const scored = random() < reboundShotChance(shooter.player, keeper.player);
         const reboundMiss = scored
           ? null
           : missPointFor(shooter, keeper, null, null);
@@ -1986,8 +3218,7 @@ const SCENARIOS = [
                 ? goalPointFor(shooter, keeper)
                 : reboundMiss.point,
               badge: scored ? null : reboundMiss.badge,
-              mover: shooter,
-              moveTo: saveEndpoint,
+              ...realMoverTrajectory(shooter, saveEndpoint, { floorMs: MOVEMENT_DURATIONS["rebound-shot"] }),
               contact: {
                 point: saveEndpoint,
                 actor: shooter,
@@ -2149,7 +3380,7 @@ const SCENARIOS = [
       });
       if (save.goal)
         return keeperSaveTransition(save, keeper, saveEndpoint, "free-kick");
-      if (!save.rebound)
+      if (save.reboundTransition || !save.rebound)
         return keeperSaveTransition(save, keeper, saveEndpoint, "free-kick");
       // The real tick loop doesn't stop at a spilled save -- it picks a
       // poacher from the whole attacking pool for the loose-ball scramble
@@ -2161,15 +3392,7 @@ const SCENARIOS = [
       // fabricated" rule used everywhere else in this file.
       const reboundDefenderEntry = wallEntries[0] || null;
       if (!reboundDefenderEntry) {
-        const scored =
-          random() <
-          transitionShotChance(
-            taker.player,
-            keeper.player,
-            FIXED_MINUTE,
-            0.32,
-            poacherScore,
-          );
+        const scored = random() < reboundShotChance(taker.player, keeper.player);
         const reboundMiss = scored
           ? null
           : missPointFor(taker, keeper, null, null);
@@ -2192,8 +3415,7 @@ const SCENARIOS = [
                 ? netPointFor(taker, shotPlacementSpread(taker, keeper, REBOUND_SHOT_PRESSURE, random).x)
                 : reboundMiss.point,
               badge: scored ? null : reboundMiss.badge,
-              mover: taker,
-              moveTo: saveEndpoint,
+              ...realMoverTrajectory(taker, saveEndpoint, { floorMs: MOVEMENT_DURATIONS["rebound-shot"] }),
               contact: {
                 point: saveEndpoint,
                 actor: taker,
@@ -2347,11 +3569,6 @@ const SCENARIOS = [
         actualKeeperState,
         perceivedKeeperState,
         defenderPressure,
-        chanceContext: {
-          distanceYards: shooterDistanceToGoalYards,
-          shotAngleDegrees,
-          defenderPressure,
-        },
         executionRandom,
         keeperResponseRandom,
       });
@@ -2424,6 +3641,14 @@ const FREE_PLAY_ACTION_LABELS = {
 // across zones over several steps, which is exactly what the possession
 // runner below does.
 const DRIBBLE_PROGRESS_YARDS = 8;
+// Gameplay v3.2 -- a KNOCK_FORWARD reception's own next zone
+// (matchEngineCore.js's ZONE_TRANSITION_MATRIX, production, untouched)
+// can legitimately be a "bypass" a whole row away -- realistic as a
+// ZONE fact, but zoneCenterPoint(nextZone) is a real-yards point, and a
+// player's own first touch after controlling the ball is a knock a few
+// yards ahead, never a sprint across most of the pitch. Caps the ACTUAL
+// advance distance; the direction (toward that same next zone) is kept.
+const KNOCK_FORWARD_MAX_YARDS = 8;
 // Carry's own destination is decided entirely by Directional Carry
 // Planning (spatialDecision.js's planCarryDestination(), with its own
 // CARRY_FORWARD_YARDS/CARRY_SHORT_YARDS constants) -- resolveCarry() no
@@ -2439,6 +3664,60 @@ function advanceTowardGoal(fromPoint, team, yards) {
     fromPoint.y + direction * (yards / PITCH_LENGTH_YARDS) * 100,
   );
   return { x: fromPoint.x, y, zone: zoneFromPercent(fromPoint.x, y) };
+}
+
+// Engagement Breaker v1 (2026-08-28) -- a real reported bug: every duel/
+// shield/tackle contest left BOTH players standing at the exact same
+// coordinate (ballFrom===ballTo===contactPoint, no movement authored for
+// either side). Since "hold" is always a legal next candidate and the new
+// owner's own engager then sits at 0 yards -- structurally inside
+// DUEL_RANGE_YARDS -- the possession loop could cycle shield/duel/hold
+// indefinitely without the ball ever actually going anywhere: wrestling,
+// not football. A real contest ends with the winner stepping away WITH
+// the ball along a genuine escape line, and the loser left behind with a
+// real gap, not glued to the winner's own shoulder.
+//
+// Reuses carrySteeringWaypoint()'s own "opponent sits exactly on top of
+// me" fallback (spatialDecision.js) for the winner's own direction, not a
+// new formula: passing the loser's OWN position as the sole "opponent"
+// and the escape distance itself as the clearance radius means `from` is
+// always inside that circle (the contest just happened AT that shared
+// point), which resolves to the SAME deterministic perpendicular-to-
+// heading step a dribble touch already uses to route around a body. The
+// loser is bumped the OPPOSITE way along that SAME axis -- guaranteed
+// genuine separation on both sides, never two independently-computed
+// directions that could coincidentally agree. The nominal heading is
+// unclamped (a pure direction reference, never an actual destination) so
+// a contact right at the edge of the pitch still gets a real forward-
+// biased escape instead of a degenerate zero-length one from clamping to
+// the boundary.
+const ENGAGEMENT_WINNER_ESCAPE_YARDS = 5;
+const ENGAGEMENT_LOSER_BUMP_YARDS = 2.5;
+function contestSeparationPoints(
+  contactPoint, winnerTeam,
+  escapeYards = ENGAGEMENT_WINNER_ESCAPE_YARDS, bumpYards = ENGAGEMENT_LOSER_BUMP_YARDS,
+) {
+  const direction = state.attackingDirection[winnerTeam] === "up" ? -1 : 1;
+  const contactYards = toYardPoint(contactPoint);
+  const nominalTarget = fromYardPoint({ x: contactYards.x, y: contactYards.y + direction * 20 });
+  const rawWinnerPoint = carrySteeringWaypoint(contactPoint, nominalTarget, [contactPoint], escapeYards)
+    ?? advanceTowardGoal(contactPoint, winnerTeam, escapeYards);
+  const winnerPoint = { ...rawWinnerPoint, zone: zoneFromPercent(rawWinnerPoint.x, rawWinnerPoint.y) };
+  const winnerYards = toYardPoint(winnerPoint);
+  const dirX = winnerYards.x - contactYards.x;
+  const dirY = winnerYards.y - contactYards.y;
+  const dirLength = Math.hypot(dirX, dirY) || 1;
+  // reflectIntoRange(), not clamp() -- a carrier already right at the
+  // touchline/goal-line whose bump direction points further off-pitch
+  // would otherwise clamp straight back to the shared contact point
+  // (zero real displacement), the exact "degenerate repeat" bug
+  // carrySteeringWaypoint()'s own header now documents.
+  const rawLoserPoint = fromYardPoint({
+    x: reflectIntoRange(contactYards.x - (dirX / dirLength) * bumpYards, 0, PITCH_WIDTH_YARDS),
+    y: reflectIntoRange(contactYards.y - (dirY / dirLength) * bumpYards, 0, PITCH_LENGTH_YARDS),
+  });
+  const loserPoint = { ...rawLoserPoint, zone: zoneFromPercent(rawLoserPoint.x, rawLoserPoint.y) };
+  return { winnerPoint, loserPoint };
 }
 
 // ownerId defaults to Free Play's own ball-ownership field (the FIRST
@@ -2700,7 +3979,733 @@ function passFlightDurationMsForType(distanceYards, passType) {
     PASS_FLIGHT_BASE_MS + (Math.max(0, distanceYards) / speedYardsPerSecond) * 1000,
   );
 }
-function resolvePass(
+
+// Joint Passer/Runner Candidate Generation v1 (Stage 3, 2026-09-05) -- the
+// pass-flight and lane primitives passRunCandidates.js needs, bound once
+// here. That module is a leaf and imports neither matchPassFlight.js nor
+// spatialDecision.js (they already import from each other), so this is the
+// single place the real engine functions are handed to it. Every one of
+// these is the SAME function the resolvers themselves call -- there is no
+// parallel model for candidate generation to disagree with.
+const JOINT_CANDIDATE_DEPS = {
+  selectPassType,
+  flightDurationMs: passFlightDurationMsForType,
+  laneObstruction,
+  nearestLaneInterceptor,
+  reactionDelayMs: reactionDelayMsFor,
+};
+
+// Lead Into Space v1 (2026-08-26, Passing v3) -- a lofted/driven-aerial ball,
+// or a genuinely direct long ball, is real football struck AHEAD of the
+// runner, not aimed at their feet; resolvePass()'s own intendedPoint used to
+// be pointOf(receiver) unconditionally regardless of pass type. Only the
+// pass TYPE (and, separately, a deliberately direct attacking style over
+// real range) earns a lead -- an ordinary short ground pass or a keeper's
+// throw still finds feet, exactly as before.
+const LEAD_PASS_TYPES = new Set(["lofted", "driven-aerial"]);
+const LEAD_STYLES = new Set(["long-ball", "direct"]);
+const LEAD_STYLE_MIN_DIRECTNESS = 4;
+const LEAD_STYLE_MIN_DISTANCE_YARDS = 25;
+const LEAD_MIN_YARDS = 4;
+const LEAD_MAX_YARDS = 14;
+
+function shouldLeadIntendedPoint(passType, distanceYards, attackingSettings) {
+  if (LEAD_PASS_TYPES.has(passType)) return true;
+  return (
+    LEAD_STYLES.has(attackingSettings.style)
+    && attackingSettings.directness >= LEAD_STYLE_MIN_DIRECTNESS
+    && distanceYards >= LEAD_STYLE_MIN_DISTANCE_YARDS
+  );
+}
+
+// Receiver Pace (how fast they can actually run onto it) plus the passer's
+// own Vision (how far ahead of the play they see) -- clamped to a sane
+// real-football range, and never pushed past the second-last defender's own
+// offside line (onsideLineTargetY(), the SAME buffer planAttackerRepositioning()
+// already uses for a run-in-behind target) -- leading a player is meant to
+// beat the defense to space, never to hand them a free offside call.
+function leadIntendedPoint(receiver, passer, offside) {
+  const receiverPoint = pointOf(receiver);
+  const leadYards = clamp(
+    LEAD_MIN_YARDS,
+    LEAD_MAX_YARDS,
+    playerAttribute(receiver.player, "Pace") * 0.4 + playerAttribute(passer.player, "Vision") * 0.25,
+  );
+  const leadPercent = (leadYards / PITCH_LENGTH_YARDS) * 100;
+  const onsideCapY = onsideLineTargetY(offside);
+  const forwardY = offside.attackingDirection === "up"
+    ? receiverPoint.y - leadPercent
+    : receiverPoint.y + leadPercent;
+  const y = clamp(
+    0,
+    100,
+    offside.attackingDirection === "up"
+      ? Math.max(forwardY, onsideCapY)
+      : Math.min(forwardY, onsideCapY),
+  );
+  return { x: receiverPoint.x, y, zone: zoneFromPercent(receiverPoint.x, y) };
+}
+
+// Bounce On Failed Control v1 (2026-08-26, Passing v3) -- a real reported
+// bug: P.RECEIVE.HEAVY (unrecovered) and P.RECEIVE.LOSE handed the ball
+// straight to pointOf(pressingOpponent) in the SAME instant, no matter how
+// far away that defender actually was -- a bad touch simply teleported
+// possession across the pitch. A heavy touch spills a real, short distance
+// (never a fixed point), and who actually pounces on it is a genuine race,
+// not a foregone conclusion just because someone was pressuring the
+// receiver a moment ago.
+const RECEPTION_BOUNCE_MIN_YARDS = 4;
+const RECEPTION_BOUNCE_MAX_YARDS = 12;
+// A real bounce carries on roughly the way the ball was already travelling,
+// scattered within +/-60 degrees of that line -- not a perfectly straight
+// continuation (a real mis-touch doesn't re-aim itself), and not fully
+// random either (it doesn't spill backward off a ball arriving forward).
+const RECEPTION_BOUNCE_JITTER_RAD = Math.PI / 3;
+// The specific resolveReceive() outcomes Section D actually names -- an
+// ordinary KNOCK_FORWARD-lost contested race keeps its own existing,
+// unmodified shape (a real footrace decided it outright at contactPoint,
+// not a loose spill).
+const RECEPTION_BOUNCE_CODES = new Set(["P.RECEIVE.HEAVY", "P.RECEIVE.LOSE"]);
+
+// Ball Out of Bounds v1 (2026-09-01): deliberately UNclamped, same reasoning
+// as deliveryLandingPoint()'s own header -- a heavy touch spilling toward
+// the touchline/byline must be free to actually go out so callers can
+// detect the real exit via classifyPitchExit() instead of the bounce
+// silently stopping dead at the edge.
+function looseBallBouncePoint(fromPoint, originPoint, random) {
+  const distanceYards = RECEPTION_BOUNCE_MIN_YARDS
+    + random() * (RECEPTION_BOUNCE_MAX_YARDS - RECEPTION_BOUNCE_MIN_YARDS);
+  const fromYard = toYardPoint(fromPoint);
+  const originYard = toYardPoint(originPoint);
+  const dx = fromYard.x - originYard.x;
+  const dy = fromYard.y - originYard.y;
+  const baseAngle = (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6)
+    ? random() * Math.PI * 2
+    : Math.atan2(dy, dx);
+  const angle = baseAngle + (random() - 0.5) * 2 * RECEPTION_BOUNCE_JITTER_RAD;
+  const rawYard = {
+    x: fromYard.x + Math.cos(angle) * distanceYards,
+    y: fromYard.y + Math.sin(angle) * distanceYards,
+  };
+  const xy = fromYardPoint(rawYard);
+  return { x: xy.x, y: xy.y, zone: zoneFromPercent(xy.x, xy.y) };
+}
+
+// Who -- if anyone -- can genuinely get to a loose ball bouncing from
+// fromPoint to bouncePoint, via the SAME buildPassFlight()/
+// earliestReachableContact() machinery the main pass race uses (a ground
+// bounce is, physically, just an unaimed short ground pass nobody called).
+// Computed BEFORE any trace event is authored so the "it spills loose"
+// event's own ballTo can be the REAL point the ball gets to before anyone
+// touches it (raceContact.atPoint, which can be well short of the full
+// bouncePoint) rather than always claiming the full leg -- otherwise the
+// very next event's ballFrom would start somewhere the previous event
+// never claimed the ball reached, a genuine continuity break.
+function looseBallRaceContact(receiver, fromPoint, bouncePoint, bounceDurationMs, groups) {
+  const bounceFlight = buildPassFlight({
+    owner: receiver,
+    receiver: null,
+    from: fromPoint,
+    intendedPoint: bouncePoint,
+    actualEndpoint: bouncePoint,
+    passType: "ground",
+    durationMs: bounceDurationMs,
+  });
+  return earliestReachableContact({
+    flight: bounceFlight,
+    candidates: [receiver, ...groups.opponents],
+  });
+}
+
+// Turns an already-computed looseBallRaceContact() result into the
+// recovery trace event + resolver return -- shared by both
+// resolveLooseBallBounce() (the ordinary HEAVY/LOSE case, which also
+// narrates the spill itself) and the chest-duel-lost case (whose own duel
+// event already narrates how it came loose, so it calls straight in here).
+function resolveLooseBallRaceOutcome(receiver, pressingOpponent, bouncePoint, bounceDurationMs, raceContact, trace) {
+  if (!raceContact) {
+    return {
+      outcome: "LOOSE",
+      code: "P.RECEIVE.BOUNCE.LOOSE",
+      resolved: true,
+      terminal: true,
+      possession: "loose",
+      nextOwnerId: null,
+      ballEnd: bouncePoint,
+      restart: null,
+      reason: "pass-reception-loose",
+    };
+  }
+  const winner = raceContact.candidate;
+  const recoveredByReceiver = winner.id === receiver.id;
+  const recovery = advanceMotion({from:pointOf(winner),intentionTarget:raceContact.atPoint,
+    player:winner.player,elapsedMs:raceContact.atMs,reactionDelayMs:raceContact.reactionDelayMs ?? 0,
+    intention:"recover",paceToArrival:false});
+  trace.push(traceEvent("BALL.RECOVERY.RUN", `${playerName(winner.player)} reaches for the loose ball`, {
+    actor:winner,movement:"reposition",duration:raceContact.atMs,overlapWithPrevious:true,
+    playerMoves:[{player:winner,from:pointOf(winner),to:recovery.position,trajectory:recovery.trajectory,
+      action:"recover-loose-ball",reactionDelayMs:raceContact.reactionDelayMs ?? 0}],
+  }));
+  trace.push(
+    traceEvent(
+      recoveredByReceiver ? "P.RECEIVE.BOUNCE.WON" : "P.RECEIVE.BOUNCE.LOST",
+      recoveredByReceiver
+        ? `${playerName(receiver.player)} recovers their own loose touch`
+        : `${playerName(winner.player)} pounces on the loose ball`,
+      {
+        actor: recoveredByReceiver ? receiver : winner,
+        defender: recoveredByReceiver ? pressingOpponent : winner,
+        movement: "reception",
+        outcome: recoveredByReceiver ? "success" : "turnover",
+        ballFrom: raceContact.atPoint,
+        ballTo: recovery.position,
+        contact: { point: raceContact.atPoint, bodyPoint:recovery.position,
+          reachAllowanceYards:raceContact.reachAllowanceYards ?? 1.5,
+          actor: winner, type: "recovery", phase: "start" },
+        ownerBefore: null,
+        ownerAfter: winner,
+        duration: 120,
+      },
+    ),
+  );
+  return {
+    outcome: recoveredByReceiver ? "RECOVERED" : "TURNOVER",
+    code: recoveredByReceiver ? "P.RECEIVE.BOUNCE.WON" : "P.RECEIVE.BOUNCE.LOST",
+    resolved: true,
+    terminal: !recoveredByReceiver,
+    possession: recoveredByReceiver ? "retained" : "turnover",
+    nextOwnerId: winner.id,
+    ballEnd: recovery.position,
+    restart: null,
+    reason: recoveredByReceiver ? "pass-reception-recovered" : "pass-reception-lost",
+  };
+}
+
+// The bad touch itself (real duration, ownerAfter: null -- the ball is
+// genuinely nobody's for this leg, not silently reassigned yet), then
+// resolveLooseBallRaceOutcome() above for who actually gets there.
+function resolveLooseBallBounce(receiver, pressingOpponent, fromPoint, originPoint, groups, code, status, random, trace, motionContext = null, interleaveOffBall = false) {
+  const bouncePoint = looseBallBouncePoint(fromPoint, originPoint, random);
+  // Ball Out of Bounds v1 (2026-09-01) -- a heavy touch that spills the
+  // ball off the pitch was never a genuine recovery race to begin with;
+  // checked before anyone is raced toward what would be an off-pitch
+  // target.
+  const bouncePitchExit = classifyPitchExit({
+    from: fromPoint, to: bouncePoint, lastTouchTeam: receiver.team, attackingDirectionByTeam: state.attackingDirection,
+  });
+  if (bouncePitchExit) {
+    return {
+      ...pushPitchExitRestart(trace, {
+        actor: receiver, ballFrom: fromPoint, exit: bouncePitchExit, movement: "reception",
+        contact: { point: fromPoint, actor: receiver, type: "control", phase: "start" },
+      }),
+      offBallInterleaved: false,
+    };
+  }
+  const bounceDurationMs = looseBallFlightMs(yardDistance(fromPoint, bouncePoint));
+  const raceContact = looseBallRaceContact(receiver, fromPoint, bouncePoint, bounceDurationMs, groups);
+  trace.push(
+    traceEvent(
+      code,
+      `${playerName(receiver.player)}: ${status} -- it spills loose`,
+      {
+        actor: receiver,
+        defender: pressingOpponent,
+        movement: "reception",
+        outcome: "turnover",
+        playerMoves: [],
+        ballFrom: fromPoint,
+        ballTo: raceContact ? raceContact.atPoint : bouncePoint,
+        // phase:"start", not "end" -- this contact (the bad touch itself)
+        // happens at the FRONT of this event's own window; the ball then
+        // travels away from it, to ballTo, over the rest of the duration.
+        // "end" is for a STATIONARY arrival (ballFrom===ballTo, e.g. the
+        // recovery event right above this function) -- using it here,
+        // where the ball genuinely moves, told the playback validator to
+        // expect the ball already AT fromPoint by this event's own END,
+        // which is exactly where it is NOT (a real, caught contact-
+        // continuity violation once a possession happened to route
+        // through this path with an overlapping off-ball reaction ahead
+        // of it).
+        contact: { point: fromPoint, actor: receiver, type: "control", phase: "start" },
+        ownerBefore: null,
+        ownerAfter: null,
+        duration: raceContact ? raceContact.atMs : bounceDurationMs,
+      },
+    ),
+  );
+  // Gameplay v3.1 -- the flight leading up to this bad touch is already
+  // covered by resolvePass()'s own shared reactOffBallContinuous() call
+  // (the RECEPTION_BOUNCE_CODES branch just knows it, via
+  // offBallInterleaved on the wrapped return below); this is the
+  // NARROWER gap -- the spill/recovery race itself, which used to leave
+  // everyone but the eventual recoverer frozen for its own duration too.
+  // Excludes only raceContact's own winner: they already get a real,
+  // specific contact-pinned run from resolveLooseBallRaceOutcome() above
+  // (or nobody, if raceContact is null and the ball just dies loose).
+  const bounceOffBallInterleaved = interleaveFlightOffBall(
+    interleaveOffBall, groups, fromPoint, raceContact ? raceContact.atPoint : bouncePoint,
+    raceContact ? raceContact.atMs : bounceDurationMs, trace, motionContext,
+    [raceContact?.candidate?.id].filter(Boolean),
+  );
+  return {
+    ...resolveLooseBallRaceOutcome(receiver, pressingOpponent, bouncePoint, bounceDurationMs, raceContact, trace),
+    offBallInterleaved: bounceOffBallInterleaved,
+  };
+}
+
+// Gameplay v3.1 (2026-08-29) -- thin, deliberate wrapper so every
+// airborne/loose EARLY RETURN in this file calls off-ball interleaving
+// through the EXACT same shape, instead of some branches remembering to
+// and others silently not. Reported bug: resolvePass() only ever reached
+// reactOffBallContinuous() on its own CLEAN fall-through (contact owned,
+// falling through to the shared tail) -- every EARLY return before that
+// point (nobody reachable, an aerial/chest contest lost, a clean
+// interception, a beaten interceptor whose receiver still can't get
+// there) left the other 20+ players frozen for the whole flight/bounce/
+// chase window, then hit runConstructedPossession()'s own
+// POST_ACTION_CONVERGENCE_MS (200ms) reshape afterward -- a statue, then
+// a twitch. Not a new mechanism -- reactOffBallContinuous()'s own
+// overlapWithPrevious/chaseIntention defaults (true/true) already match
+// a live-ball window; this exists so every call site in this file looks
+// like every other one, not so the underlying behavior differs.
+// Returns whether it actually interleaved, so callers can thread that
+// straight into their own `offBallInterleaved` return field (which is
+// what tells runConstructedPossession() to skip its own 200ms reshape).
+function interleaveFlightOffBall(interleaveOffBall, groups, ballFrom, ballTo, durationMs, trace, motionContext, excludedIds = []) {
+  if (!interleaveOffBall) return false;
+  reactOffBallContinuous(groups, ballFrom, ballTo, durationMs, trace, {
+    motionContext,
+    excludedIds,
+    overlapWithPrevious: true,
+    chaseIntention: true,
+  });
+  return true;
+}
+
+// The intended receiver's own best-effort chase toward a delivery they
+// cannot actually reach in time -- contactArrivalTiming() (unchanged
+// Match-Lab infrastructure) shows honestly how far they got, never a
+// teleport to a reception nobody could physically make. Shared by three
+// call sites: resolvePass() (nobody at all being reachable along the
+// whole flight, and (2026-08-26, Off-Ball Motion v3 fix -- a real
+// reported discontinuity: a beaten lane interceptor let the ball through
+// to actualEndpoint unconditionally, without ever checking whether the
+// INTENDED receiver -- selected before the flight was even built -- could
+// physically get there, a genuine gap Lead Into Space's own longer leads
+// made far more likely to actually bite) a lane interceptor being beaten
+// but the intended receiver still failing their own arrival race to the
+// real, error-affected actualEndpoint) and resolveThroughBall()'s own
+// analogous nobody-reachable case. Caller pushes its own "P.PASS"/
+// "P.THROUGH" event first (each call site narrates that differently);
+// this authors the chase + loose outcome that follows it, PLUS (Gameplay
+// v3.1) the rest of the pitch's own off-ball reaction spanning that same
+// real flight window -- Costa chasing a loose ball must not pause
+// everyone else.
+// Loose Ball Momentum v1 (2026-08-31) -- a real reported bug: "the ball
+// just stops in the free area... it has momentum, it rolls until its
+// momentum dies." ballPositionAtElapsed() (matchPassFlight.js) is
+// deliberately a pure position function with no stored velocity ("there
+// is nothing to desynchronize") -- exactly correct for the FLIGHT itself,
+// but it means nothing downstream ever learns how fast the ball was
+// actually moving the instant it touched down with nobody there. A real
+// flight's own average velocity (displacement / duration) is a fair,
+// honest stand-in for "how fast at touchdown" -- footballs don't
+// meaningfully decelerate in the air over a normal pass distance, so a
+// constant-velocity model for the FLIGHT portion is physically fine; only
+// once it's rolling on the ground does GROUND_FRICTION_YPS2
+// (ballRollPhysics.js) apply. Percent-of-pitch-per-ms, the SAME velocity
+// unit convention every other trajectory sample in this project already
+// uses.
+function flightLandingVelocity(flightFrom, landingPoint, durationMs) {
+  if (!flightFrom || !landingPoint || durationMs <= 0) return { x: 0, y: 0 };
+  return {
+    x: (landingPoint.x - flightFrom.x) / durationMs,
+    y: (landingPoint.y - flightFrom.y) / durationMs,
+  };
+}
+
+// Ball Out of Bounds v1 (2026-09-01) -- a real, explicit correction: "the
+// boundaries are concrete... the ball should be able to go out of
+// bounds." One shared authoring point for every site that used to just
+// clamp the ball back onto the pitch: builds the trace event (a real
+// RESTART.* code, the ball's own ballFrom carrying real momentum to
+// exit.ballEnd -- never a teleport to a fixed flag/box spot) AND the
+// dead-ball resolver result every call site would otherwise duplicate.
+// runConstructedPossession() consumes that result afterward and executes
+// the awarded restart; this helper remains responsible only for the exit.
+// playerMoves/ballTrajectory are OPTIONAL and caller-supplied: a carry
+// genuinely runs the ball out (the carrier's own real touch/chase
+// trajectory), while a pass/cross/clearance/loose-ball roll doesn't move
+// the kicker at all -- each call site passes whatever it already
+// legitimately has, this never invents movement of its own. No off-ball
+// reaction is authored here at all: every OTHER player keeps whatever
+// position they last had, exactly as instructed -- nobody teleports into
+// a restart shape.
+const PITCH_EXIT_CODES = {
+  "throw-in": "RESTART.THROW_IN",
+  corner: "RESTART.CORNER",
+  "goal-kick": "RESTART.GOAL_KICK",
+};
+const PITCH_EXIT_LABELS = {
+  "throw-in": (name) => `${name} puts it out for a throw-in`,
+  corner: (name) => `${name} puts it behind for a corner`,
+  "goal-kick": (name) => `${name} puts it out for a goal kick`,
+};
+function pushPitchExitRestart(trace, {
+  actor, ballFrom, exit, movement, outcome = "turnover",
+  playerMoves = [], ballTrajectory = null, contact = null,
+  duration = undefined,
+  overlapWithPrevious = undefined, overlapStartOffsetMs = undefined,
+  // Dynamic Ball Claim v2 (2026-09-04) -- a real reported bug, and the
+  // visible half of "the passer runs after the ball until it goes out."
+  // Every OTHER caller here is a genuine touch: somebody actually played
+  // the ball and it left the pitch, so pinning them to the contact is
+  // correct. A ball that rolls out UNTOUCHED after a delivery nobody
+  // reached is not that. There, `actor` is only the last-touch
+  // ATTRIBUTION -- whose touch is blamed for the restart -- and they may
+  // be forty yards away doing something else entirely. The default
+  // contact below names them as the contact actor at the EXIT point, and
+  // matchLabPlayback.js's own after-the-fact contact re-pin then drags
+  // their track to that point ("makes sure the actor is provably at the
+  // ball at the instant contact says they are"), which is literally the
+  // passer being teleported after a ball they never chased. That call
+  // site passes false; nothing else changes.
+  pinActorToExit = true,
+} = {}) {
+  const code = PITCH_EXIT_CODES[exit.restart];
+  trace.push(
+    traceEvent(code, PITCH_EXIT_LABELS[exit.restart](playerName(actor.player)), {
+      actor,
+      movement,
+      outcome,
+      ballFrom,
+      ballTo: exit.ballEnd,
+      ...(playerMoves.length ? { playerMoves } : {}),
+      ...(ballTrajectory ? { ballTrajectory } : {}),
+      ...(contact || pinActorToExit
+        ? { contact: contact ?? { point: exit.ballEnd, actor, type: movement, phase: "end" } }
+        : {}),
+      ownerBefore: actor,
+      ownerAfter: null,
+      ...(duration !== undefined ? { duration } : {}),
+      ...(overlapWithPrevious !== undefined ? { overlapWithPrevious } : {}),
+      ...(overlapStartOffsetMs !== undefined ? { overlapStartOffsetMs } : {}),
+    }),
+  );
+  return {
+    outcome: exit.restart.toUpperCase().replace("-", "_"),
+    code,
+    resolved: true,
+    terminal: true,
+    possession: "dead",
+    nextOwnerId: null,
+    ballEnd: exit.ballEnd,
+    restart: exit.restart,
+    // Keep the law decision with the transition. The possession runner
+    // needs the awarded side and exit edge to construct the actual restart
+    // after this dead-ball event; re-deriving either from a later playback
+    // position would be ambiguous.
+    restartTakingTeam: exit.possessionTeam ?? null,
+    restartEdge: exit.edge ?? null,
+    reason: `${movement}-out-of-play`,
+  };
+}
+
+// Dynamic Ball Claim v2 -- the most recent loose-ball race, kept for the
+// read-only Match Lab diagnostics panel and for tests that need to assert
+// on WHY a player did or did not chase. Diagnostics only: nothing in the
+// engine reads this back, so it can never influence an outcome.
+// Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the joint
+// candidates behind the most recent decision, for the read-only panel.
+// Diagnostics only: nothing in the engine reads this back.
+let lastJointCandidates = [];
+function recordJointCandidates(candidates) {
+  lastJointCandidates = (candidates || [])
+    .filter((candidate) => candidate?.joint)
+    .map((candidate) => ({ type: candidate.type, ...candidate.joint }))
+    .sort((left, right) => right.utility - left.utility);
+  return lastJointCandidates;
+}
+function lastJointCandidateDiagnostics() { return lastJointCandidates; }
+
+let lastBallClaim = null;
+function recordBallClaim(claim) { lastBallClaim = claim; return claim; }
+function lastBallClaimDiagnostics() { return lastBallClaim; }
+
+function pushLooseDeliveryChase(receiver, actualEndpoint, passDuration, trace, groups = null, motionContext = null, interleaveOffBall = false, flightFrom = null) {
+  const receiverArrival = contactArrivalTiming({
+    player: receiver.player,
+    from: pointOf(receiver),
+    to: actualEndpoint,
+    flightStartMs: 0,
+    contactTimeMs: passDuration,
+  });
+  trace.push(
+    traceEvent(
+      "ATT.RECEIVER.RUN",
+      `${playerName(receiver.player)} chases the delivery`,
+      {
+        actor: receiver,
+        movement: "reposition",
+        outcome: "neutral",
+        duration: receiverArrival.availableMs,
+        overlapWithPrevious: true,
+        overlapStartOffsetMs: receiverArrival.reactionDelayMs,
+        playerMoves: [
+          {
+            player: receiver,
+            from: pointOf(receiver),
+            to: receiverArrival.reachablePoint,
+            action: "receive-pass-late",
+          },
+        ],
+      },
+    ),
+  );
+  trace.push(
+    traceEvent(
+      "P.RECEIVE.LATE",
+      `${playerName(receiver.player)} cannot reach the delivery before it runs loose`,
+      {
+        actor: receiver,
+        movement: "reception",
+        outcome: "loose",
+        duration: 0,
+        ballFrom: actualEndpoint,
+        ballTo: actualEndpoint,
+        ownerBefore: null,
+        ownerAfter: null,
+        attribution: [
+          {
+            attr: "Pace + Acceleration",
+            value: `${Math.round(playerAttribute(receiver.player, "Pace"))}/${Math.round(playerAttribute(receiver.player, "Acceleration"))}`,
+            quantity: "arrival time",
+            baseline: receiverArrival.availableMs / 1000,
+            actual: receiverArrival.naturalEtaMs / 1000,
+            unit: "s",
+          },
+        ],
+      },
+    ),
+  );
+  // Gameplay v3.1 -- the rest of the pitch keeps pursuing the jobs
+  // they already have for the WHOLE real flight window while the
+  // receiver makes their own doomed chase; excluded here since their
+  // own ATT.RECEIVER.RUN above already authors a real, specific move.
+  const offBallInterleaved = groups
+    ? interleaveFlightOffBall(interleaveOffBall, groups, pointOf(groups.owner), actualEndpoint, passDuration, trace, motionContext, [receiver.id])
+    : false;
+  return {
+    outcome: "LOOSE",
+    code: "P.RECEIVE.LATE",
+    resolved: true,
+    terminal: false,
+    possession: "loose",
+    nextOwnerId: null,
+    ballEnd: actualEndpoint,
+    restart: null,
+    reason: "pass-receiver-late",
+    offBallInterleaved,
+    // Loose Ball Momentum v1 -- see flightLandingVelocity()'s own header.
+    ballVelocity: flightLandingVelocity(flightFrom, actualEndpoint, passDuration),
+  };
+}
+
+// Kick As Projectile v1 (2026-08-27) -- see matchPassFlight.js's own
+// simulateFlightUntilContact() header comment for the full rationale.
+// Computes every candidate's ordinary tactical job ONCE per kick (jobs
+// persist; only contact goes live) via the SAME planAttackerRepositioning()/
+// planDefensiveRepositioning() calls reactOffBall()/reactOffBallContinuous()
+// already use for the visual off-ball reaction -- this is the SAME
+// question ("where would this player be heading right now") asked once
+// more so the live tick has a real answer for "what do I do if I'm not
+// chasing this ball." Shared by resolvePass() and resolveThroughBall()
+// (the spec's own "MUST use the same helper" requirement) so a through
+// ball and an ordinary pass race an identical live world.
+//
+// `flightDestination` (falls back to `ballOwnerPoint`, the kick origin,
+// when the caller has none) is deliberately a SEPARATE point from
+// `ballOwnerPoint`: reactOffBallContinuous()'s own last-man-recovery call
+// judges ballBeatsADefender()/identifyLineBreakingRunnerId() against
+// `ballTo` -- the flight's real destination -- never the kick origin,
+// for the obvious reason that a ball sitting at the passer's own foot
+// hasn't beaten anybody yet. Using the origin here silently disabled
+// last-man recovery for the whole live-tick window (a real, caught bug --
+// every defender fell through to ordinary marking, never "recover", no
+// matter how clearly a through ball was in behind them). Attacker/keeper
+// positioning below intentionally keeps using `ballOwnerPoint` --
+// unrelated to this bug and already proven correct this slice.
+function buildLiveJobTargets(groups, ballOwnerPoint, motionContext, flightDestination = ballOwnerPoint, passerId = null, flight = null) {
+  const jobs = {};
+  const owner = groups.owner;
+  const previousActionHolderId = (action) => {
+    for (const teammate of groups.teammates) {
+      if (motionContext?.state?.players?.[teammate.id]?.intention?.action === action) return teammate.id;
+    }
+    return null;
+  };
+  const attackDirection = state.attackingDirection[owner.team];
+  let markingLookup = {};
+  if (groups.opponents.length) {
+    const defendingDirection = state.attackingDirection[groups.opponents[0].team];
+    const defendingTeamMarking = markingSettingsFor(groups.opponents[0].team);
+    const runnerId = groups.teammates.length
+      ? identifyLineBreakingRunnerId(groups.teammates, groups.opponents, attackDirection, flightDestination, groups.keeper)
+      : null;
+    const defenderPlan = planDefensiveRepositioning(
+      flightDestination, groups.teammates, groups.opponents, defendingDirection,
+      {
+        previousMarking: motionContext?.marking || {},
+        ownerId: owner.id,
+        scheme: defendingTeamMarking.scheme,
+        tightness: defendingTeamMarking.tightness,
+        runnerId,
+      },
+    );
+    markingLookup = syncMarkingAssignments(defenderPlan, motionContext);
+    for (const step of defenderPlan) {
+      jobs[step.id] = {
+        point: step.intentionTarget,
+        // press-ball/recover/delay are jobs that already mean "go get this
+        // ball" (delay is still closing the gap, just not yet in real
+        // challenge range -- see planDefensiveRepositioning()'s own
+        // header); a plain man-mark/zonal job still waives the corridor
+        // check once shouldChaseBall() finds them within it on their own.
+        mayChase: step.action === "press-ball" || step.action === "recover" || step.action === "delay",
+      };
+    }
+  }
+  if (groups.teammates.length || passerId) {
+    const attackerPlan = planAttackerRepositioning(
+      passerId ? [...groups.teammates, owner] : groups.teammates, groups.opponents, attackDirection,
+      {
+        ballPoint: ballOwnerPoint,
+        keeper: groups.keeper,
+        previousSupportId: previousActionHolderId("support-short"),
+        previousDropId: previousActionHolderId("drop-deep"),
+        previousShowId: previousActionHolderId("show-to-feet"),
+        markingLookup,
+        ownerBand: classifyOutfieldBand(owner.player),
+        passerId,
+        passDestination: flightDestination,
+      },
+    );
+    for (const step of attackerPlan) {
+      if (step.held) continue;
+      jobs[step.id] = {
+        point: step.intentionTarget,
+        // A line-breaking run is already "go get this ball" -- everyone
+        // else's job (support-short, hold-width, pin-last-line, ...) is
+        // real tactical shape, not a chase order.
+        mayChase: step.action === "run-in-behind",
+      };
+    }
+  }
+  if (groups.keeper) {
+    jobs[groups.keeper.id] = {
+      point: keeperPositioningPoint(ballOwnerPoint, state.attackingDirection[groups.keeper.team]),
+      mayChase: false,
+    };
+    if (flight) {
+      const keeper = groups.keeper;
+      const attackers = groups.teammates.slice().sort((a, b) => yardDistance(a, flightDestination) - yardDistance(b, flightDestination));
+      const response = planKeeperResponse({ keeper, ball: flight.from, attacker: attackers[0] ?? owner,
+        defenders: groups.opponents, defendingDirection: state.attackingDirection[keeper.team],
+        velocity: motionContext?.state?.players?.[keeper.id]?.velocity,
+        attackerVelocity: motionContext?.state?.players?.[attackers[0]?.id]?.velocity,
+        ballVelocity: flightLandingVelocity(flight.from, flight.actualEndpoint, flight.durationMs),
+        holdTarget: jobs[keeper.id].point,
+        random: seededRandom(hashString(`keeper-flight:${motionContext?.seed ?? 0}:${keeper.id}:${flight.from.x}:${flight.from.y}:${flight.actualEndpoint.x}:${flight.actualEndpoint.y}`)),
+      });
+      if (response.action === "keeper-sweep") {
+        jobs[keeper.id] = { point: response.target, action: response.action, authoritativeMotion: true,
+          reactionDelayMs: response.reactionDelayMs, velocity: motionContext?.state?.players?.[keeper.id]?.velocity };
+        const cover = chooseGoalCover({ keeper, defenders: groups.opponents, ball: flightDestination,
+          defendingDirection: state.attackingDirection[keeper.team], keeperAction: response.action });
+        if (cover) jobs[cover.id] = { point: cover.target, action: cover.action, authoritativeMotion: true,
+          reactionDelayMs: cover.reactionDelayMs, velocity: motionContext?.state?.players?.[cover.id]?.velocity };
+      }
+    }
+  }
+  return (playerId) => jobs[playerId] ?? null;
+}
+
+function resolveDeliveryWithKeeperMotion(resolver, groups, availability, random, trace, interleaveOffBall, motionContext) {
+  const scopedGroups = { ...groups, keeperFlight: null, deliveryTraceStart: trace.length };
+  const result = resolver(scopedGroups, availability, random, trace, interleaveOffBall, motionContext);
+  flushKeeperFlight(scopedGroups, trace, motionContext);
+  return result;
+}
+
+function resolvePass(...args) { return resolveDeliveryWithKeeperMotion(resolvePassInternal, ...args); }
+function resolveThroughBall(...args) { return resolveDeliveryWithKeeperMotion(resolveThroughBallInternal, ...args); }
+
+function registerKeeperFlight(groups, flight, contact, jobTargetFor) {
+  const entries = [...groups.opponents, ...(groups.keeper ? [groups.keeper] : [])];
+  const jobs = entries.filter((entry) => jobTargetFor(entry.id)?.authoritativeMotion)
+    .map((entry) => ({ entry, from: pointOf(entry), job: jobTargetFor(entry.id), motion: contact.jobMotions[entry.id] }));
+  if (jobs.length) groups.keeperFlight = { jobs, flight, contact, done: false };
+}
+
+function flushKeeperFlight(groups, trace, motionContext, durationMs = null) {
+  const pending = groups.keeperFlight;
+  if (!pending || pending.done) return [];
+  const producerIndex = trace.findIndex((event, index) => index >= groups.deliveryTraceStart
+    && (event.code === "P.PASS" || event.code === "P.THROUGH"));
+  if (producerIndex < 0) return [];
+  const duration = trace[producerIndex].duration ?? durationMs ?? pending.contact.atMs;
+  const moves = pending.jobs.map(({ entry, from, job, motion }) => {
+    const actual = Math.abs(duration - pending.contact.atMs) < 1 ? motion : advanceMotion({ from,
+      intentionTarget: job.point, player: entry.player, elapsedMs: duration, incomingVelocity: job.velocity,
+      reactionDelayMs: job.reactionDelayMs, intention: job.action, paceToArrival: false });
+    Object.assign(entry, actual.position, { engineJob: job.action });
+    if (entry.role === "keeper") entry.keeperVelocity = actual.velocity;
+    writeMotionRecord(motionContext, entry.id, { position: actual.position, velocity: actual.velocity,
+      intention: job.action, intentionTarget: job.point, role: entry.role });
+    return { player: entry, from, to: actual.position, trajectory: actual.trajectory,
+      action: job.action, reactionDelayMs: job.reactionDelayMs };
+  });
+  const label = moves.length > 1 ? "The keeper attacks the ball; a defender recovers toward goal" : "The keeper attacks the ball";
+  trace.splice(producerIndex + 1, 0, traceEvent("GK.RUSH", label, {
+    movement: "reposition", duration, overlapWithPrevious: true, playerMoves: moves,
+  }));
+  pending.done = true;
+  return pending.jobs.map(({ entry }) => entry.id);
+}
+
+function resolveSweeperContact(groups, flight, contact, trace, motionContext, interleaveOffBall, deliveryCode = "P.PASS") {
+  const keeper = contact.candidate;
+  const coveringDefender = keeper.role !== "keeper";
+  trace.push(traceEvent(deliveryCode, `${playerName(groups.owner.player)} plays into space; ${playerName(keeper.player)} arrives first`, {
+    actor: groups.owner, movement: "pass", duration: contact.atMs, ballFrom: flight.from, ballTo: contact.atPoint,
+    ownerBefore: groups.owner, ownerAfter: null,
+    contact: { actor: groups.owner, point: flight.from, type: "pass", phase: "start" },
+  }));
+  const excludedIds = flushKeeperFlight(groups, trace, motionContext, contact.atMs);
+  if (interleaveOffBall) reactOffBallContinuous(groups, flight.from, contact.atPoint, contact.atMs, trace,
+    { motionContext, excludedIds });
+  const execution = executeKeeperSweep({ keeper, point: contact.atPoint,
+    defendingDirection: state.attackingDirection[keeper.team],
+    random: seededRandom(hashString(`keeper-execution:${motionContext?.seed ?? 0}:${keeper.id}:${contact.atMs}:${contact.atPoint.x}:${contact.atPoint.y}`)) });
+  const claimed = execution.action === "claim";
+  const code = coveringDefender ? "DEF.GOAL_COVER.CLEAR" : claimed ? "GK.SWEEP.CLAIM" : execution.action === "spill" ? "GK.SWEEP.SPILL" : execution.error ? "GK.SWEEP.MISKICK" : "GK.SWEEP.CLEAR";
+  trace.push(traceEvent(code, `${playerName(keeper.player)} ${claimed ? "gathers the ball" : execution.error ? "fails to control the ball cleanly" : "clears with his feet"}`, {
+    actor: keeper, keeper: coveringDefender ? null : keeper, movement: "touch", duration: 120,
+    ballFrom: contact.atPoint, ballTo: claimed ? pointOf(keeper) : contact.atPoint,
+    ownerBefore: null, ownerAfter: claimed ? keeper : null,
+    contact: { actor: keeper, point: contact.atPoint, bodyPoint: pointOf(keeper),
+      reachAllowanceYards: contact.reachAllowanceYards, type: claimed ? "catch" : "clearance", phase: "start" },
+  }));
+  return { outcome: claimed ? "TURNOVER" : "LOOSE", code, resolved: true, terminal: claimed,
+    held: claimed,
+    possession: claimed ? "turnover" : "loose", nextOwnerId: claimed ? keeper.id : null,
+    ballEnd: claimed ? pointOf(keeper) : contact.atPoint, ballVelocity: execution.velocity,
+    ballVelocityPhase: "rolling", restart: null, reason: claimed ? "keeper-sweep-claim" : "keeper-sweep-clearance",
+    offBallInterleaved: interleaveOffBall };
+}
+
+function resolvePassInternal(
   groups,
   availability,
   random,
@@ -2730,6 +4735,7 @@ function resolvePass(
     groups,
     receiver,
     state.attackingDirection[owner.team],
+    availability?.restartType ?? null,
   );
   if (offside.isOffside)
     return resolveOffsideAtKick(owner, receiver, "pass", offside, trace);
@@ -2747,11 +4753,20 @@ function resolvePass(
   // that SAME trajectory as equals -- "the earliest eligible arrival makes
   // contact," not the receiver evaluated on a separate, privileged path
   // the way the old contactArrivalTiming()-only check worked.
-  const passDistanceYards = yardDistance(owner, receiver);
-  const passType = selectPassType({
+  // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the delivery is
+  // struck toward the AIM point, so distance, pass type and flight duration
+  // must all be measured to it. Free Play supplies this even for a pass to
+  // feet: current-position is an explicit planned point, not a missing plan.
+  const aimPointForDelivery = availability?.plannedMoveTo ?? pointOf(receiver);
+  const passDistanceYards = yardDistance(owner, aimPointForDelivery);
+  // A forced type (a keeper's own hand throw -- see availability's own
+  // comment) always wins outright; selectPassType()'s distance/lane-
+  // congestion geometry is for a genuinely kicked ball and has no concept
+  // of "this is a throw," so it must never override one.
+  const passType = availability?.forcedPassType || availability?.plannedPassType || selectPassType({
     passer: owner.player,
     from: pointOf(owner),
-    to: pointOf(receiver),
+    to: aimPointForDelivery,
     opponents: groups.opponents,
   });
   const { accuracyErrorYards: baseAccuracyErrorYards } = resolvePassAccuracy(
@@ -2765,22 +4780,63 @@ function resolvePass(
   // unmodified (its own already-tuned ground-pass curve), this multiplier
   // is a new dimension layered on top, not an edit to its internals.
   const accuracyErrorYards = baseAccuracyErrorYards * accuracyMultiplier;
+  // Lead Into Space v1 -- the passer genuinely AIMS at the lead point, so
+  // the real accuracy-error scatter (actualEndpoint, the ball's own actual
+  // path) must be centered on it too, not on the receiver's raw current
+  // spot. intendedPoint isn't just descriptive metadata here: it's the real
+  // aim point the whole flight is struck toward.
+  // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- when the
+  // decision was a joint candidate whose meeting point is genuinely NOT the
+  // receiver's feet, that point IS the aim, and it wins outright: the whole
+  // idea of the candidate was "play it there while they run onto it."
+  // Everything below is unchanged, which matters more than it looks: the
+  // accuracy scatter is still applied to the aim point to produce
+  // actualEndpoint, and the two are still never reconciled afterwards. The
+  // ball does not bend toward the receiver, so a joint candidate can miss
+  // its own intended meeting point exactly like any other delivery.
+  // A direct resolver caller may still omit a plan and gets the historical
+  // lead rule below. Free Play never omits the joint point, including feet.
+  const intendedPoint = availability?.plannedMoveTo
+    ?? (shouldLeadIntendedPoint(passType, passDistanceYards, attackingSettingsFor(owner.team))
+      ? leadIntendedPoint(receiver, owner, offside)
+      : pointOf(receiver));
   const actualEndpointXY = deliveryLandingPoint(
-    pointOf(receiver),
+    intendedPoint,
     accuracyErrorYards,
     random,
   );
+  const passOrigin = pointOf(owner);
+  const passDuration = passFlightDurationMsForType(passDistanceYards, passType);
+  // Ball Out of Bounds v1 (2026-09-01) -- deliveryLandingPoint() is now
+  // deliberately unclamped (see its own header), so a genuinely wild pass
+  // can land off-pitch. Checked BEFORE anyone races the flight: an overhit
+  // ball that leaves the pitch was never catchable by a real player, so it
+  // skips the whole contact/duel simulation below rather than being pulled
+  // back in bounds first and resolved as an ordinary reception.
+  const passPitchExit = classifyPitchExit({
+    from: passOrigin,
+    to: actualEndpointXY,
+    lastTouchTeam: owner.team,
+    attackingDirectionByTeam: state.attackingDirection,
+  });
+  if (passPitchExit) {
+    const fullDistanceYards = yardDistance(passOrigin, actualEndpointXY);
+    const exitDistanceYards = yardDistance(passOrigin, passPitchExit.ballEnd);
+    const exitDurationMs = fullDistanceYards > 0 ? passDuration * (exitDistanceYards / fullDistanceYards) : 0;
+    return pushPitchExitRestart(trace, {
+      actor: owner, ballFrom: passOrigin, exit: passPitchExit, movement: "pass", duration: exitDurationMs,
+    });
+  }
   const actualEndpoint = {
     x: actualEndpointXY.x,
     y: actualEndpointXY.y,
     zone: zoneFromPercent(actualEndpointXY.x, actualEndpointXY.y),
   };
-  const passDuration = passFlightDurationMsForType(passDistanceYards, passType);
   const flight = buildPassFlight({
     owner,
     receiver,
     from: pointOf(owner),
-    intendedPoint: pointOf(receiver),
+    intendedPoint,
     actualEndpoint,
     passType,
     durationMs: passDuration,
@@ -2793,35 +4849,52 @@ function resolvePass(
   // useful point along its trajectory" true for free -- whichever point
   // along the path someone FIRST qualifies for is what wins, never the
   // flight's own endpoint by default.
-  const contact = earliestReachableContact({
+  // Kick As Projectile v1 (2026-08-27) -- see matchPassFlight.js's own
+  // simulateFlightUntilContact() header comment for the full rationale.
+  // `receiver` above is INTENTION only from here on (the aim, and a small
+  // reaction bias via intendedReceiverId) -- the live tick below races
+  // EVERY teammate too, not just the one the passer was aiming for, so an
+  // overhit ball, a deflection, or a genuine poach by someone else is a
+  // legal outcome, never silently corrected back onto the named receiver.
+  // Pattern Vocabulary V1, Step 1 (2026-09-02) -- resolvePass() is also the
+  // real resolver behind a keeper's own throw-short/throw-long/punt
+  // (FREE_PLAY_RESOLVERS); a goalkeeper distributing the ball never gets a
+  // run-off-pass job -- they hold the goalkeeper line (keeperPositioningPoint()
+  // already covers this), never join the outfield attacking pool.
+  const jobTargetFor = buildLiveJobTargets(groups, pointOf(owner), motionContext, actualEndpoint, owner.role === "keeper" ? null : owner.id, flight);
+  const contact = simulateFlightUntilContact({
     flight,
-    candidates: [receiver, ...groups.opponents],
+    players: [...groups.teammates, ...groups.opponents, ...(groups.keeper ? [groups.keeper] : [])],
+    jobTargetFor,
   });
-
+  registerKeeperFlight(groups, flight, contact, jobTargetFor);
+  if (contact.candidate && contact.jobMotions?.[contact.candidate.id] && groups.keeperFlight)
+    return resolveSweeperContact(groups, flight, contact, trace, motionContext, interleaveOffBall);
   // passQuality feeds resolveReceive()'s own strain calc -- duel.probability
   // when a real in-flight contest happened, otherwise 1 (an uncontested
   // delivery is honestly high-quality; there was no defender to make it
   // otherwise).
   let passQuality = 1;
 
-  if (!contact) {
-    // Nobody -- not even the intended receiver -- could physically reach
-    // ANY point along the whole flight in time. The ball travels its
-    // full, independent distance to actualEndpoint and runs loose there.
-    // The receiver's own best-effort chase is still shown honestly, via
-    // contactArrivalTiming() (unchanged Match-Lab infrastructure -- still
-    // the right tool for "how far did they actually get," now used only
-    // for this one visual, not for the reachability GATE itself anymore).
+  if (!contact.candidate) {
+    // Nobody -- not even the intended receiver -- genuinely got there
+    // during the live tick. The ball travels its full, independent
+    // distance to actualEndpoint and runs loose there.
     trace.push(
       traceEvent(
         "P.PASS",
-        `${playerName(owner.player)} plays a ${passType.replace("-", " ")} pass toward ${playerName(receiver.player)}, but it runs away from everyone`,
+        `${playerName(owner.player)} ${passVerbPhrase(passType, "plays")} toward ${playerName(receiver.player)}, but it runs away from everyone`,
         {
           actor: owner,
           target: receiver,
           movement: "pass",
           outcome: "neutral",
           ballFrom: pointOf(owner),
+          // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the aim
+          // point, recorded alongside the ball's real endpoint so the two stay
+          // visibly separate facts. Diagnostics and tests read this; nothing in
+          // the engine consumes it, and it never influences the flight.
+          intendedPoint: { ...intendedPoint },
           ballTo: actualEndpoint,
           contact: { point: pointOf(owner), actor: owner, type: "pass", phase: "start" },
           ownerBefore: owner,
@@ -2831,72 +4904,7 @@ function resolvePass(
         },
       ),
     );
-    const receiverArrival = contactArrivalTiming({
-      player: receiver.player,
-      from: pointOf(receiver),
-      to: actualEndpoint,
-      flightStartMs: 0,
-      contactTimeMs: passDuration,
-    });
-    trace.push(
-      traceEvent(
-        "ATT.RECEIVER.RUN",
-        `${playerName(receiver.player)} chases the delivery`,
-        {
-          actor: receiver,
-          movement: "reposition",
-          outcome: "neutral",
-          duration: receiverArrival.availableMs,
-          overlapWithPrevious: true,
-          overlapStartOffsetMs: receiverArrival.reactionDelayMs,
-          playerMoves: [
-            {
-              player: receiver,
-              from: pointOf(receiver),
-              to: receiverArrival.reachablePoint,
-              action: "receive-pass-late",
-            },
-          ],
-        },
-      ),
-    );
-    trace.push(
-      traceEvent(
-        "P.RECEIVE.LATE",
-        `${playerName(receiver.player)} cannot reach the delivery before it runs loose`,
-        {
-          actor: receiver,
-          movement: "reception",
-          outcome: "loose",
-          duration: 0,
-          ballFrom: actualEndpoint,
-          ballTo: actualEndpoint,
-          ownerBefore: null,
-          ownerAfter: null,
-          attribution: [
-            {
-              attr: "Pace + Acceleration",
-              value: `${Math.round(playerAttribute(receiver.player, "Pace"))}/${Math.round(playerAttribute(receiver.player, "Acceleration"))}`,
-              quantity: "arrival time",
-              baseline: receiverArrival.availableMs / 1000,
-              actual: receiverArrival.naturalEtaMs / 1000,
-              unit: "s",
-            },
-          ],
-        },
-      ),
-    );
-    return {
-      outcome: "LOOSE",
-      code: "P.RECEIVE.LATE",
-      resolved: true,
-      terminal: false,
-      possession: "loose",
-      nextOwnerId: null,
-      ballEnd: actualEndpoint,
-      restart: null,
-      reason: "pass-receiver-late",
-    };
+    return pushLooseDeliveryChase(receiver, actualEndpoint, passDuration, trace, groups, motionContext, interleaveOffBall, pointOf(owner));
   }
 
   // contactPoint/contactDurationMs are the ball's REAL, resolved endpoint
@@ -2909,14 +4917,214 @@ function resolvePass(
   let contactPoint;
   let contactDurationMs;
   let contestingDefenderId = null;
+  // Extra control strain from a genuine aerial/chest contest, added to
+  // resolveReceive()'s own strain calc below (2026-08-26, Passing v3) --
+  // chest/thigh control off a contested ball is not a clean ground take.
+  let contestStrainBonus = 0;
+  // Kick As Projectile v1 -- WHO actually ends up controlling the ball,
+  // not necessarily `receiver` (the passer's own original intention).
+  // Every branch below that falls through to the shared resolveReceive()
+  // flow further down assigns this explicitly; every branch with its own
+  // early return already names the real winner directly.
+  let actualReceiver = receiver;
 
-  if (!contact.isIntendedReceiver) {
+  // Aerial/Chest Contest v1 (2026-08-26, Passing v3), generalized for Kick
+  // As Projectile v1 (2026-08-27): candidates are now every teammate PLUS
+  // every opponent (not just [receiver, ...opponents]), so "the attacking
+  // side" in this race can genuinely be a different teammate than the one
+  // the passer was aiming for -- a deflection/poach at header/chest height
+  // is just as legal as one at a clean, ground-level touch. Pick the best
+  // attacking-side contestant the SAME way the best defending one is
+  // already picked, by team membership rather than a specific hardcoded id.
+  const contestants = contact.contestants
+    ?? [{ candidate: contact.candidate, isIntendedReceiver: contact.isIntendedReceiver }];
+  const attackingContestants = contestants.filter((entry) => entry.candidate.team === owner.team);
+  const opposingContestants = contestants.filter((entry) => entry.candidate.team !== owner.team);
+  const isAerialOrChestContest = attackingContestants.length > 0 && opposingContestants.length > 0
+    && (contact.band === "head" || contact.band === "chest");
+
+  if (isAerialOrChestContest) {
+    const isHeader = contact.band === "head";
+    const duelDefenceAttrs = isHeader
+      ? ["Positioning", "Anticipation", "Marking"]
+      : ["Strength", "Balance", "Aggression", "Positioning"];
+    const duelAttackAttrs = isHeader
+      ? ["Jumping", "Heading", "Strength"]
+      : ["Strength", "Balance", "Technique", "Aggression"];
+    const aerialDefender = [...opposingContestants].sort(
+      (left, right) =>
+        sumPlayerAttributes(right.candidate.player, duelDefenceAttrs)
+        - sumPlayerAttributes(left.candidate.player, duelDefenceAttrs),
+    )[0].candidate;
+    // The best-placed attacking contestant, not necessarily the passer's
+    // own original intention -- see this branch's own header comment.
+    const receiver = [...attackingContestants].sort(
+      (left, right) =>
+        sumPlayerAttributes(right.candidate.player, duelAttackAttrs)
+        - sumPlayerAttributes(left.candidate.player, duelAttackAttrs),
+    )[0].candidate;
+    const duel = isHeader
+      ? contestedRace(receiver.player, aerialDefender.player, FIXED_MINUTE, random, receiver.zone, { aerial: true })
+      : localizedDuel(
+          receiver.player, aerialDefender.player,
+          ["Strength", "Balance", "Aggression", "Technique"],
+          ["Strength", "Balance", "Aggression", "Positioning"],
+          FIXED_MINUTE, random, receiver.zone,
+        );
+    const winner = duel.won ? receiver : aerialDefender;
+    const wonCode = isHeader ? "P.AERIAL.WON" : "P.CHEST.WON";
+    const lostCode = isHeader ? "P.AERIAL.LOST" : "P.CHEST.LOST";
+    // The flight is TRUNCATED here -- the ball never keeps travelling to
+    // its original actualEndpoint once someone's genuinely got a body
+    // part to it in the air (the reported "ball wanders as a loose white
+    // dot" symptom was this exact truncation missing).
+    trace.push(
+      traceEvent(
+        "P.PASS",
+        `${playerName(owner.player)} ${passVerbPhrase(passType, "plays")} toward ${playerName(receiver.player)}, contested in the air by ${playerName(aerialDefender.player)}`,
+        {
+          actor: owner,
+          target: receiver,
+          defender: aerialDefender,
+          movement: "pass",
+          outcome: "neutral",
+          ballFrom: pointOf(owner),
+          // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the aim
+          // point, recorded alongside the ball's real endpoint so the two stay
+          // visibly separate facts. Diagnostics and tests read this; nothing in
+          // the engine consumes it, and it never influences the flight.
+          intendedPoint: { ...intendedPoint },
+          ballTo: contact.atPoint,
+          contact: { point: pointOf(owner), actor: owner, type: "pass", phase: "start" },
+          ownerBefore: owner,
+          ownerAfter: null,
+          offside,
+          duration: contact.atMs,
+        },
+      ),
+    );
+    trace.push(
+      traceEvent(
+        duel.won ? wonCode : lostCode,
+        duel.won
+          ? `${playerName(receiver.player)} wins the ${isHeader ? "header" : "chest ball"} against ${playerName(aerialDefender.player)}`
+          : `${playerName(aerialDefender.player)} wins the ${isHeader ? "header" : "chest ball"}`,
+        {
+          actor: owner,
+          target: receiver,
+          defender: aerialDefender,
+          movement: isHeader ? "header" : "reception",
+          outcome: duel.won ? "success" : "turnover",
+          playerMoves: [
+            { player: receiver, to: contact.atPoint, action: "attack-ball" },
+            { player: aerialDefender, to: contact.atPoint, action: "challenge" },
+          ],
+          contact: {
+            point: contact.atPoint,
+            actor: winner,
+            type: isHeader ? "header" : "chest",
+            phase: "end",
+          },
+          ownerBefore: null,
+          // A lost chest duel is genuinely loose here too (2026-08-26,
+          // Passing v3) -- not an instant, guaranteed grant to
+          // aerialDefender the way it read before (the SAME "instant
+          // teleport to the defender" bug Section D reports for
+          // HEAVY/LOSE, just via a different code path); the real race for
+          // it happens in resolveLooseBallRaceOutcome() just below.
+          ownerAfter: null,
+          overlapWithPrevious: true,
+          duration: contact.atMs,
+        },
+      ),
+    );
+    if (!duel.won) {
+      // Gameplay v3.1 -- the duel above is a percentage decided at
+      // contact.atMs; without this, everyone except the two contestants
+      // (already moving to contact.atPoint via the duel event's own
+      // playerMoves, just above) stood frozen for the whole flight and
+      // only reshaped 200ms after the outcome was already known. Spans
+      // the SAME real contest window every clean reception already gets,
+      // excluding the two bodies whose own runs are already authored.
+      const aerialOffBallInterleaved = interleaveFlightOffBall(
+        interleaveOffBall, groups, pointOf(owner), contact.atPoint, contact.atMs, trace, motionContext,
+        [receiver.id, aerialDefender.id],
+      );
+      if (isHeader) {
+        // Same real clearance/control decision a lost cross-header
+        // contest already goes through -- never just "the ball vanishes,"
+        // the defender genuinely has to do something with it.
+        return {
+          ...resolveAerialClearanceContinuation(aerialDefender, contact.atPoint, groups, receiver, random, trace),
+          offBallInterleaved: aerialOffBallInterleaved,
+        };
+      }
+      // Bounce On Failed Control v1 -- the duel event just above already
+      // narrated how it came loose (contact.atPoint); only the live race
+      // for who actually gets there is still needed, via
+      // resolveLooseBallRaceOutcome() (see its own header comment).
+      const chestBouncePoint = looseBallBouncePoint(contact.atPoint, pointOf(owner), random);
+      // Ball Out of Bounds v1 -- see resolveLooseBallBounce()'s own
+      // matching comment.
+      const chestPitchExit = classifyPitchExit({
+        from: contact.atPoint, to: chestBouncePoint, lastTouchTeam: receiver.team, attackingDirectionByTeam: state.attackingDirection,
+      });
+      if (chestPitchExit) {
+        return {
+          ...pushPitchExitRestart(trace, {
+            actor: receiver, ballFrom: contact.atPoint, exit: chestPitchExit, movement: "reception",
+            contact: { point: contact.atPoint, actor: receiver, type: "control", phase: "start" },
+          }),
+          offBallInterleaved: aerialOffBallInterleaved,
+        };
+      }
+      const chestBounceDurationMs = looseBallFlightMs(yardDistance(contact.atPoint, chestBouncePoint));
+      const chestRaceContact = looseBallRaceContact(
+        receiver, contact.atPoint, chestBouncePoint, chestBounceDurationMs, groups,
+      );
+      return {
+        ...resolveLooseBallRaceOutcome(
+          receiver, aerialDefender, chestBouncePoint, chestBounceDurationMs, chestRaceContact, trace,
+        ),
+        offBallInterleaved: aerialOffBallInterleaved,
+      };
+    }
+    if (isHeader && isCrossTargetZone(contact.atPoint, state.attackingDirection[owner.team])) {
+      // A header win close enough to goal gets the SAME real shot/save
+      // chain a crossed header always could -- never a smaller, second-
+      // class version of the same play just because it arrived via an
+      // ordinary lofted pass instead of a cross.
+      return resolveHeaderAtGoal(receiver, groups.keeper, contact.atPoint, groups, random, trace, { aerialDefender });
+    }
+    // Chest/thigh win, or a header win too far out for a shot -- genuine
+    // control, not an automatic goal chance. Falls through to the SAME
+    // resolveReceive() flow every other contested reception already uses
+    // below, just starting from THIS contest's own real point/time, with
+    // a real extra strain (chest/head control off a contested ball is not
+    // a clean ground take).
+    contactPoint = contact.atPoint;
+    contactDurationMs = contact.atMs;
+    contestingDefenderId = aerialDefender.id;
+    contestStrainBonus = isHeader ? 3 : 5;
+    // `receiver` here is this block's own shadowed local (the best
+    // attacking contestant, see this branch's own header comment) -- NOT
+    // necessarily the passer's original intention.
+    actualReceiver = { ...receiver, ...contact.atPoint };
+    groups = { ...groups,
+      teammates: groups.teammates.map(entry => entry.id === receiver.id ? actualReceiver : entry),
+      opponents: groups.opponents.map(entry => entry.id === aerialDefender.id ? { ...entry, ...contact.atPoint } : entry),
+    };
+  } else if (contact.candidate.team !== owner.team) {
     // An opponent physically reached the ball's own independent path
-    // before the intended receiver could -- the SAME two-layer principle
-    // already established for lane interceptions: physics decided WHO can
-    // contest it (the race above), localizedDuel() decides whether that
+    // before any teammate could -- the SAME two-layer principle already
+    // established for lane interceptions: physics decided WHO can contest
+    // it (the live tick above), localizedDuel() decides whether that
     // physical win becomes a clean interception or the ball still somehow
-    // gets through.
+    // gets through (to the originally aimed-at receiver, verified against
+    // the SAME live-tick physics just below -- re-racing every OTHER
+    // teammate after the fact is real scope creep this slice doesn't need;
+    // the interceptor's own physical eligibility already means nobody else
+    // beat them to it earlier in the flight).
     const interceptor = contact.candidate;
     const duel = localizedDuel(
       owner.player,
@@ -2931,7 +5139,7 @@ function resolvePass(
     trace.push(
       traceEvent(
         "P.PASS",
-        `${playerName(owner.player)} attempts a ${passType.replace("-", " ")} pass to ${playerName(receiver.player)}, contested by ${playerName(interceptor.player)} (${Math.round(duel.probability * 100)}%)`,
+        `${playerName(owner.player)} ${passVerbPhrase(passType, "attempts")} to ${playerName(receiver.player)}, contested by ${playerName(interceptor.player)} (${Math.round(duel.probability * 100)}%)`,
         {
           actor: owner,
           target: receiver,
@@ -2939,6 +5147,11 @@ function resolvePass(
           movement: "pass",
           outcome: "neutral",
           ballFrom: pointOf(owner),
+          // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the aim
+          // point, recorded alongside the ball's real endpoint so the two stay
+          // visibly separate facts. Diagnostics and tests read this; nothing in
+          // the engine consumes it, and it never influences the flight.
+          intendedPoint: { ...intendedPoint },
           ballTo: duel.won ? actualEndpoint : contact.atPoint,
           contact: { point: pointOf(owner), actor: owner, type: "pass", phase: "start" },
           ownerBefore: owner,
@@ -2953,6 +5166,9 @@ function resolvePass(
       // physically limited exactly like every other continuous move in
       // this model -- never teleported to meet a ball that already
       // decided, independently, that it would be there.
+      const interceptionMotion = advanceMotion({ from: pointOf(interceptor), intentionTarget: contact.atPoint,
+        player: interceptor.player, elapsedMs: contact.atMs, reactionDelayMs: contact.reactionDelayMs ?? 0,
+        intention: "intercept", paceToArrival: false });
       trace.push(
         traceEvent(
           "P.PASS.LOST",
@@ -2968,20 +5184,15 @@ function resolvePass(
               {
                 player: interceptor,
                 from: pointOf(interceptor),
-                to: contact.atPoint,
+                to: interceptionMotion.position,
                 action: "intercept",
-                trajectory: sampleContinuousTrajectory({
-                  from: pointOf(interceptor),
-                  to: contact.atPoint,
-                  player: interceptor.player,
-                  totalMs: contact.atMs,
-                  reactionDelayMs: CONTACT_REACTION_DELAY_MS,
-                  sampleCount: 8,
-                }),
+                trajectory: interceptionMotion.trajectory,
               },
             ],
             contact: {
               point: contact.atPoint,
+              bodyPoint: interceptionMotion.position,
+              reachAllowanceYards: contact.reachAllowanceYards ?? 1.5,
               actor: interceptor,
               type: "interception",
               phase: "end",
@@ -2991,6 +5202,21 @@ function resolvePass(
           },
         ),
       );
+      // Gameplay v3.1 -- the interceptor's own run is already authored
+      // above (playerMoves); everyone else keeps pursuing the job they
+      // already had for the SAME real window the interception happened
+      // in, instead of standing frozen through the whole flight and
+      // then twitching through a 200ms reshape afterward.
+      const offBallInterleaved = interleaveFlightOffBall(
+        interleaveOffBall, groups, pointOf(owner), contact.atPoint, contact.atMs, trace, motionContext, [interceptor.id],
+      );
+      // The foot can meet the ball away from the body's centre. Bringing it
+      // under the body is a ball touch, never a player teleport into contact.
+      trace.push(traceEvent("P.INTERCEPT.CONTROL", `${playerName(interceptor.player)} brings it under control`, {
+        actor: interceptor, movement: "touch", outcome: "success", duration: 120,
+        ballFrom: contact.atPoint, ballTo: interceptionMotion.position,
+        ownerBefore: interceptor, ownerAfter: interceptor,
+      }));
       return {
         outcome: "TURNOVER",
         code: "P.PASS.LOST",
@@ -2998,25 +5224,63 @@ function resolvePass(
         terminal: true,
         possession: "turnover",
         nextOwnerId: interceptor.id,
-        ballEnd: contact.atPoint,
+        ballEnd: interceptionMotion.position,
         restart: null,
         reason: "pass-intercepted",
+        offBallInterleaved,
       };
+    }
+    // Off-Ball Motion v3 (2026-08-26) -- a real reported bug (traced to a
+    // Timeline Playback regression): a beaten interceptor let the ball
+    // through to actualEndpoint UNCONDITIONALLY -- the intended receiver
+    // was selected before the flight was even built and never re-verified
+    // against the real, error-affected landing point. Lead Into Space's
+    // own longer leads made the gap between "where the receiver was
+    // standing" and "where the ball actually lands" wide enough to
+    // regularly exceed what they can physically cover in passDuration --
+    // a straightforward earliestReachableContact()-style check here
+    // (reusing the SAME contactArrivalTiming() the `!contact` branch above
+    // already relies on) closes it the same honest way: a genuinely
+    // unreachable delivery runs loose, never an automatic clean reception.
+    const interceptedDeliveryArrival = contactArrivalTiming({
+      player: receiver.player, from: pointOf(receiver), to: actualEndpoint,
+      flightStartMs: 0, contactTimeMs: passDuration,
+    });
+    if (!interceptedDeliveryArrival.reachable) {
+      return pushLooseDeliveryChase(receiver, actualEndpoint, passDuration, trace, groups, motionContext, interleaveOffBall, pointOf(owner));
     }
     contactPoint = actualEndpoint;
     contactDurationMs = passDuration;
     contestingDefenderId = interceptor.id;
+    actualReceiver = receiver;
   } else {
+    // A teammate genuinely met it -- the one the passer was aiming for
+    // (the common case), or a different teammate entirely: an overhit
+    // ball taken by someone else, a knockdown, a poach. That's success of
+    // the live-tick model, not a bug -- the flight was never booked to a
+    // specific owner, so whoever's body actually gets there first, wins
+    // it. `actualReceiver` (not `receiver`) is who resolveReceive() etc.
+    // below actually reasons about from here on.
+    actualReceiver = contact.candidate;
+    const metByIntendedReceiver = actualReceiver.id === receiver.id;
+    const aimedIntoSpace = yardDistance(intendedPoint, receiver) >= 1;
     trace.push(
       traceEvent(
         "P.PASS",
-        `${playerName(owner.player)} plays a ${passType.replace("-", " ")} pass to ${playerName(receiver.player)} -- uncontested`,
+        metByIntendedReceiver
+          ? `${playerName(owner.player)} ${passVerbPhrase(passType, "plays")} ${aimedIntoSpace ? "into the space ahead of" : "to"} ${playerName(receiver.player)}`
+          : `${playerName(owner.player)} ${passVerbPhrase(passType, "plays")} toward ${playerName(receiver.player)}, but ${playerName(actualReceiver.player)} gets to it`,
         {
           actor: owner,
           target: receiver,
           movement: "pass",
           outcome: "success",
           ballFrom: pointOf(owner),
+          // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the aim
+          // point, recorded alongside the ball's real endpoint so the two stay
+          // visibly separate facts. Diagnostics and tests read this; nothing in
+          // the engine consumes it, and it never influences the flight.
+          intendedPoint: { ...intendedPoint },
           ballTo: contact.atPoint,
           contact: { point: pointOf(owner), actor: owner, type: "pass", phase: "start" },
           ownerBefore: owner,
@@ -3058,10 +5322,12 @@ function resolvePass(
       {
         motionContext,
         excludedIds: [
-          receiver.id,
+          actualReceiver.id,
           receiverPressureDefender?.id,
           contestingDefenderId,
         ].filter(Boolean),
+        passerId: owner.role === "keeper" ? null : owner.id,
+        passDestination: contactPoint,
       },
     );
   }
@@ -3131,15 +5397,15 @@ function resolvePass(
     trace.push(
       traceEvent(
         "P.RECEIVE.CLEAN",
-        `${playerName(receiver.player)} controls it cleanly`,
+        `${playerName(actualReceiver.player)} controls it cleanly`,
         {
-          actor: receiver,
+          actor: actualReceiver,
           movement: "reception",
           outcome: "success",
           playerMoves: [
             {
-              player: receiver,
-              from: pointOf(receiver),
+              player: actualReceiver,
+              from: pointOf(actualReceiver),
               to: contactPoint,
               action: "receive-pass",
               reactionDelayMs: contact.reactionDelayMs,
@@ -3150,36 +5416,70 @@ function resolvePass(
           ballTo: contactPoint,
           contact: {
             point: contactPoint,
-            actor: receiver,
+            actor: actualReceiver,
             type: "control",
             phase: "start",
           },
           ownerBefore: null,
-          ownerAfter: receiver,
+          ownerAfter: actualReceiver,
+          duration: 160,
         },
       ),
     );
+    // Gameplay v3.2 -- "freeze on arrival." The shared flight-off-ball
+    // call above (and its own overlapping DEF.PRESS.RECEIVER, if any) is
+    // correctly bound to the flight's own window, ending exactly at
+    // contactPoint/contactDurationMs -- it cannot reach forward into THIS
+    // event's own 160ms (a genuinely new primary interval, since
+    // matchLabPlayback.js deliberately excludes movement:"reception" from
+    // its stationary-contact overlap shortcut -- a receiver's own control
+    // beat is a real, independently-timed action, not a shared arrival).
+    // Without this, everyone but the receiver holds their LAST rendered
+    // pose for 160ms, then the next action's own off-ball call restarts
+    // them -- the reported "every clip ends, film plants the world" bug.
+    // A second, short call (same job targets, not a replan -- motionContext
+    // already carries each reactor's own real velocity into it, so this
+    // continues their run rather than restarting it) closes that gap.
+    // chaseIntention: false -- same reason POST_ACTION_CONVERGENCE_MS
+    // uses it: 160ms is nowhere near enough real time to chase a far,
+    // uncapped tactical target without an impossible burst.
+    if (interleaveOffBall) {
+      reactOffBallContinuous(groups, contactPoint, contactPoint, 160, trace, {
+        motionContext, excludedIds: [actualReceiver.id], overlapWithPrevious: true, chaseIntention: false,
+      });
+    }
     return {
       outcome: "CLEAN",
       code: "P.RECEIVE.CLEAN",
       resolved: true,
       terminal: false,
       possession: "retained",
-      nextOwnerId: receiver.id,
+      nextOwnerId: actualReceiver.id,
       ballEnd: contactPoint,
       restart: null,
       reason: "pass-reception-clean",
+      // Off-Ball Motion v3 -- see resolveDribble()'s own matching field;
+      // the shared reactOffBallContinuous() call above already ran.
+      offBallInterleaved: interleaveOffBall,
     };
   }
 
-  const pressure = computePressure(pressingOpponent.player, contactPoint.zone, 0);
+  // contestStrainBonus (2026-08-26, Passing v3) -- folded in via the
+  // pressure channel rather than a new resolveReceive() parameter (the
+  // spec's own "do not add a new engine resolver" boundary): chest/head
+  // control off a genuine aerial contest is measurably harder than a
+  // ground take under the same nominal pressure, converted at strain's
+  // own pressure*14 weight (matchEngineCore.js) so a bonus of 3 (header)
+  // or 5 (chest) lands as the intended real strain points, not a second,
+  // differently-scaled term.
+  const pressure = computePressure(pressingOpponent.player, contactPoint.zone, 0) + contestStrainBonus / 14;
   const received = resolveReceive(
-    receiver.player,
+    actualReceiver.player,
     pressingOpponent.player,
     passQuality,
     pressure,
     false,
-    receiver.zone,
+    actualReceiver.zone,
     FIXED_MINUTE,
     random,
   );
@@ -3187,11 +5487,58 @@ function resolvePass(
   // "advance"/"hold"/"turnover" (matchEngineCore.js:1141-1231, read
   // directly, not assumed).
   const receptionLost = received.status === "turnover";
+  // Bounce On Failed Control v1 -- HEAVY (unrecovered) and LOSE spill a
+  // real, short distance and go through a genuine live race for who
+  // actually gets there (see resolveLooseBallBounce()'s own header
+  // comment); an ordinary KNOCK_FORWARD-lost contested race already
+  // decided things outright at contactPoint and keeps its existing shape
+  // below unchanged.
+  if (receptionLost && RECEPTION_BOUNCE_CODES.has(received.context.code)) {
+    // Gameplay v3.1 -- the flight up to this reception is already covered
+    // by the shared reactOffBallContinuous() call above; resolveLooseBallBounce()
+    // now separately interleaves off-ball for its OWN bounce/race window
+    // (the gap this used to have -- see its own header comment) and
+    // reports whether it did on the return, so nothing needs overriding
+    // here.
+    return resolveLooseBallBounce(
+      actualReceiver, pressingOpponent, contactPoint, pointOf(owner), groups,
+      received.context.code, received.status, random, trace, motionContext, interleaveOffBall,
+    );
+  }
   // A KNOCK_FORWARD-advanced reception earns a real forward zone
   // (received.nextZone, resolveReceive's own contested-race result) --
   // genuine progression data for that reception, not the same point twice.
   const advancedReception =
-    !receptionLost && received.nextZone !== receiver.zone;
+    !receptionLost && received.nextZone !== actualReceiver.zone;
+  // Real reported bug (2026-08-31): a lost KNOCK_FORWARD is a genuine
+  // contested race for a ball the receiver's own touch just pushed
+  // forward (resolveReceive()'s own contestedRace() call, matchEngineCore.js)
+  // -- but its nextZone for a LOST race is MIRRORED_ZONE[zone] (a tactical
+  // "whose half is it now" label for the NEXT decision, never a real
+  // point), so this used to fall back to pointOf(pressingOpponent) --
+  // wherever that defender's roster entry happens to be standing on the
+  // WHOLE pitch, often nowhere near the reception point at all. Rendered
+  // as the ball instantly deflecting across open turf with nobody
+  // actually there. Same real, short "how far can one touch travel" cap
+  // the WON branch below already uses (KNOCK_FORWARD_MAX_YARDS) -- the
+  // defender wins the race TO that near point, not to wherever they
+  // started, and is authored a real move there instead of teleporting.
+  const knockForwardContestPoint = receptionLost
+    ? (() => {
+        // approachPoint() returns a bare {x,y}, never a zone -- see the
+        // WON branch's own receptionEnd comment just below for the exact
+        // matching continuity bug this same omission caused there.
+        const raw = approachPoint(
+          contactPoint,
+          pointAheadYards(contactPoint, state.attackingDirection[actualReceiver.team], KNOCK_FORWARD_MAX_YARDS * 2),
+          KNOCK_FORWARD_MAX_YARDS,
+        );
+        return { ...raw, zone: zoneFromPercent(raw.x, raw.y) };
+      })()
+    : null;
+  const lostRaceMove = receptionLost
+    ? realMoverTrajectory(pressingOpponent, knockForwardContestPoint, { floorMs: 280, action: "interception" })
+    : null;
   // Split into two events for a genuine advance -- an ADVANCING reception
   // needs the ball to keep moving AFTER contact, to receptionEnd -- a real
   // intermediate waypoint traceEvent()'s contact.phase (start/end only, no
@@ -3207,18 +5554,18 @@ function resolvePass(
   trace.push(
     traceEvent(
       received.context.code,
-      `${playerName(receiver.player)}: ${received.status}`,
+      `${playerName(actualReceiver.player)}: ${received.status}`,
       {
-        actor: receiver,
+        actor: actualReceiver,
         defender: pressingOpponent,
         movement: "reception",
         outcome: receptionLost ? "turnover" : "success",
         playerMoves: receptionLost
-          ? []
+          ? lostRaceMove.playerMoves
           : [
               {
-                player: receiver,
-                from: pointOf(receiver),
+                player: actualReceiver,
+                from: pointOf(actualReceiver),
                 to: contactPoint,
                 action: "receive-pass",
                 reactionDelayMs: contact.reactionDelayMs,
@@ -3227,47 +5574,109 @@ function resolvePass(
             ],
         ballFrom: contactPoint,
         ballTo: receptionLost
-          ? pointOf(pressingOpponent)
+          ? knockForwardContestPoint
           : contactPoint,
         contact: {
           point: receptionLost
-            ? pointOf(pressingOpponent)
+            ? knockForwardContestPoint
             : contactPoint,
-          actor: receptionLost ? pressingOpponent : receiver,
+          actor: receptionLost ? pressingOpponent : actualReceiver,
           type: receptionLost ? "interception" : "control",
           phase: receptionLost ? "end" : "start",
         },
         ownerBefore: null,
-        ownerAfter: receptionLost ? pressingOpponent : receiver,
+        ownerAfter: receptionLost ? pressingOpponent : actualReceiver,
+        duration: receptionLost ? lostRaceMove.duration : 160,
       },
     ),
   );
+  // Gameplay v3.2 -- see P.RECEIVE.CLEAN's own matching comment above for
+  // the full "freeze on arrival" explanation; this is the SAME gap on
+  // this event's own (contested) shape. Covers whichever real duration
+  // this event just used, receptionLost included -- a lost reception
+  // does not pause the other 21 jobs either.
+  if (interleaveOffBall) {
+    reactOffBallContinuous(
+      groups, contactPoint, receptionLost ? pointOf(pressingOpponent) : contactPoint,
+      receptionLost ? 280 : 160, trace,
+      { motionContext, excludedIds: [actualReceiver.id, pressingOpponent?.id].filter(Boolean), overlapWithPrevious: true, chaseIntention: false },
+    );
+  }
   let receptionEnd = contactPoint;
   if (advancedReception) {
-    receptionEnd = zoneCenterPoint(received.nextZone);
+    // Gameplay v3.2 -- capped to a real knock-on distance (see
+    // KNOCK_FORWARD_MAX_YARDS's own comment); direction toward the real
+    // next zone is preserved, only how far in one touch is bounded.
+    const approachedReceptionEnd = approachPoint(contactPoint, zoneCenterPoint(received.nextZone), KNOCK_FORWARD_MAX_YARDS);
+    // A real reported bug (found via Progression Contest v1's own full-
+    // trace continuity search): approachPoint() returns a bare {x,y},
+    // never a zone -- this event's own ballTo (and playerMoves `to`)
+    // silently carried no zone at all, while the NEXT action's own
+    // ballFrom is always built WITH one (pointOf()/zoneFromPercent() on
+    // the committed roster entry). x/y matched exactly; zone alone
+    // (undefined vs a real number) tripped the "next event starts
+    // exactly where the previous one ended" continuity check.
+    receptionEnd = { ...approachedReceptionEnd, zone: zoneFromPercent(approachedReceptionEnd.x, approachedReceptionEnd.y) };
+    // A real duration, not the implicit zero a missing one defaults to
+    // (2026-08-25 fix -- a real browser round reported a receiver visibly
+    // TELEPORTING on this exact event: ZONE_TRANSITION_MATRIX's own
+    // "bypass" case (matchEngineCore.js) lets a knock-forward reception
+    // skip an entire zone row, up to ~75% of the pitch length in one
+    // touch, and with zero duration/no trajectory that whole distance
+    // rendered as an instant snap instead of a real, timeToReach()-paced
+    // sprint onto it). Floored at MOVEMENT_DURATIONS.reception so even a
+    // short, ordinary knock-forward still reads as a real touch, not an
+    // instant one either.
+    const advanceDistanceYards = yardDistance(contactPoint, receptionEnd);
+    const advanceDurationMs = Math.max(
+      MOVEMENT_DURATIONS.reception,
+      Math.round(
+        CONTACT_REACTION_DELAY_MS
+          + timeToReach(actualReceiver.player, advanceDistanceYards) * 1000,
+      ),
+    );
     trace.push(
       traceEvent(
         "P.RECEIVE.ADVANCE",
-        `${playerName(receiver.player)} knocks it forward`,
+        `${playerName(actualReceiver.player)} knocks it forward`,
         {
-          actor: receiver,
+          actor: actualReceiver,
           movement: "reception",
           outcome: "success",
+          duration: advanceDurationMs,
           playerMoves: [
             {
-              player: receiver,
+              player: actualReceiver,
               from: contactPoint,
               to: receptionEnd,
               action: "receive-and-advance",
+              trajectory: sampleContinuousTrajectory({
+                from: contactPoint,
+                to: receptionEnd,
+                player: actualReceiver.player,
+                totalMs: advanceDurationMs,
+                reactionDelayMs: CONTACT_REACTION_DELAY_MS,
+                sampleCount: Math.max(10, Math.min(24, Math.ceil(advanceDurationMs / 160))),
+              }),
             },
           ],
           ballFrom: contactPoint,
           ballTo: receptionEnd,
-          ownerBefore: receiver,
-          ownerAfter: receiver,
+          ownerBefore: actualReceiver,
+          ownerAfter: actualReceiver,
         },
       ),
     );
+    // Gameplay v3.2 -- same gap, the knock-forward's own beat: this used
+    // to be its own new primary interval with only actualReceiver moving,
+    // the same clock-ownership hole Slice B of Gameplay v3.1 fixed for
+    // P.CARRY.TOUCH. A second short off-ball call (chaseIntention:false,
+    // same reasoning as the reception beat above) closes it.
+    if (interleaveOffBall) {
+      reactOffBallContinuous(groups, contactPoint, receptionEnd, advanceDurationMs, trace, {
+        motionContext, excludedIds: [actualReceiver.id], overlapWithPrevious: true, chaseIntention: false,
+      });
+    }
   }
   return {
     outcome: received.status.toUpperCase(),
@@ -3275,10 +5684,12 @@ function resolvePass(
     resolved: true,
     terminal: receptionLost,
     possession: receptionLost ? "turnover" : "retained",
-    nextOwnerId: receptionLost ? pressingOpponent.id : receiver.id,
-    ballEnd: receptionLost ? pointOf(pressingOpponent) : receptionEnd,
+    nextOwnerId: receptionLost ? pressingOpponent.id : actualReceiver.id,
+    ballEnd: receptionLost ? knockForwardContestPoint : receptionEnd,
     restart: null,
     reason: receptionLost ? "pass-reception-lost" : "pass-reception",
+    // Off-Ball Motion v3 -- see resolveDribble()'s own matching field.
+    offBallInterleaved: interleaveOffBall,
   };
 }
 
@@ -3330,7 +5741,7 @@ function resolveThroughBallAccuracy(
 // re-run a foot race of its own once the ball arrives -- the only open
 // question is whether a defender sitting in the passing LANE (between the
 // passer and the target space, not at the target itself) can cut it out.
-function resolveThroughBall(
+function resolveThroughBallInternal(
   groups,
   availability,
   random,
@@ -3351,10 +5762,23 @@ function resolveThroughBall(
     "pass",
     availability?.preselectedTargetId,
   );
-  // Defensive fallback only -- the real Free Play path always supplies a
-  // planned target (the run-in-behind job's own intentionTarget); without
-  // one there is no "space" to distinguish this from an ordinary pass.
-  const targetPoint = availability?.plannedMoveTo || pointOf(receiver);
+  // Joint Passer/Runner Candidate Generation v1 (Stage 3, 2026-09-05) --
+  // this used to fall back to `pointOf(receiver)` when no planned target
+  // arrived, which meant a "through ball" could quietly be delivered to the
+  // teammate's current coordinate: the exact thing that makes it NOT a
+  // through ball. There is no such fallback now. A through ball requires a
+  // real runner and a real meeting point, and the Free Play path always
+  // supplies one (generateFreePlayCandidates() only offers this candidate
+  // from a joint candidate that already has an intended point).
+  //
+  // A caller with no meeting point is not describing a through ball at all;
+  // it is describing an ordinary pass to feet, so it is resolved as exactly
+  // that -- explicitly, and by the resolver that owns that behaviour, not by
+  // this one pretending to be it.
+  const targetPoint = availability?.plannedMoveTo ?? null;
+  if (!targetPoint) {
+    return resolvePass(groups, availability, random, trace, interleaveOffBall, motionContext);
+  }
 
   // Offside is judged at the instant of the kick, against the runner's
   // CURRENT position -- correct in law (a player's own position when the
@@ -3369,12 +5793,18 @@ function resolveThroughBall(
   if (offside.isOffside)
     return resolveOffsideAtKick(owner, receiver, "pass", offside, trace);
 
-  // Real delivery error -- see resolveThroughBallAccuracy()'s own comment.
-  // The lane-interceptor geometry below still reads off the ORIGINAL
-  // intended targetPoint (a defender reacts to where the ball is AIMED as
-  // it's struck, not to a resting spot that doesn't exist yet); only the
-  // ball's own real destination -- and the runner adjusting to meet it --
-  // uses the error-affected landing point.
+  // Kick As Projectile v1 (2026-08-27) -- see matchPassFlight.js's own
+  // simulateFlightUntilContact() header comment. A through ball already
+  // aimed at SPACE, not feet (targetPoint, unchanged above) -- what
+  // changes here is HOW contact is resolved: a real flight object (this
+  // resolver never built one before -- `landingPoint` was a static
+  // accuracy-scattered point with no timeline at all) raced live, tick by
+  // tick, the SAME shared helper resolvePass() uses. The old frozen,
+  // kick-time-only lane check (resolveCross()'s own interceptor lookup,
+  // still used there -- see its own call site) is retired for this
+  // resolver -- physics now decides who actually gets there, exactly the
+  // Oliveira/Guerrero class of bug this slice exists to answer with
+  // geometry instead of a later marking patch.
   const { accuracyErrorYards } = resolveThroughBallAccuracy(
     owner.player,
     {
@@ -3383,26 +5813,102 @@ function resolveThroughBall(
     },
     random,
   );
+  const throughDistanceYards = yardDistance(owner, targetPoint);
+  const throughPassType = availability?.forcedPassType || availability?.plannedPassType || selectPassType({
+    passer: owner.player,
+    from: pointOf(owner),
+    to: targetPoint,
+    opponents: groups.opponents,
+  });
   const landingXY = deliveryLandingPoint(
     targetPoint,
     accuracyErrorYards,
     random,
   );
+  const throughOrigin = pointOf(owner);
+  const throughDuration = passFlightDurationMsForType(throughDistanceYards, throughPassType);
+  // Ball Out of Bounds v1 -- see resolvePass()'s own matching comment.
+  const throughPitchExit = classifyPitchExit({
+    from: throughOrigin,
+    to: landingXY,
+    lastTouchTeam: owner.team,
+    attackingDirectionByTeam: state.attackingDirection,
+  });
+  if (throughPitchExit) {
+    const fullDistanceYards = yardDistance(throughOrigin, landingXY);
+    const exitDistanceYards = yardDistance(throughOrigin, throughPitchExit.ballEnd);
+    const exitDurationMs = fullDistanceYards > 0 ? throughDuration * (exitDistanceYards / fullDistanceYards) : 0;
+    return pushPitchExitRestart(trace, {
+      actor: owner, ballFrom: throughOrigin, exit: throughPitchExit, movement: "pass", duration: exitDurationMs,
+    });
+  }
   const landingPoint = {
     x: landingXY.x,
     y: landingXY.y,
     zone: zoneFromPercent(landingXY.x, landingXY.y),
   };
-
-  const laneInterceptor = nearestLaneInterceptor(
+  const throughFlight = buildPassFlight({
     owner,
-    targetPoint,
-    groups.opponents,
-  );
-  if (laneInterceptor) {
+    receiver,
+    from: pointOf(owner),
+    intendedPoint: targetPoint,
+    actualEndpoint: landingPoint,
+    passType: throughPassType,
+    durationMs: throughDuration,
+  });
+  const jobTargetFor = buildLiveJobTargets(groups, pointOf(owner), motionContext, landingPoint, owner.role === "keeper" ? null : owner.id, throughFlight);
+  const contact = simulateFlightUntilContact({
+    flight: throughFlight,
+    players: [...groups.teammates, ...groups.opponents, ...(groups.keeper ? [groups.keeper] : [])],
+    jobTargetFor,
+  });
+  registerKeeperFlight(groups, throughFlight, contact, jobTargetFor);
+  if (contact.candidate && contact.jobMotions?.[contact.candidate.id] && groups.keeperFlight)
+    return resolveSweeperContact(groups, throughFlight, contact, trace, motionContext, interleaveOffBall, "P.THROUGH");
+
+  if (!contact.candidate) {
+    trace.push(
+      traceEvent(
+        "P.THROUGH",
+        `${playerName(owner.player)} slides a through ball into the space for ${playerName(receiver.player)}, but nobody gets there`,
+        {
+          actor: owner,
+          target: receiver,
+          movement: "pass",
+          outcome: "neutral",
+          ballFrom: pointOf(owner),
+          // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the aim
+          // point, recorded alongside the ball's real endpoint so the two stay
+          // visibly separate facts. Diagnostics and tests read this; nothing in
+          // the engine consumes it, and it never influences the flight.
+          intendedPoint: { ...targetPoint },
+          ballTo: landingPoint,
+          contact: { point: pointOf(owner), actor: owner, type: "pass", phase: "start" },
+          ownerBefore: owner,
+          ownerAfter: null,
+          offside,
+          duration: throughDuration,
+        },
+      ),
+    );
+    return pushLooseDeliveryChase(receiver, landingPoint, throughDuration, trace, groups, motionContext, interleaveOffBall, pointOf(owner));
+  }
+
+  const actualReceiver = contact.candidate;
+  let finalReceiver;
+  let finalPoint;
+  let finalDuration;
+  if (actualReceiver.team !== owner.team) {
+    // An opponent physically reached the ball's own independent path
+    // first -- the SAME two-layer principle resolvePass() already
+    // established for its own lane-interception branch: physics decided
+    // WHO can contest it (the live tick above), localizedDuel() decides
+    // whether that physical win becomes a clean interception or the ball
+    // still somehow gets through to its real destination.
+    const interceptor = actualReceiver;
     const duel = localizedDuel(
       owner.player,
-      laneInterceptor.player,
+      interceptor.player,
       ["Passing", "Vision", "Technique", "Decisions"],
       ["Positioning", "Anticipation", "Tackling", "Decisions"],
       FIXED_MINUTE,
@@ -3412,24 +5918,25 @@ function resolveThroughBall(
     trace.push(
       traceEvent(
         "P.THROUGH",
-        `${playerName(owner.player)} slides a through ball for ${playerName(receiver.player)}, cut out by ${playerName(laneInterceptor.player)} (${Math.round(duel.probability * 100)}%)`,
+        `${playerName(owner.player)} slides a through ball for ${playerName(receiver.player)}, cut out by ${playerName(interceptor.player)} (${Math.round(duel.probability * 100)}%)`,
         {
           actor: owner,
           target: receiver,
-          defender: laneInterceptor,
+          defender: interceptor,
           movement: "pass",
           outcome: "neutral",
           ballFrom: pointOf(owner),
-          ballTo: duel.won ? landingPoint : pointOf(laneInterceptor),
-          contact: {
-            point: pointOf(owner),
-            actor: owner,
-            type: "pass",
-            phase: "start",
-          },
+          // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the aim
+          // point, recorded alongside the ball's real endpoint so the two stay
+          // visibly separate facts. Diagnostics and tests read this; nothing in
+          // the engine consumes it, and it never influences the flight.
+          intendedPoint: { ...targetPoint },
+          ballTo: duel.won ? landingPoint : contact.atPoint,
+          contact: { point: pointOf(owner), actor: owner, type: "pass", phase: "start" },
           ownerBefore: owner,
           ownerAfter: null,
           offside,
+          duration: duel.won ? throughDuration : contact.atMs,
         },
       ),
     );
@@ -3437,22 +5944,26 @@ function resolveThroughBall(
       trace.push(
         traceEvent(
           "P.THROUGH.LOST",
-          `${playerName(laneInterceptor.player)} reads it and cuts the through ball out`,
+          `${playerName(interceptor.player)} reads it and cuts the through ball out`,
           {
             actor: owner,
-            defender: laneInterceptor,
+            defender: interceptor,
             movement: "interception",
             outcome: "turnover",
-            contact: {
-              point: pointOf(laneInterceptor),
-              actor: laneInterceptor,
-              type: "interception",
-              phase: "start",
-            },
+            contact: { point: contact.atPoint, actor: interceptor, type: "interception", phase: "start" },
             ownerBefore: null,
-            ownerAfter: laneInterceptor,
+            ownerAfter: interceptor,
           },
         ),
+      );
+      // Gameplay v3.1 -- same class of gap as resolvePass()'s own
+      // P.PASS.LOST branch: the interceptor's own run is already
+      // authored above (playerMoves via the duel/contact fields), but
+      // everyone else used to stand frozen through the whole flight and
+      // only reshape 200ms after the turnover was already decided.
+      const throughOffBallInterleaved = interleaveFlightOffBall(
+        interleaveOffBall, groups, pointOf(owner), contact.atPoint, contact.atMs, trace, motionContext,
+        [interceptor.id],
       );
       return {
         outcome: "TURNOVER",
@@ -3460,96 +5971,156 @@ function resolveThroughBall(
         resolved: true,
         terminal: true,
         possession: "turnover",
-        nextOwnerId: laneInterceptor.id,
-        ballEnd: pointOf(laneInterceptor),
+        nextOwnerId: interceptor.id,
+        ballEnd: contact.atPoint,
         restart: null,
         reason: "through-ball-intercepted",
+        offBallInterleaved: throughOffBallInterleaved,
       };
     }
+    // Beaten interceptor: the ball still gets through, to its real
+    // destination, already described by the "P.THROUGH" event just
+    // pushed above -- the shared tail below must NOT push a second one.
+    // `actualReceiver` corrected back to the originally aimed-at runner
+    // (the live tick's own winner here was the interceptor, not a
+    // teammate; there is no OTHER teammate physically vetted as reaching
+    // it, so this keeps the ORIGINAL, already-tested "beaten interceptor"
+    // contract resolvePass() itself uses -- see its own matching comment).
+    finalReceiver = receiver;
+    finalPoint = landingPoint;
+    finalDuration = throughDuration;
+    // The interceptor lost the duel, but accuracy may still have carried
+    // the ball several metres away from the intended runner. Candidate
+    // generation vetted the intended meeting point, not this scattered
+    // landing point, so re-check the receiver's physical reach before the
+    // shared tail awards control. A beaten defender does not teleport the
+    // attacker onto a ball neither player can reach.
+    const receiverArrival = contactArrivalTiming({
+      player: receiver.player,
+      from: pointOf(receiver),
+      to: landingPoint,
+      flightStartMs: 0,
+      contactTimeMs: throughDuration,
+      reactionDelayMs: reactionDelayMsFor(receiver.player, { isIntendedReceiver: true }),
+      reachAllowanceYards: 1.5,
+    });
+    if (!receiverArrival.reachable) {
+      return pushLooseDeliveryChase(
+        receiver,
+        landingPoint,
+        throughDuration,
+        trace,
+        groups,
+        motionContext,
+        interleaveOffBall,
+        pointOf(owner),
+      );
+    }
   } else {
+    finalReceiver = actualReceiver;
+    finalPoint = contact.atPoint;
+    finalDuration = contact.atMs;
     trace.push(
       traceEvent(
         "P.THROUGH",
-        `${playerName(owner.player)} plays a through ball into the space for ${playerName(receiver.player)}`,
+        finalReceiver.id === receiver.id
+          ? `${playerName(owner.player)} plays a through ball into the space for ${playerName(receiver.player)}`
+          : `${playerName(owner.player)} slides a through ball for ${playerName(receiver.player)}, but ${playerName(finalReceiver.player)} gets there`,
         {
           actor: owner,
           target: receiver,
           movement: "pass",
           outcome: "success",
           ballFrom: pointOf(owner),
-          ballTo: landingPoint,
-          contact: {
-            point: pointOf(owner),
-            actor: owner,
-            type: "pass",
-            phase: "start",
-          },
+          // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the aim
+          // point, recorded alongside the ball's real endpoint so the two stay
+          // visibly separate facts. Diagnostics and tests read this; nothing in
+          // the engine consumes it, and it never influences the flight.
+          intendedPoint: { ...targetPoint },
+          ballTo: finalPoint,
+          contact: { point: pointOf(owner), actor: owner, type: "pass", phase: "start" },
           ownerBefore: owner,
           ownerAfter: null,
           offside,
+          duration: finalDuration,
         },
       ),
     );
   }
 
-  // Fluid off-ball movement DURING the flight (2026-08-19) -- see
-  // resolvePass()'s own comment on why this exists (both the "why", and
-  // why the receiver must be excluded below -- they're already committed
-  // to meeting the ball at landingPoint just below). A through ball is
-  // usually the LONGEST-flight pass type of all, so freezing the rest of
-  // the pitch for its whole travel was the most visible case of this bug.
+  const receiverMotion = advanceMotion({from:pointOf(finalReceiver),intentionTarget:finalPoint,
+    player:finalReceiver.player,elapsedMs:finalDuration,
+    reactionDelayMs:reactionDelayMsFor(finalReceiver.player,{isIntendedReceiver:true}),
+    intention:"receive-pass",paceToArrival:false});
+  trace.push(traceEvent("ATT.RECEIVER.RUN", `${playerName(finalReceiver.player)} chases the through ball`, {
+    actor:finalReceiver,movement:"reposition",duration:finalDuration,overlapWithPrevious:true,
+    playerMoves:[{player:finalReceiver,from:pointOf(finalReceiver),to:receiverMotion.position,
+      trajectory:receiverMotion.trajectory,action:"chase",reactionDelayMs:receiverMotion.reactionDelayMs}],
+  }));
+  // Off-Ball Motion v3 -- ONE continuous off-ball reaction spanning the
+  // REAL truncated flight (finalDuration -- the beaten-interceptor branch
+  // means the ball actually traveled the FULL throughDuration to
+  // landingPoint, not just as far as contact.atMs/atPoint, so this must
+  // track finalPoint/finalDuration, not the live tick's own raw contact
+  // fields), the same shared mechanism resolvePass() uses; never a
+  // second, flat post-action nudge on top (offBallInterleaved below is
+  // what tells runConstructedPossession() to skip it).
   if (interleaveOffBall) {
-    reactOffBall(groups, landingPoint, trace, {
-      fraction: INTERLEAVED_REACTION_FRACTION,
-      defensiveFraction: INTERLEAVED_DEFENSIVE_REACTION_FRACTION,
-      duration: MOVEMENT_DURATIONS.pass,
-      motionContext,
-      excludedIds: [receiver.id],
-    });
+    reactOffBallContinuous(
+      groups,
+      pointOf(owner),
+      finalPoint,
+      finalDuration,
+      trace,
+      { motionContext, excludedIds: [finalReceiver.id], passerId: owner.role === "keeper" ? null : owner.id, passDestination: finalPoint },
+    );
   }
 
-  // The runner adjusts to meet the ball wherever it ACTUALLY lands -- an
-  // explicit mover (never inferred from ballFrom/ballTo -- see
-  // traceEvent()'s own comment), and still a clean touch: claimable()
-  // already verified a genuine arrival-time margin against the ORIGINAL
-  // target, and the bounded accuracy error above isn't large enough to
-  // erase that margin outright -- see MATCH_LAB_PLAN.md for why a full
-  // re-run of the arrival race against the corrected point is deliberately
-  // NOT built here.
   trace.push(
     traceEvent(
       "P.THROUGH.RECEIVE",
-      `${playerName(receiver.player)} runs onto it, clean through`,
+      `${playerName(finalReceiver.player)} runs onto it, clean through`,
       {
-        actor: receiver,
-        mover: receiver,
-        moveFrom: pointOf(receiver),
-        moveTo: landingPoint,
+        actor: finalReceiver,
         movement: "reception",
         outcome: "success",
-        ballFrom: landingPoint,
-        ballTo: landingPoint,
+        ballFrom: finalPoint,
+        ballTo: receiverMotion.position,
         contact: {
-          point: landingPoint,
-          actor: receiver,
+          point: finalPoint,
+          bodyPoint:receiverMotion.position,reachAllowanceYards:1.5,
+          actor: finalReceiver,
           type: "control",
           phase: "start",
         },
         ownerBefore: null,
-        ownerAfter: receiver,
+        ownerAfter: finalReceiver,
+        duration: 160,
       },
     ),
   );
+  // Gameplay v3.2 -- same "freeze on arrival" gap as resolvePass()'s own
+  // P.RECEIVE.CLEAN (see its comment there for the full explanation): the
+  // flight-off-ball call above ends exactly at finalDuration/finalPoint,
+  // and this reception's own 160ms is a genuinely new primary interval
+  // (movement:"reception" is excluded from playback's stationary-contact
+  // overlap shortcut) that only finalReceiver has a move for.
+  if (interleaveOffBall) {
+    reactOffBallContinuous(groups, finalPoint, finalPoint, 160, trace, {
+      motionContext, excludedIds: [finalReceiver.id], overlapWithPrevious: true, chaseIntention: false,
+    });
+  }
   return {
     outcome: "CLEAN",
     code: "P.THROUGH.RECEIVE",
     resolved: true,
     terminal: false,
     possession: "retained",
-    nextOwnerId: receiver.id,
-    ballEnd: landingPoint,
+    nextOwnerId: finalReceiver.id,
+    ballEnd: receiverMotion.position,
     restart: null,
     reason: "through-ball-received",
+    offBallInterleaved: interleaveOffBall,
   };
 }
 
@@ -3626,6 +6197,25 @@ function resolveAerialClearanceContinuation(
       },
       random,
     );
+    // Ball Out of Bounds v1 (2026-09-01) -- clearanceDestinationPoint() is
+    // now genuinely unclamped, so this deliberate "put it out for a
+    // corner" choice is checked against REAL geometry instead of assumed:
+    // classifyPitchExit() is computed FIRST, nothing pushed to `trace`
+    // until it genuinely fires. In the rare case a shallow "behind"
+    // clearance doesn't actually reach the byline, it honestly stays in
+    // play as a loose ball rather than fabricating a corner.
+    const behindExit = classifyPitchExit({
+      from: contactPoint,
+      to: decision.moveTo,
+      lastTouchTeam: defender.team,
+      attackingDirectionByTeam: state.attackingDirection,
+    });
+    if (behindExit) {
+      return pushPitchExitRestart(trace, {
+        actor: defender, ballFrom: contactPoint, exit: behindExit, movement: "clearance",
+        contact: { point: contactPoint, actor: defender, type: "clearance", phase: "start" },
+      });
+    }
     const endpoint = {
       x: decision.moveTo.x,
       y: decision.moveTo.y,
@@ -3634,11 +6224,11 @@ function resolveAerialClearanceContinuation(
     trace.push(
       traceEvent(
         outcome.code,
-        `${playerName(defender.player)} clears it behind for a corner`,
+        `${playerName(defender.player)} clears it behind`,
         {
           actor: defender,
           movement: "clearance",
-          outcome: "turnover",
+          outcome: "neutral",
           ballFrom: contactPoint,
           ballTo: endpoint,
           contact: {
@@ -3653,15 +6243,15 @@ function resolveAerialClearanceContinuation(
       ),
     );
     return {
-      outcome: "BLOCKED/BEHIND",
+      outcome: "LOOSE",
       code: outcome.code,
       resolved: true,
       terminal: true,
-      possession: "dead",
+      possession: "loose",
       nextOwnerId: null,
       ballEnd: endpoint,
-      restart: "corner",
-      reason: "clearance-behind",
+      restart: null,
+      reason: "clearance-behind-short",
     };
   }
 
@@ -3679,22 +6269,34 @@ function resolveAerialClearanceContinuation(
     // comes up short (poor Heading/Composure, or under real pressure) is
     // nudged only PART of the way there instead -- reuses nudgeToward()'s
     // exact "never extrapolate past a real point" arithmetic, not a
-    // second interpolation formula. A clear toward the touchline that
-    // DOES come off clean genuinely goes out of play (a real, deliberate
-    // touchline clearance almost always does) -- a throw-in for the
-    // attacking side, not a contestable loose ball; a short one stays
-    // in play as a genuinely loose ball (no recontest modeled, same
-    // documented simplification every other "loose" outcome here
-    // carries).
-    const landing = outcome.clean
+    // second interpolation formula.
+    const rawTarget = outcome.clean
       ? decision.moveTo
       : nudgeToward(contactPoint, decision.moveTo, 0.45, 100);
+    // Ball Out of Bounds v1 -- see this function's own "clear-behind"
+    // comment above for the full reasoning. Whether this genuinely goes
+    // out (and for which restart -- almost always a throw-in for a
+    // touchline clearance, but a wildly overhit "long" ball down the
+    // middle can just as legitimately sail out for a goal-kick) is now
+    // decided by real geometry against rawTarget, never by which
+    // candidate type the defender happened to choose.
+    const clearanceExit = classifyPitchExit({
+      from: contactPoint,
+      to: rawTarget,
+      lastTouchTeam: defender.team,
+      attackingDirectionByTeam: state.attackingDirection,
+    });
+    if (clearanceExit) {
+      return pushPitchExitRestart(trace, {
+        actor: defender, ballFrom: contactPoint, exit: clearanceExit, movement: "clearance",
+        contact: { point: contactPoint, actor: defender, type: "clearance", phase: "start" },
+      });
+    }
     const endpoint = {
-      x: landing.x,
-      y: landing.y,
-      zone: zoneFromPercent(landing.x, landing.y),
+      x: rawTarget.x,
+      y: rawTarget.y,
+      zone: zoneFromPercent(rawTarget.x, rawTarget.y),
     };
-    const wentOut = decision.type === "clear-touchline" && outcome.clean;
     trace.push(
       traceEvent(
         outcome.code,
@@ -3704,7 +6306,7 @@ function resolveAerialClearanceContinuation(
         {
           actor: defender,
           movement: "clearance",
-          outcome: wentOut ? "turnover" : "neutral",
+          outcome: "neutral",
           ballFrom: contactPoint,
           ballTo: endpoint,
           contact: {
@@ -3718,19 +6320,6 @@ function resolveAerialClearanceContinuation(
         },
       ),
     );
-    if (wentOut) {
-      return {
-        outcome: "TURNOVER",
-        code: outcome.code,
-        resolved: true,
-        terminal: true,
-        possession: "dead",
-        nextOwnerId: null,
-        ballEnd: endpoint,
-        restart: "throw-in",
-        reason: "clearance-touchline-out",
-      };
-    }
     return {
       outcome: "LOOSE",
       code: outcome.code,
@@ -3910,6 +6499,7 @@ function resolveCross(
     groups,
     receiver,
     state.attackingDirection[owner.team],
+    availability?.restartType ?? null,
   );
 
   // Cross Resolution Pass A -- source contest, before the ball is struck
@@ -4024,6 +6614,25 @@ function resolveCross(
     delivery.accuracyErrorYards,
     random,
   );
+  const crossOrigin = pointOf(owner);
+  // Ball Out of Bounds v1 -- see resolvePass()'s own matching comment. A
+  // cross overhit clean out of play never reaches a contest at all.
+  const crossPitchExit = classifyPitchExit({
+    from: crossOrigin,
+    to: landingXY,
+    lastTouchTeam: owner.team,
+    attackingDirectionByTeam: state.attackingDirection,
+  });
+  if (crossPitchExit) {
+    const fullDistanceYards = yardDistance(crossOrigin, landingXY);
+    const exitDistanceYards = yardDistance(crossOrigin, crossPitchExit.ballEnd);
+    const exitDurationMs = fullDistanceYards > 0
+      ? MOVEMENT_DURATIONS.cross * (exitDistanceYards / fullDistanceYards)
+      : 0;
+    return pushPitchExitRestart(trace, {
+      actor: owner, ballFrom: crossOrigin, exit: crossPitchExit, movement: "cross", duration: exitDurationMs,
+    });
+  }
   const landingPoint = {
     x: landingXY.x,
     y: landingXY.y,
@@ -4068,6 +6677,8 @@ function resolveCross(
       duration: MOVEMENT_DURATIONS.cross,
       motionContext,
       excludedIds: [receiver.id],
+      passerId: owner.role === "keeper" ? null : owner.id,
+      passDestination: landingPoint,
     });
   }
 
@@ -4164,38 +6775,57 @@ function resolveCross(
       ),
     );
   }
-  // Range check (2026-08-18) -- a won aerial used to become a header
-  // attempt at goal unconditionally, regardless of how far the contact
-  // point actually was from goal (reported bug: a header from ~35+ yards
-  // out, well beyond where a headed effort at goal is realistic). This is
-  // a defensive backstop, not the primary fix -- generateFreePlayCandidates()
-  // now only offers "cross" to a teammate already inside isCrossTargetZone(),
-  // so Free Play itself shouldn't reach this branch with a distant receiver
-  // any more -- but resolveCross() is also reachable from Scenario Probe
-  // and any other caller that stages its own geometry directly, so the
-  // resolver enforces the same real-football boundary itself rather than
-  // trusting an upstream candidate list it can't see. Reuses the identical
-  // box-plus-margin definition the candidate gate uses, so the two never
-  // silently drift apart.
-  if (!isCrossTargetZone(landingPoint, state.attackingDirection[owner.team])) {
+  return resolveHeaderAtGoal(receiver, keeper, landingPoint, groups, random, trace, { aerialDefender });
+}
+
+// Extracted verbatim from resolveCross()'s own header-finish chain
+// (2026-08-26, Passing v3) -- range check, on-target roll, keeper save,
+// rebound handoff -- so a header contest reached via an ORDINARY LOFTED
+// PASS (Section B, matchPassFlight.js's new height-band contest) finishes
+// exactly the same real way a crossed header always could, rather than a
+// smaller, second-class version of the same play. resolveCross() itself
+// now just calls this too; its own behavior is unchanged, only relocated.
+function resolveHeaderAtGoal(receiver, keeper, contactPoint, groups, random, trace, { aerialDefender = null } = {}) {
+  // X1 already moved the participants to this authoritative aerial-contact
+  // point in playback. Carry that same location into every header/save/
+  // rebound calculation; the roster entry still contains its pre-cross
+  // coordinate because trace resolution itself is intentionally immutable.
+  const receiverAtContact = {
+    ...receiver,
+    ...contactPoint,
+    zone: contactPoint.zone ?? zoneFromPercent(contactPoint.x, contactPoint.y),
+  };
+  const aerialDefenderAtContact = aerialDefender
+    ? {
+        ...aerialDefender,
+        ...contactPoint,
+        zone: contactPoint.zone ?? zoneFromPercent(contactPoint.x, contactPoint.y),
+      }
+    : null;
+  // Range check (2026-08-18, originally resolveCross()'s own) -- a won
+  // aerial must never become a header attempt at goal from well outside
+  // real headed-effort range. Reuses the identical box-plus-margin
+  // definition the candidate gate uses, so the two never silently drift
+  // apart.
+  if (!isCrossTargetZone(contactPoint, state.attackingDirection[receiver.team])) {
     trace.push(
       traceEvent(
         "X1.CONTROL",
         `${playerName(receiver.player)} controls it -- too far out for a header at goal`,
         {
-          actor: receiver,
+          actor: receiverAtContact,
           movement: "reception",
           outcome: "success",
-          ballFrom: landingPoint,
-          ballTo: landingPoint,
+          ballFrom: contactPoint,
+          ballTo: contactPoint,
           contact: {
-            point: landingPoint,
-            actor: receiver,
+            point: contactPoint,
+            actor: receiverAtContact,
             type: "touch",
             phase: "end",
           },
-          ownerBefore: receiver,
-          ownerAfter: receiver,
+          ownerBefore: receiverAtContact,
+          ownerAfter: receiverAtContact,
         },
       ),
     );
@@ -4206,55 +6836,134 @@ function resolveCross(
       terminal: false,
       possession: "retained",
       nextOwnerId: receiver.id,
-      ballEnd: landingPoint,
+      ballEnd: contactPoint,
       restart: null,
       reason: "cross-received-controlled",
     };
   }
   const headerAttempt = resolveFinishAttempt(
     "header",
-    receiver.player,
+    receiverAtContact.player,
     random,
-    aerialDefender ? 1 : 1.15,
+    aerialDefenderAtContact ? 1 : 1.15,
   );
   const headerMiss = headerAttempt.onTarget
     ? null
-    : missPointFor(receiver, keeper, null, headerAttempt.code);
-  // Shot Placement v1 (2026-08-20) never reached headers -- this stayed on
-  // goalPointFor()'s flat keeper-position/x:50 aim the whole time, unlike
-  // resolveShoot()'s own on-target event (shotAimPoint). Given the same
-  // treatment here now, computed ONCE and reused for both this event's own
-  // ballTo and the EMPTY_NET branch's ballFrom below -- same "never
-  // re-derive" rule as shotAimPoint (a second independent goalPointFor()
-  // call in EMPTY_NET is exactly the bug that produced a real ball
-  // discontinuity there, caught by Timeline Playback v1's continuity
-  // validation, 2026-08-21). A contested aerial header is a rushed, less
-  // composed connection than an uncontested free header -- aerialDefender
-  // sets the pressure term the same way it already scales
-  // resolveFinishAttempt()'s own quality multiplier just above.
+    : missPointFor(receiverAtContact, keeper, null, headerAttempt.code);
   const headerAimPoint = headerAttempt.onTarget
-    ? shotPlacementSpread(receiver, keeper, aerialDefender ? 0.35 : 0.1, random)
+    ? shotPlacementSpread(receiverAtContact, keeper, aerialDefenderAtContact ? 0.35 : 0.1, random)
     : null;
+  // Header Save Contact v1 -- an on-target header and the goalkeeper now
+  // share one physical interval. Previously F.HEADER moved only the ball to
+  // the mouth, then K.SAVE started the keeper's journey afterward. During a
+  // declared catch this visibly parked the ball by a post while the keeper
+  // was still elsewhere. The same reach envelope used by ordinary shots now
+  // decides whether this keeper can make contact, and advanceKeeperSaveMotion
+  // authors that exact body movement during the incoming header.
+  const keeperBeaten = keeper && isKeeperBeaten(receiverAtContact, keeper);
+  const headerFlight = headerAttempt.onTarget
+    ? headerShotFlight(contactPoint, headerAimPoint)
+    : null;
+  const keeperEnvelope = headerFlight && keeper && !keeperBeaten
+    ? simulateShotKeeperEnvelope(headerFlight, keeper)
+    : { reached: false };
+  // Preserve resolveKeeperSave's established header outcome weighting once
+  // the body can genuinely reach the ball. Geometry only vetoes an impossible
+  // save; it does not invent a second save-flavour distribution.
+  const selectedSave = headerAttempt.onTarget && keeper && !keeperBeaten
+    ? resolveKeeperSave(
+        receiverAtContact.player,
+        keeper.player,
+        "header",
+        FIXED_MINUTE,
+        random,
+        receiverAtContact.zone,
+      )
+    : null;
+  const save = selectedSave && keeperEnvelope.reached
+    ? selectedSave
+    : { code: "K.SAVE.0", goal: true, rebound: false };
+  // K.SAVE.0 is a clean beat: even if the keeper could get close enough in
+  // principle, there is no hand contact, so the ball completes its flight to
+  // the goal plane. All actual save/tip outcomes stop at the first reachable
+  // ball/body envelope and continue from that one point.
+  const keeperMakesContact = Boolean(
+    headerAttempt.onTarget
+      && keeper
+      && !keeperBeaten
+      && keeperEnvelope.reached
+      && save.code !== "K.SAVE.0",
+  );
+  const headerDurationMs = headerFlight
+    ? (keeperMakesContact ? keeperEnvelope.atMs : headerFlight.durationMs)
+    : MOVEMENT_DURATIONS.header;
+  const headerEndpoint = headerFlight
+    ? shotPositionAtElapsed(headerFlight, headerDurationMs)
+    : null;
+  const keeperMotion = headerFlight && keeper && !keeperBeaten
+    ? advanceKeeperSaveMotion({
+        from: pointOf(keeper),
+        intentionTarget: headerFlight.actual,
+        player: keeper.player,
+        elapsedMs: headerDurationMs,
+        reactionDelayMs: reactionDelayMsFor(keeper.player),
+        intention: "intercept",
+        paceToArrival: false,
+      })
+    : null;
+  const keeperAtContact = keeperMotion
+    ? { ...keeper, ...keeperMotion.position }
+    : keeper;
   trace.push(
     traceEvent(
       headerAttempt.code,
       headerAttempt.onTarget ? "On target" : "Off target",
       {
-        actor: receiver,
+        actor: receiverAtContact,
         keeper,
         movement: "header",
+        duration: headerDurationMs,
+        playerMoves: keeperMotion
+          ? [{
+              player: keeper,
+              from: pointOf(keeper),
+              to: keeperMotion.position,
+              action: "intercept",
+              trajectory: keeperMotion.trajectory,
+              motionModel: keeperMotion.motionModel,
+              reactionDelayMs: reactionDelayMsFor(keeper.player),
+              intention: { action: "intercept", target: headerFlight.actual },
+            }]
+          : null,
+        ballTrajectory: headerFlight
+          ? Array.from({ length: 13 }, (_, index) => {
+              const progress = index / 12;
+              return {
+                progress,
+                position: shotPositionAtElapsed(
+                  headerFlight,
+                  progress * headerDurationMs,
+                ),
+                velocity: {
+                  x: (headerFlight.actual.x - headerFlight.from.x) / headerFlight.durationMs,
+                  y: (headerFlight.actual.y - headerFlight.from.y) / headerFlight.durationMs,
+                },
+                mode: "airborne",
+              };
+            })
+          : undefined,
         outcome: headerAttempt.onTarget ? "success" : "fail",
-        ballFrom: landingPoint,
+        ballFrom: contactPoint,
         ballTo: headerAttempt.onTarget
-          ? headerAimPoint
+          ? headerEndpoint
           : headerMiss.point,
         contact: {
-          point: landingPoint,
-          actor: receiver,
+          point: contactPoint,
+          actor: receiverAtContact,
           type: "header",
           phase: "start",
         },
-        ownerBefore: receiver,
+        ownerBefore: receiverAtContact,
         ownerAfter: null,
         badge: headerAttempt.onTarget ? null : headerMiss.badge,
         heightCue: headerAttempt.onTarget ? false : headerMiss.heightCue,
@@ -4274,28 +6983,8 @@ function resolveCross(
       reason: "header-off-target",
     };
   }
-  const keeperBeaten = keeper && isKeeperBeaten(receiver, keeper);
   if (!keeper || keeperBeaten) {
-    // No keeper placed means an actually empty net, not an ambiguous state
-    // -- an on-target effort with nobody in goal is a goal, not something
-    // left unresolved. A keeper who's been rounded (see isKeeperBeaten())
-    // is the SAME structural situation -- there's genuinely nobody
-    // positioned to make the save, whether or not a keeper marker happens
-    // to be placed somewhere else on the pitch. "Unresolved" is for when
-    // the engine genuinely can't determine an outcome, not a stand-in for
-    // "nobody's there to stop it."
-    // ballFrom chains from the header event's own real endpoint --
-    // headerAimPoint, already the on-target header's ballTo one event up
-    // (Shot Placement v1 now reaches headers too, see headerAimPoint's own
-    // comment) -- not pointOf(receiver) (would re-travel from the
-    // receiver's own position a second time) and not a fresh goalPointFor()/
-    // shotPlacementSpread() call (would independently redraw random() and
-    // silently land a DIFFERENT point than the header actually flew to --
-    // a real ball discontinuity, caught by Timeline Playback v1's own
-    // continuity validation, 2026-08-21). emptyNetEnd reuses that same x,
-    // just pushed to net depth for the "ball trapped in the net" landing
-    // spot.
-    const emptyNetEnd = netPointFor(receiver, headerAimPoint.x);
+    const emptyNetEnd = netPointFor(receiverAtContact, headerAimPoint.x);
     trace.push(
       traceEvent(
         "EMPTY_NET",
@@ -4303,7 +6992,7 @@ function resolveCross(
           ? `${playerName(receiver.player)} finishes into an empty net -- ${playerName(keeper.player)} is well beaten`
           : `${playerName(receiver.player)} finishes into an empty net -- no goalkeeper placed`,
         {
-          actor: receiver,
+          actor: receiverAtContact,
           movement: "shot",
           outcome: "goal",
           ballFrom: headerAimPoint,
@@ -4324,18 +7013,12 @@ function resolveCross(
       reason: keeperBeaten ? "keeper-beaten-goal" : "empty-net-goal",
     };
   }
-  const save = resolveKeeperSave(
-    receiver.player,
-    keeper.player,
-    "header",
-    FIXED_MINUTE,
-    random,
-    receiver.zone,
-  );
   const saveEndpoint = pushKeeperSaveEvent(trace, {
-    shooterEntry: receiver,
-    keeperEntry: keeper,
+    shooterEntry: receiverAtContact,
+    keeperEntry: keeperAtContact,
     save,
+    contactPoint: headerEndpoint,
+    keeperContactResolved: true,
   });
   if (save.goal) {
     return {
@@ -4350,26 +7033,18 @@ function resolveCross(
       reason: "header-save-goal",
     };
   }
-  if (!save.rebound) {
+  if (save.reboundTransition || !save.rebound) {
     return keeperSaveTransition(save, keeper, saveEndpoint, "header");
   }
-  if (!aerialDefender) {
+  if (!aerialDefenderAtContact) {
     // No opponent placed to contest the loose ball either -- uncontested,
     // same principle as the aerial race above, straight to the shot roll.
-    const scored =
-      random() <
-      transitionShotChance(
-        receiver.player,
-        keeper.player,
-        FIXED_MINUTE,
-        0.32,
-        poacherScore,
-      );
+    const scored = random() < reboundShotChance(receiverAtContact.player, keeper.player);
     const reboundMiss = scored
       ? null
-      : missPointFor(receiver, keeper, null, null);
+      : missPointFor(receiverAtContact, keeper, null, null);
     const reboundEnd = scored
-      ? netPointFor(receiver, shotPlacementSpread(receiver, keeper, REBOUND_SHOT_PRESSURE, random).x)
+      ? netPointFor(receiverAtContact, shotPlacementSpread(receiverAtContact, keeper, REBOUND_SHOT_PRESSURE, random).x)
       : reboundMiss.point;
     trace.push(
       traceEvent(
@@ -4378,26 +7053,21 @@ function resolveCross(
           ? `${playerName(receiver.player)} scrambles it in, unchallenged`
           : "The rebound drifts away, unchallenged",
         {
-          actor: receiver,
+          actor: receiverAtContact,
           keeper,
           movement: "rebound-shot",
           outcome: scored ? "goal" : "fail",
-          // Continues from saveEndpoint -- the save's real endpoint, only
-          // reachable when save.rebound is true (K.SAVE.2/.5/.6).
-          // mover/moveTo: the receiver genuinely moves to meet the ball at
-          // the rebound spot -- see resolveShoot()'s identical fix.
-          mover: receiver,
-          moveTo: saveEndpoint,
+          ...realMoverTrajectory(receiverAtContact, saveEndpoint, { floorMs: MOVEMENT_DURATIONS["rebound-shot"] }),
           ballFrom: saveEndpoint,
           ballTo: reboundEnd,
           badge: scored ? null : reboundMiss.badge,
           contact: {
             point: saveEndpoint,
-            actor: receiver,
+            actor: receiverAtContact,
             type: "rebound-shot",
             phase: "start",
           },
-          ownerBefore: receiver,
+          ownerBefore: receiverAtContact,
           ownerAfter: null,
         },
       ),
@@ -4406,12 +7076,6 @@ function resolveCross(
       outcome: scored ? "GOAL" : "NO GOAL",
       code: scored ? "REBOUND.GOAL" : "REBOUND.MISS",
       resolved: true,
-      // A miss here is the ball genuinely going out of play (wide/over) --
-      // NOT a keeper catch. The old nextOwnerId: keeper.id claimed the
-      // keeper owned the ball at reboundEnd (an off-target miss point
-      // nobody, keeper included, is actually standing at) -- the exact
-      // "keeper ownership at an out-of-play endpoint" bug this pass
-      // fixes.
       terminal: true,
       possession: "dead",
       nextOwnerId: null,
@@ -4421,10 +7085,10 @@ function resolveCross(
     };
   }
   return resolveReboundScramble(
-    receiver,
-    aerialDefender,
-    keeper,
-    receiver.zone,
+    receiverAtContact,
+    aerialDefenderAtContact,
+    keeperAtContact,
+    receiverAtContact.zone,
     random,
     trace,
     saveEndpoint,
@@ -4479,46 +7143,69 @@ function engagementOutcomeLabel(outcome) {
 // the ball reacts to the outcome. Keeping those beats separate lets the
 // contact validator assert the tackler really arrived without pretending a
 // contact and its post-contact deflection happened at the same coordinate.
+//
+// Engagement Breaker v1 (2026-08-28) -- a real reported bug: "won"/
+// "beaten" used to nudge the ball just 1.2-1.5yd, still comfortably
+// inside DUEL_RANGE_YARDS (6) -- the new owner's very next decision found
+// the SAME defender re-engaging at effectively 0 real separation,
+// feeding the shield/duel wrestling loop the same way P.HOLD.SHIELD's
+// own frozen contactPoint did. Both outcomes now use
+// contestSeparationPoints() (this file, see its own header) for a real
+// 4-6yd winner escape plus a genuine loser gap -- the winner drives away
+// WITH the ball, the loser is left behind, never both still standing at
+// the shared contact point.
 function duelReaction(owner, defender, outcome) {
   const contactPoint = pointOf(owner);
   if (outcome === "foul")
-    return { contactPoint, ballEnd: contactPoint, mover: null, code: null };
+    return { contactPoint, ballEnd: contactPoint, winner: null, loser: null, code: null };
   if (outcome === "won") {
+    const { winnerPoint, loserPoint } = contestSeparationPoints(contactPoint, defender.team);
     return {
       contactPoint,
-      ballEnd: advanceTowardGoal(contactPoint, defender.team, 1.2),
-      mover: defender,
+      ballEnd: winnerPoint,
+      winner: defender, winnerPoint,
+      loser: owner, loserPoint,
       code: "T.WON.CONTROL",
-      label: `${playerName(defender.player)} takes the ball away from the challenge`,
+      label: `${playerName(defender.player)} wins the ball and drives away from the challenge`,
       possession: defender,
     };
   }
   if (outcome === "beaten") {
+    const { winnerPoint, loserPoint } = contestSeparationPoints(contactPoint, owner.team);
     return {
       contactPoint,
-      ballEnd: advanceTowardGoal(contactPoint, owner.team, 1.5),
-      mover: owner,
+      ballEnd: winnerPoint,
+      winner: owner, winnerPoint,
+      loser: defender, loserPoint,
       code: "T.BEATEN.ESCAPE",
-      label: `${playerName(owner.player)} nudges the ball clear of the challenge`,
+      label: `${playerName(owner.player)} rides the challenge and bursts clear`,
       possession: owner,
     };
   }
-  let looseEnd = approachPoint(contactPoint, pointOf(defender), 1.4);
-  if (yardDistance(contactPoint, looseEnd) < 0.15) {
-    const yard = toYardPoint(contactPoint);
-    looseEnd = fromYardPoint({
-      x: clamp(
-        0,
-        PITCH_WIDTH_YARDS,
-        yard.x + (String(owner.id) < String(defender.id) ? -1.4 : 1.4),
-      ),
-      y: yard.y,
-    });
-  }
+  // "loose" -- nobody wins a position here, only the ball's own pop
+  // direction/distance (reusing contestSeparationPoints() purely for its
+  // geometry, biased in the challenging defender's own forward
+  // direction -- the same "Strength direction" bias a real knock-on has).
+  const { winnerPoint: poppedPoint } = contestSeparationPoints(contactPoint, defender.team, 6);
+  // Playback Fluidity v1 (2026-09-05) -- a real reported bug: "players
+  // freeze". Nobody winning POSSESSION is not the same as nobody MOVING.
+  // This outcome used to author no player positions at all, on the reasoning
+  // that there is no winner to place -- so both bodies stood frozen on the
+  // contact point for the whole deflection window while only the ball moved.
+  // A challenge that knocks the ball loose is two players colliding and
+  // carrying through it. `separation` is the physical fact (who ends up
+  // where), kept deliberately separate from winner/loser, which remain the
+  // POSSESSION fact and stay null here.
+  const looseSeparation = contestSeparationPoints(contactPoint, defender.team);
   return {
     contactPoint,
-    ballEnd: { ...looseEnd, zone: zoneFromPercent(looseEnd.x, looseEnd.y) },
-    mover: null,
+    ballEnd: poppedPoint,
+    winner: null, winnerPoint: null,
+    loser: null, loserPoint: null,
+    separation: [
+      { player: defender, point: looseSeparation.winnerPoint, action: "challenge" },
+      { player: owner, point: looseSeparation.loserPoint, action: "beaten" },
+    ],
     code: "T.LOOSE.DEFLECT",
     label: "The challenge knocks the ball loose",
     possession: null,
@@ -4547,10 +7234,16 @@ const OFF_BALL_MIN_SPACING_YARDS = 8;
 function applyOffBallSeparation(proposals, roster) {
   if (proposals.length < 1) return proposals;
   const teamOf = new Map(roster.map((entry) => [entry.id, entry.team]));
+  const rosterById = new Map(roster.map((entry) => [String(entry.id), entry]));
   const proposalById = new Map(
     proposals.map((proposal) => [proposal.id, proposal]),
   );
-  return proposals.map((proposal) => {
+  const spaced = proposals.map((proposal) => {
+    // Closing a shooting angle is not an outfield spacing job. Pushing the
+    // keeper eight yards away from a defender's proposed recovery position
+    // can send him back to the line. Body separation still applies below.
+    if (proposal.role === "keeper"
+      && ["keeper-close-down", "keeper-sweep"].includes(proposal.action)) return proposal;
     const targetYards = toYardPoint(proposal.target);
     let offsetX = 0;
     let offsetY = 0;
@@ -4558,7 +7251,11 @@ function applyOffBallSeparation(proposals, roster) {
       if (
         !other ||
         other.id === proposal.id ||
-        teamOf.get(other.id) !== teamOf.get(proposal.id)
+        teamOf.get(other.id) !== teamOf.get(proposal.id) ||
+        // Goalkeepers do not participate in the outfield unit's tactical
+        // eight-yard repulsion. Real body occupancy is still enforced below.
+        // Including them here could push a centre-back toward the goal line.
+        other.role === "keeper"
       )
         continue;
       const otherProposal = proposalById.get(other.id);
@@ -4592,6 +7289,68 @@ function applyOffBallSeparation(proposals, roster) {
       target: { ...separated, zone: zoneFromPercent(separated.x, separated.y) },
     };
   });
+  const occupied = applyBodyOccupancy(spaced, roster);
+  const keeperByTeam = new Map(
+    roster.filter((entry) => entry?.role === "keeper").map((entry) => [entry.team, entry]),
+  );
+  const proposalByStringId = new Map(occupied.map((entry) => [String(entry.id), entry]));
+  return occupied.map((proposal) => {
+    if (proposal.role === "keeper" || proposal.action === "cover-goal") return proposal;
+    const player = rosterById.get(String(proposal.id));
+    const keeper = player ? keeperByTeam.get(player.team) : null;
+    if (!keeper) return proposal;
+    const keeperTarget = proposalByStringId.get(String(keeper.id))?.target ?? keeper;
+    const target = outfieldPositionAheadOfKeeper(
+      proposal.target,
+      keeper,
+      keeperTarget,
+      state.attackingDirection[player.team],
+    );
+    if (target === proposal.target) return proposal;
+    return {
+      ...proposal,
+      target: { ...target, zone: zoneFromPercent(target.x, target.y) },
+    };
+  });
+}
+
+// Player Body Occupancy v1 (2026-09-06) -- see src/lib/playerBody.js's own
+// header for why this is a SECOND, different constraint rather than a
+// retuning of the 8-yard tactical spacing above.
+//
+// This adjusts both teams' proposed destinations before worldMotion limits
+// their travel. It does not certify the current bodies or paths as collision
+// free, and must never be applied to the sampled positions after movement.
+//
+// Roster members with no proposal in this batch (whoever the caller
+// excluded -- the ball carrier, an interceptor running their own authored
+// path) are still real bodies to avoid, so they take part as ANCHORED
+// obstacles: they are never displaced by this pass, but proposals yield
+// around them.
+function applyBodyOccupancy(proposals, roster) {
+  const proposalIds = new Set(proposals.map((proposal) => String(proposal.id)));
+  const anchors = roster.filter((entry) => entry && !proposalIds.has(String(entry.id)));
+  const bodies = [
+    ...proposals.map((proposal) => ({
+      id: proposal.id, x: proposal.target.x, y: proposal.target.y,
+    })),
+    ...anchors.map((entry) => ({ id: entry.id, x: entry.x, y: entry.y })),
+  ];
+  const resolved = resolveBodyOverlaps(bodies, {
+    anchoredIds: anchors.map((entry) => entry.id),
+  });
+  const pointById = new Map(resolved.map((body) => [String(body.id), body]));
+  return proposals.map((proposal) => {
+    const point = pointById.get(String(proposal.id));
+    if (!point) return proposal;
+    const unchanged = Math.abs(point.x - proposal.target.x) < 0.001
+      && Math.abs(point.y - proposal.target.y) < 0.001;
+    if (unchanged) return proposal;
+    return {
+      ...proposal,
+      target: { x: point.x, y: point.y, zone: zoneFromPercent(point.x, point.y) },
+    };
+  });
 }
 
 const OFF_BALL_ACTION_PHRASE = {
@@ -4602,23 +7361,56 @@ const OFF_BALL_ACTION_PHRASE = {
     "hold-width": "holds the width",
     "diagonal-inside": "moves diagonally inside",
     "drop-deep": "drops deep to offer a link",
+    "attack-near": "attacks the near post",
+    "attack-spot": "attacks the penalty spot",
+    "attack-far": "attacks the far post",
+    "edge-rebound": "arrives for the edge-of-box rebound",
     "drag-away": "drags a marker away",
     "pin-last-line": "pins the last line",
     overload: "joins the overload",
     "clear-the-zone": "clears the zone",
+    // Pattern Vocabulary V1, Step 1 (2026-09-02)
+    "vacate-pocket": "vacates the pocket",
+    "arc-overlap": "makes an overlapping run",
+    "run-off-pass": "runs off the pass",
+    "peel-square": "peels square away from the marker",
+    "show-wide": "shows wide for the ball",
+    "check-decel": "checks, then darts into the gap",
   },
   defender: {
+    "cover-goal": "runs back to protect the exposed goal",
+    "respect-held-ball": "drops away while the goalkeeper holds the ball",
     "press-ball": "presses the ball",
-    cover: "drops into cover",
     mark: "tracks a runner",
-    "screen-lane": "screens a passing lane",
+    screen: "screens the danger",
     "shift-unit": "shifts with the unit",
     "drop-block": "drops into the block",
+    // Pattern Vocabulary V1, Step 1 (2026-09-02)
+    delay: "closes the gap, holding the lane",
   },
   keeper: {
     "set-position": "holds the goalkeeper line",
+    "keeper-sweep": "rushes to meet the ball",
+    "keeper-close-down": "closes down the attacker and narrows the angle",
+    "keeper-recover": "scrambles back toward goal",
   },
 };
+
+function enforceHeldKeeperDistance(targets, opponents, keeperPoint, keeperId) {
+  const opponentById = new Map(opponents.map((entry) => [String(entry.id), entry]));
+  for (const target of targets) {
+    const opponent = opponentById.get(String(target.id));
+    if (!opponent) continue;
+    const legalTarget = heldKeeperStandoffTarget(opponent, target.target, keeperPoint);
+    Object.assign(target, {
+      action: "respect-held-ball",
+      target: legalTarget,
+      intentionTarget: legalTarget,
+      teamJob: "respect-held-ball",
+      subjectId: keeperId,
+    });
+  }
+}
 
 function offBallAssignmentsLabel(moves, role) {
   return moves
@@ -4660,6 +7452,202 @@ function offBallAssignmentsLabel(moves, role) {
 // lets a caller give defenders a distinctly larger share of their own
 // already-capped advance per interleaved reaction than attackers get,
 // without changing attacking off-ball movement's own pacing at all.
+// Off-Ball v2 (2026-08-24) -- rebuilds motionContext.marking from this
+// reaction's own planDefensiveRepositioning() results (persisted for the
+// NEXT reaction's own stickiness), and inverts it into a per-ATTACKER
+// lookup (subjectId -> {tightness, markerRole}) for
+// planAttackerRepositioning()'s own tight-mark reaction. Pure bookkeeping
+// -- spatialDecision.js itself never mutates anything; this is the one
+// place that reads its results and writes them back.
+function syncMarkingAssignments(defenderPlan, motionContext) {
+  const nextMarking = {};
+  const markingLookup = {};
+  for (const step of defenderPlan) {
+    if (!step.mode) continue;
+    nextMarking[step.id] = { subjectId: step.subjectId ?? null, mode: step.mode, tightness: step.tightness };
+    if (step.mode === "man" && step.subjectId) {
+      markingLookup[step.subjectId] = { tightness: step.tightness, markerRole: step.markerRole ?? null };
+    }
+  }
+  if (motionContext) motionContext.marking = nextMarking;
+  return markingLookup;
+}
+
+// Team Shape & Phase Intelligence v1. These helpers adapt the pure phase/
+// shape modules to Match Lab's existing {owner, teammates, opponents,
+// keepers} snapshot. They write only possession-local engine context; the
+// authored roster and every DOM node remain outside this path.
+function uniqueSnapshotEntries(snapshots) {
+  const seen = new Set();
+  return [
+    snapshots.owner,
+    ...snapshots.teammates,
+    ...snapshots.opponents,
+    ...snapshots.ownKeepers,
+    ...snapshots.opposingKeepers,
+  ].filter((entry) => {
+    if (!entry || seen.has(String(entry.id))) return false;
+    seen.add(String(entry.id));
+    return true;
+  });
+}
+
+function teamPhaseFacts(snapshots, ballFrom, ballPoint, motionContext) {
+  return {
+    possessionTeam: snapshots.owner?.team ?? null,
+    owner: snapshots.owner ?? null,
+    ballFrom,
+    ballPoint,
+    attackingDirectionByTeam: state.attackingDirection,
+    restartActive: motionContext?.restartContext?.status === "restart",
+    restartTaken: false,
+    directRestart: Boolean(motionContext?.restartContext?.direct),
+  };
+}
+
+function ensureTeamPhaseContext(motionContext, snapshots, ballFrom, ballPoint) {
+  if (!motionContext) return null;
+  if (!motionContext.teamPhase) {
+    const teams = [...new Set(uniqueSnapshotEntries(snapshots).map((entry) => entry.team).filter(Boolean))];
+    motionContext.teamPhase = createTeamPhaseState({
+      teams,
+      possessionTeam: snapshots.owner?.team ?? null,
+      restartActive: motionContext.restartContext?.status === "restart",
+    });
+  }
+  motionContext.teamPhase = updateTeamPhaseState(
+    motionContext.teamPhase,
+    teamPhaseFacts(snapshots, ballFrom, ballPoint, motionContext),
+    0,
+  );
+  motionContext.teamShapeJobs ||= {};
+  motionContext.shapeSnapshots ||= [];
+  motionContext.simulationTimeMs ||= 0;
+  return motionContext.teamPhase;
+}
+
+function diagnosticShapeAssignment(assignment) {
+  const region = (value) => value ? { ...value, flags: { ...value.flags } } : null;
+  return {
+    id: assignment.id,
+    team: assignment.team,
+    teamPhase: assignment.teamPhase,
+    teamJob: assignment.teamJob,
+    positionalSlot: assignment.positionalSlot,
+    tacticalRole: assignment.tacticalRole,
+    duty: assignment.duty,
+    formationAnchor: { ...assignment.formationAnchor },
+    shapeTarget: { ...assignment.shapeTarget },
+    intentionTarget: { ...assignment.intentionTarget },
+    occupiedLane: assignment.occupiedLane,
+    occupiedDepthBand: assignment.occupiedDepthBand,
+    currentRegion: region(assignment.currentRegion),
+    shapeRegion: region(assignment.shapeRegion),
+    intendedRegion: region(assignment.intendedRegion),
+    regionMove: assignment.regionMove,
+    targetRegionOccupancy: assignment.targetRegionOccupancy,
+    runIntoOccupiedRegion: assignment.runIntoOccupiedRegion,
+    runIntoOpenRegion: assignment.runIntoOpenRegion,
+  };
+}
+
+function coordinateTargetProposals({
+  targets, snapshots, ballPoint, phaseState, motionContext,
+  activeOwnerId = snapshots.owner?.id ?? null, recordSnapshot = false,
+  simulationTimeMs = motionContext?.simulationTimeMs ?? 0,
+}) {
+  const roster = uniqueSnapshotEntries(snapshots);
+  const possessionTeam = snapshots.owner?.team ?? null;
+  const byId = new Map(targets.map((target) => [String(target.id), target]));
+  const teamDiagnostics = {};
+  for (const team of [...new Set(roster.map((entry) => entry.team).filter(Boolean))]) {
+    const entries = roster.filter((entry) => entry.team === team);
+    // Legacy/sparse resolver fixtures have no authored formation model.
+    // Preserve their established local-planner behaviour; coordinated shape
+    // becomes authoritative once a real Match Setup supplies anchors.
+    if (entries.filter((entry) => entry.formationAnchor).length < Math.min(3, entries.length)) continue;
+    const basePlans = targets
+      .filter((target) => entries.some((entry) => String(entry.id) === String(target.id)))
+      .map((target) => ({
+        id: target.id,
+        action: target.action,
+        intentionTarget: target.intentionTarget ?? target.target,
+      }));
+    const coordinated = coordinateTeamShape({
+      entries,
+      ballPoint,
+      possessionTeam,
+      ownerId: team === possessionTeam ? activeOwnerId : null,
+      attackingDirection: state.attackingDirection[team],
+      phase: phaseForTeam(phaseState, team)
+        ?? (team === possessionTeam ? "progression" : "defensive-block"),
+      previousJobs: motionContext?.teamShapeJobs?.[team] || {},
+      style: attackingSettingsFor(team).style,
+      attacking: attackingSettingsFor(team),
+      transition: transitionSettingsFor(team),
+      marking: motionContext?.territoryPress?.team === team && motionContext.simulationTimeMs < motionContext.territoryPress.untilMs
+        ? { ...markingSettingsFor(team), pressing: "high", engagementLine: "high" }
+        : markingSettingsFor(team),
+      oppositionOwner: team === possessionTeam ? null : snapshots.owner,
+      basePlans,
+    });
+    if (motionContext) motionContext.teamShapeJobs[team] = coordinated.jobs;
+    for (const assignment of coordinated.assignments) {
+      const target = byId.get(String(assignment.id));
+      if (!target) continue;
+      target.target = { ...assignment.intentionTarget };
+      target.intentionTarget = { ...assignment.intentionTarget };
+      target.shapeTarget = { ...assignment.shapeTarget };
+      target.formationAnchor = { ...assignment.formationAnchor };
+      target.teamJob = assignment.teamJob;
+      target.teamPhase = assignment.teamPhase;
+      target.occupiedLane = assignment.occupiedLane;
+      target.occupiedDepthBand = assignment.occupiedDepthBand;
+      target.currentRegion = assignment.currentRegion;
+      target.shapeRegion = assignment.shapeRegion;
+      target.intendedRegion = assignment.intendedRegion;
+      target.regionMove = assignment.regionMove;
+      target.targetRegionOccupancy = assignment.targetRegionOccupancy;
+      target.tacticalRole = assignment.tacticalRole;
+      target.duty = assignment.duty;
+    }
+    teamDiagnostics[team] = {
+      phase: phaseForTeam(phaseState, team),
+      metrics: coordinated.metrics,
+      assignments: coordinated.assignments.map(diagnosticShapeAssignment),
+    };
+  }
+  if (recordSnapshot && motionContext && Object.keys(teamDiagnostics).length) {
+    motionContext.shapeSnapshots.push({
+      timeMs: simulationTimeMs,
+      ball: { ...ballPoint },
+      teams: teamDiagnostics,
+    });
+  }
+  // Emergency goalkeeper/goal-cover jobs supersede formation anchors. They
+  // remain destinations, subject to the same movement budget as every job.
+  for (const keeper of snapshots.opposingKeepers || []) {
+    const proposal = byId.get(String(keeper.id));
+    if (!proposal) continue;
+    const response = planKeeperResponse({ keeper, ball: ballPoint, attacker: snapshots.owner,
+      defenders: snapshots.opponents, defendingDirection: state.attackingDirection[keeper.team],
+      velocity: motionContext?.state?.players?.[keeper.id]?.velocity ?? keeper.keeperVelocity,
+      holdTarget: keeperPositioningPoint(ballPoint, state.attackingDirection[keeper.team]),
+      random: seededRandom(hashString(`keeper-read:${motionContext?.seed ?? 0}:${keeper.id}:${Math.floor(simulationTimeMs / 500)}`)),
+    });
+    if (response.action !== "set-position") Object.assign(proposal, {
+      target: response.target, intentionTarget: response.target,
+      action: response.action, teamJob: response.action, reactionDelayMs: response.reactionDelayMs,
+    });
+    const cover = chooseGoalCover({ keeper, defenders: snapshots.opponents, ball: ballPoint,
+      defendingDirection: state.attackingDirection[keeper.team], keeperAction: response.action });
+    const defender = cover && byId.get(String(cover.id));
+    if (defender) Object.assign(defender, { target: cover.target, intentionTarget: cover.target,
+      action: cover.action, teamJob: cover.action, reactionDelayMs: cover.reactionDelayMs });
+  }
+  return { targets, teamDiagnostics };
+}
+
 function reactOffBall(
   defendingGroups,
   ballPoint,
@@ -4671,6 +7659,10 @@ function reactOffBall(
     motionContext = null,
     excludedIds = [],
     overlapStartOffsetMs = 0,
+    // Pattern Vocabulary V1, Step 1 (2026-09-02) -- see buildLiveJobTargets()'s
+    // own matching comment; optional and additive, same convention.
+    passerId = null,
+    passDestination = null,
   } = {},
 ) {
   // Motion v1: every tactical target is calculated against ONE immutable
@@ -4722,9 +7714,49 @@ function reactOffBall(
     return null;
   };
 
-  if (snapshots.teammates.length) {
-    const attackerPlan = planAttackerRepositioning(
+  // Off-Ball v2 (2026-08-24) -- the defensive plan is computed FIRST here
+  // (moved ahead of the attacker plan below) so planAttackerRepositioning()
+  // can react to who's actually marking each attacker this step, not the
+  // reverse. syncMarkingAssignments() both persists the sticky assignment
+  // into motionContext.marking for the NEXT reaction and inverts THIS
+  // reaction's own results into a per-attacker lookup.
+  //
+  // Last-Man / Through-Ball Recovery v1 (2026-08-26, Off-Ball Motion v3) --
+  // identifyLineBreakingRunnerId() runs the SAME line-breaking-runner
+  // selection planAttackerRepositioning() below will use on its own, cheap
+  // enough (pure geometry, no randomness) to run twice per reaction rather
+  // than reordering the defense-first pass above and losing the
+  // markingLookup feedback loop it depends on. Lets planDefensiveRepositioning()'s
+  // own recovery override know WHO is making a real run in behind DURING a
+  // through ball's flight, not only once they've already received it.
+  const lineBreakingRunnerId = snapshots.teammates.length
+    ? identifyLineBreakingRunnerId(snapshots.teammates, snapshots.opponents, attackDirection, ballPoint, snapshots.keeper)
+    : null;
+  let markingLookup = {};
+  let defenderMarkingPlan = [];
+  if (snapshots.opponents.length) {
+    const defendingDirectionForMarking =
+      state.attackingDirection[snapshots.opponents[0].team];
+    const defendingTeamMarking = markingSettingsFor(snapshots.opponents[0].team);
+    defenderMarkingPlan = planDefensiveRepositioning(
+      ballPoint,
       snapshots.teammates,
+      snapshots.opponents,
+      defendingDirectionForMarking,
+      {
+        previousMarking: motionContext?.marking || {},
+        ownerId: snapshots.owner?.id ?? null,
+        scheme: defendingTeamMarking.scheme,
+        tightness: defendingTeamMarking.tightness,
+        runnerId: lineBreakingRunnerId,
+      },
+    );
+    markingLookup = syncMarkingAssignments(defenderMarkingPlan, motionContext);
+  }
+
+  if (snapshots.teammates.length || (passerId && snapshots.owner)) {
+    const attackerPlan = planAttackerRepositioning(
+      passerId && snapshots.owner ? [...snapshots.teammates, snapshots.owner] : snapshots.teammates,
       snapshots.opponents,
       attackDirection,
       {
@@ -4732,25 +7764,30 @@ function reactOffBall(
         keeper: snapshots.keeper,
         previousSupportId: previousActionHolderId("support-short"),
         previousDropId: previousActionHolderId("drop-deep"),
+        previousShowId: previousActionHolderId("show-to-feet"),
+        markingLookup,
+        ownerBand: snapshots.owner ? classifyOutfieldBand(snapshots.owner.player) : null,
+        passerId,
+        passDestination,
       },
     );
     for (const step of attackerPlan) {
-      const attacker = snapshots.teammates.find(
-        (entry) => entry.id === step.id,
-      );
+      const attacker = step.id === snapshots.owner?.id
+        ? snapshots.owner
+        : snapshots.teammates.find((entry) => entry.id === step.id);
       if (!attacker) continue;
-      const blended = partialPoint(attacker, step.target, fraction);
-      if (
-        Math.abs(attacker.x - blended.x) <= 0.5 &&
-        Math.abs(attacker.y - blended.y) <= 0.5
-      ) {
-        if (step.held)
-          heldAttackerJobs.push({
-            player: originals.get(attacker.id),
-            action: step.action,
-          });
+      if (step.held) {
+        heldAttackerJobs.push({
+          player: originals.get(attacker.id),
+          action: step.action,
+        });
         continue;
       }
+      // Always propose, even when this touch's own blended nudge is tiny
+      // (2026-08-25 fix -- see the matching comment on the defender loop
+      // below for the full "stop-go-stop-go" bug this was the root cause
+      // of; identical reasoning applies here).
+      const blended = partialPoint(attacker, step.target, fraction);
       proposals.push({
         id: attacker.id,
         from: pointOf(attacker),
@@ -4781,69 +7818,80 @@ function reactOffBall(
       state.attackingDirection[keeper.team],
     );
     const blended = partialPoint(keeper, ideal, fraction);
-    if (
-      Math.abs(keeper.x - blended.x) > 0.5 ||
-      Math.abs(keeper.y - blended.y) > 0.5
-    ) {
-      proposals.push({
-        id: keeper.id,
-        from: pointOf(keeper),
-        target: {
-          x: blended.x,
-          y: blended.y,
-          zone: zoneFromPercent(blended.x, blended.y),
-        },
-        intentionTarget: {
-          x: ideal.x,
-          y: ideal.y,
-          zone: zoneFromPercent(ideal.x, ideal.y),
-        },
-        action: "set-position",
-        role: "keeper",
-        player: keeper.player,
-      });
-    }
+    proposals.push({
+      id: keeper.id,
+      from: pointOf(keeper),
+      target: {
+        x: blended.x,
+        y: blended.y,
+        zone: zoneFromPercent(blended.x, blended.y),
+      },
+      intentionTarget: {
+        x: ideal.x,
+        y: ideal.y,
+        zone: zoneFromPercent(ideal.x, ideal.y),
+      },
+      action: "set-position",
+      role: "keeper",
+      player: keeper.player,
+    });
   }
 
-  if (snapshots.opponents.length) {
-    const defendingDirection =
-      state.attackingDirection[snapshots.opponents[0].team];
-    const defenderPlan = planDefensiveRepositioning(
-      ballPoint,
-      snapshots.teammates,
-      snapshots.opponents,
-      defendingDirection,
+  // "stop-go-stop-go" during a multi-touch carry (2026-08-25) -- a real
+  // reported bug. Root cause: this loop used to skip pushing a proposal
+  // at all whenever THIS touch's own blended nudge fell under 0.5yd
+  // (harmless on its own -- byRole()'s own >0.5yd filter below already
+  // decides whether a move is worth animating). But resolveMotionBatch()
+  // (matchMotion.js) uses "was this id in THIS batch's proposals" to
+  // decide whose carried velocity survives into the NEXT reaction --
+  // `velocity: proposalIds.has(id) ? cloneVelocity(value.velocity) :
+  // {x:0,y:0}`. Skipping the proposal here didn't just skip ONE touch's
+  // visible move; it wiped that defender's momentum memory outright, so
+  // the very next touch that DID clear the threshold launched from a cold
+  // stop instead of continuing their real run -- a defender who was
+  // genuinely still running read as repeatedly braking to a dead halt and
+  // relaunching. Every defender with a real target is proposed on every
+  // touch now, so resolveMotionBatch() always sees them and their
+  // velocity carries through continuously; byRole() below still suppresses
+  // authoring a trace event for a move too small to be worth animating.
+  for (const step of defenderMarkingPlan) {
+    const defender = snapshots.opponents.find(
+      (entry) => entry.id === step.id,
     );
-    for (const step of defenderPlan) {
-      const defender = snapshots.opponents.find(
-        (entry) => entry.id === step.id,
-      );
-      if (!defender) continue;
-      const blended = partialPoint(defender, step.target, defensiveFraction);
-      if (
-        Math.abs(defender.x - blended.x) <= 0.5 &&
-        Math.abs(defender.y - blended.y) <= 0.5
-      )
-        continue;
-      proposals.push({
-        id: defender.id,
-        from: pointOf(defender),
-        target: {
-          x: blended.x,
-          y: blended.y,
-          zone: zoneFromPercent(blended.x, blended.y),
-        },
-        intentionTarget: {
-          x: step.intentionTarget.x,
-          y: step.intentionTarget.y,
-          zone: zoneFromPercent(step.intentionTarget.x, step.intentionTarget.y),
-        },
-        action: step.action,
-        role: "defender",
-        player: defender.player,
-      });
-    }
+    if (!defender) continue;
+    const blended = partialPoint(defender, step.target, defensiveFraction);
+    proposals.push({
+      id: defender.id,
+      from: pointOf(defender),
+      target: {
+        x: blended.x,
+        y: blended.y,
+        zone: zoneFromPercent(blended.x, blended.y),
+      },
+      intentionTarget: {
+        x: step.intentionTarget.x,
+        y: step.intentionTarget.y,
+        zone: zoneFromPercent(step.intentionTarget.x, step.intentionTarget.y),
+      },
+      action: step.action,
+      role: "defender",
+      player: defender.player,
+    });
   }
+
+  const coordinatedPhase = ensureTeamPhaseContext(
+    motionContext, snapshots, ballPoint, ballPoint,
+  );
+  coordinateTargetProposals({
+    targets: proposals,
+    snapshots,
+    ballPoint,
+    phaseState: coordinatedPhase,
+    motionContext,
+    activeOwnerId: snapshots.owner?.id,
+    recordSnapshot: true,
+    simulationTimeMs: motionContext?.simulationTimeMs ?? 0,
+  });
 
   const excluded = new Set(excludedIds.map(String));
   const eligibleProposals = proposals.filter(
@@ -4856,24 +7904,63 @@ function reactOffBall(
   const batch = resolveMotionBatch(separatedProposals, previousMotionState, {
     durationMs: duration ?? MOVEMENT_DURATIONS.reposition,
   });
-  if (motionContext) motionContext.state = batch.state;
+  if (motionContext) {
+    motionContext.state = batch.state;
+    for (const proposal of separatedProposals) {
+      const record = motionContext.state.players?.[proposal.id];
+      if (!record) continue;
+      Object.assign(record, {
+        teamJob: proposal.teamJob ?? null,
+        teamPhase: proposal.teamPhase ?? null,
+        formationAnchor: proposal.formationAnchor ?? null,
+        shapeTarget: proposal.shapeTarget ?? null,
+        occupiedLane: proposal.occupiedLane ?? null,
+        occupiedDepthBand: proposal.occupiedDepthBand ?? null,
+        currentRegion: proposal.currentRegion ?? null,
+        intendedRegion: proposal.intendedRegion ?? null,
+        regionMove: proposal.regionMove ?? null,
+        tacticalRole: proposal.tacticalRole ?? null,
+        duty: proposal.duty ?? null,
+      });
+    }
+  }
+  const beatDurationMs = duration ?? MOVEMENT_DURATIONS.reposition;
   const byRole = (role) =>
     batch.moves
       .filter((move) => move.role === role)
-      .map((move) => ({
-        player: originals.get(move.id),
-        from: move.from,
-        to: move.to,
-        action: move.action,
-        role: move.role,
-        trajectory: move.trajectory,
-        intention: move.intention,
-      }))
+      .map((move) => {
+        const proposal = separatedProposals.find((entry) => String(entry.id) === String(move.id));
+        // Burst Stamina v1 -- same battery, same convention as
+        // reactOffBallContinuous()'s own matching call: every off-ball JOB
+        // this discrete-beat sibling actually authors drains/refills
+        // burst01 by the real distance covered THIS beat.
+        applyBurstOffBallJob(originals.get(move.id), move.action, yardDistance(move.from, move.to), beatDurationMs, move.motion);
+        return {
+          player: originals.get(move.id),
+          from: move.from,
+          to: move.to,
+          action: move.action,
+          role: move.role,
+          trajectory: move.trajectory,
+          intention: move.intention,
+          teamJob: proposal?.teamJob ?? null,
+          teamPhase: proposal?.teamPhase ?? null,
+          formationAnchor: proposal?.formationAnchor ?? null,
+          shapeTarget: proposal?.shapeTarget ?? null,
+          occupiedLane: proposal?.occupiedLane ?? null,
+          occupiedDepthBand: proposal?.occupiedDepthBand ?? null,
+          currentRegion: proposal?.currentRegion ?? null,
+          intendedRegion: proposal?.intendedRegion ?? null,
+          regionMove: proposal?.regionMove ?? null,
+          tacticalRole: proposal?.tacticalRole ?? null,
+          duty: proposal?.duty ?? null,
+        };
+      })
       .filter(
         (move) =>
           move.player &&
-          (Math.abs(move.from.x - move.to.x) > 0.5 ||
-            Math.abs(move.from.y - move.to.y) > 0.5),
+          (Math.abs(move.from.x - move.to.x) > 0.001 ||
+            Math.abs(move.from.y - move.to.y) > 0.001),
       );
   const attackerMoves = byRole("attacker");
   const keeperMoves = byRole("keeper");
@@ -4930,7 +8017,8 @@ function reactOffBall(
 
   // Atomic commit: no planner above can observe any of these writes.
   for (const move of [...attackerMoves, ...keeperMoves, ...defenderMoves]) {
-    Object.assign(move.player, move.to);
+    Object.assign(move.player, move.to, { engineJob: move.teamJob ?? move.action });
+    if (move.player.role === "keeper") move.player.keeperVelocity = motionContext?.state?.players?.[move.player.id]?.velocity;
   }
 }
 
@@ -4985,8 +8073,33 @@ function reactOffBallContinuous(
     // own interval; otherwise its endpoint overwrites the preceding contact
     // keyframe at the same timestamp and the actor appears away from the ball.
     overlapWithPrevious = true,
+    // true (default): chase the real, uncapped tactical destination -- for
+    // a call that genuinely shares a ball flight's own multi-second window
+    // (a pass in the air), stretching to the full intentionTarget over that
+    // real time is what reads as natural running, not a slow-motion crawl.
+    // false: a short, CAPPED nudge -- for a call given only a brief window
+    // (reshaping right after a reception), chasing the same far, uncapped
+    // destination in a fraction of the time is a physically-impossible
+    // burst. Every off-ball reaction after a reception must pass false.
+    chaseIntention = true,
+    // Progression Contest v1 (2026-08-28) -- optional and additive, same
+    // contract as every other option above. The id of a DEFENDING-side
+    // player the caller (a WON dribble/shield/poke resolver) already
+    // knows was just beaten by this exact action -- see
+    // planDefensiveRepositioning()'s own beatenPresserId comment for what
+    // it does downstream.
+    beatenPresserId = null,
+    // Pattern Vocabulary V1, Step 1 (2026-09-02) -- see buildLiveJobTargets()'s
+    // own matching comment; optional and additive, same convention.
+    passerId = null,
+    passDestination = null,
+    // Only GK.HOLD supplies this. Once the ball is released to the feet,
+    // the option disappears and ordinary press/delay assignments resume.
+    keeperHolding = false,
   } = {},
 ) {
+  const flightMoverIds = flushKeeperFlight(defendingGroups, trace, motionContext, totalMs);
+  excludedIds = [...excludedIds, ...flightMoverIds];
   const snapshotEntry = (entry) =>
     entry ? { ...entry, player: entry.player } : null;
   const snapshots = {
@@ -5013,6 +8126,9 @@ function reactOffBallContinuous(
       .map((entry) => [entry.id, entry]),
   );
   const attackDirection = state.attackingDirection[snapshots.owner.team];
+  const heldKeeper = keeperHolding && snapshots.owner?.role === "keeper"
+    ? snapshots.owner
+    : null;
   const previousActionHolderId = (action) => {
     for (const teammate of snapshots.teammates) {
       if (
@@ -5026,9 +8142,62 @@ function reactOffBallContinuous(
 
   const targets = [];
   const heldAttackerJobs = [];
-  if (snapshots.teammates.length) {
-    const attackerPlan = planAttackerRepositioning(
+
+  // Off-Ball v2 (2026-08-24) -- defensive plan first, same reorder and
+  // same syncMarkingAssignments() reasoning as reactOffBall()'s own
+  // comment above.
+  //
+  // Last-Man / Through-Ball Recovery v1 (2026-08-26, Off-Ball Motion v3) --
+  // see reactOffBall()'s own matching comment. `ballTo` (the flight's own
+  // real destination) is what a genuine line-breaking run is judged
+  // against here -- the SAME point planDefensiveRepositioning() itself
+  // gets below.
+  const lineBreakingRunnerId = snapshots.teammates.length
+    ? identifyLineBreakingRunnerId(snapshots.teammates, snapshots.opponents, attackDirection, ballTo, snapshots.keeper)
+    : null;
+  let markingLookup = {};
+  let defenderPlan = [];
+  if (snapshots.opponents.length) {
+    const defendingDirection =
+      state.attackingDirection[snapshots.opponents[0].team];
+    const defendingTeamMarking = markingSettingsFor(snapshots.opponents[0].team);
+    defenderPlan = planDefensiveRepositioning(
+      ballTo,
       snapshots.teammates,
+      snapshots.opponents,
+      defendingDirection,
+      {
+        previousMarking: motionContext?.marking || {},
+        ownerId: snapshots.owner?.id ?? null,
+        scheme: defendingTeamMarking.scheme,
+        tightness: defendingTeamMarking.tightness,
+        runnerId: lineBreakingRunnerId,
+        beatenPresserId,
+      },
+    );
+    if (heldKeeper) {
+      defenderPlan = defenderPlan.map((step) => {
+        const opponent = snapshots.opponents.find((entry) => entry.id === step.id);
+        const target = heldKeeperStandoffTarget(
+          opponent,
+          step.intentionTarget ?? step.target,
+          ballTo,
+        );
+        return {
+          ...step,
+          action: "respect-held-ball",
+          subjectId: heldKeeper.id,
+          target,
+          intentionTarget: target,
+        };
+      });
+    }
+    markingLookup = syncMarkingAssignments(defenderPlan, motionContext);
+  }
+
+  if (snapshots.teammates.length || (passerId && snapshots.owner)) {
+    const attackerPlan = planAttackerRepositioning(
+      passerId && snapshots.owner ? [...snapshots.teammates, snapshots.owner] : snapshots.teammates,
       snapshots.opponents,
       attackDirection,
       {
@@ -5036,12 +8205,17 @@ function reactOffBallContinuous(
         keeper: snapshots.keeper,
         previousSupportId: previousActionHolderId("support-short"),
         previousDropId: previousActionHolderId("drop-deep"),
+        previousShowId: previousActionHolderId("show-to-feet"),
+        markingLookup,
+        ownerBand: snapshots.owner ? classifyOutfieldBand(snapshots.owner.player) : null,
+        passerId,
+        passDestination: passDestination ?? ballTo,
       },
     );
     for (const step of attackerPlan) {
-      const attacker = snapshots.teammates.find(
-        (entry) => entry.id === step.id,
-      );
+      const attacker = step.id === snapshots.owner?.id
+        ? snapshots.owner
+        : snapshots.teammates.find((entry) => entry.id === step.id);
       if (!attacker) continue;
       if (step.held) {
         heldAttackerJobs.push({
@@ -5055,7 +8229,11 @@ function reactOffBallContinuous(
         role: "attacker",
         action: step.action,
         from: pointOf(attacker),
-        target: step.target,
+        // Continuous flight must chase the UNCAPPED tactical destination.
+        // step.target is a per-beat 8-yard shuffle (for short reactOffBall
+        // touches); stretching that 8 yards across a 2-4s pass is what
+        // made every off-ball run read as slow motion.
+        target: chaseIntention ? step.intentionTarget || step.target : step.target,
         player: attacker.player,
       });
     }
@@ -5077,34 +8255,45 @@ function reactOffBallContinuous(
       player: keeper.player,
     });
   }
-  if (snapshots.opponents.length) {
-    const defendingDirection =
-      state.attackingDirection[snapshots.opponents[0].team];
-    const defenderPlan = planDefensiveRepositioning(
-      ballTo,
-      snapshots.teammates,
-      snapshots.opponents,
-      defendingDirection,
+  for (const step of defenderPlan) {
+    const defender = snapshots.opponents.find(
+      (entry) => entry.id === step.id,
     );
-    for (const step of defenderPlan) {
-      const defender = snapshots.opponents.find(
-        (entry) => entry.id === step.id,
-      );
-      if (!defender) continue;
-      targets.push({
-        id: defender.id,
-        role: "defender",
-        action: step.action,
-        from: pointOf(defender),
-        target: step.target,
-        player: defender.player,
-      });
-    }
+    if (!defender) continue;
+    targets.push({
+      id: defender.id,
+      role: "defender",
+      action: step.action,
+      from: pointOf(defender),
+      target: chaseIntention ? step.intentionTarget || step.target : step.target,
+      player: defender.player,
+    });
+  }
+
+  const phaseStateAtStart = ensureTeamPhaseContext(
+    motionContext, snapshots, ballFrom, ballTo,
+  );
+  coordinateTargetProposals({
+    targets,
+    snapshots,
+    ballPoint: ballTo,
+    phaseState: phaseStateAtStart,
+    motionContext,
+    // During a real delivery the passer is no longer a stationary ball
+    // owner: their run-off-pass proposal must be free to claim a support
+    // job and leave the centre spot.
+    activeOwnerId: passerId ? null : snapshots.owner?.id,
+  });
+  if (heldKeeper) {
+    enforceHeldKeeperDistance(targets, snapshots.opponents, ballTo, heldKeeper.id);
   }
 
   const excluded = new Set(excludedIds.map(String));
   const eligible = targets.filter((entry) => !excluded.has(String(entry.id)));
   const separated = applyOffBallSeparation(eligible, [...originals.values()]);
+  if (heldKeeper) {
+    enforceHeldKeeperDistance(separated, snapshots.opponents, ballTo, heldKeeper.id);
+  }
   const movingEntries = separated.filter((entry) => yardDistance(entry.from, entry.target) > 0.5);
 
   // Post-action convergence (overlapWithPrevious:false -- "occupy its own
@@ -5142,6 +8331,91 @@ function reactOffBallContinuous(
     effectiveTotalMs = Math.min(totalMs, Math.max(150, slowestNaturalMs));
   }
 
+  // Re-plan inside a real motion window, not merely at its end. Long ball
+  // flights get several <=500ms shape beats; every player then advances
+  // through those changing targets with their current exit velocity. A
+  // short post-contact nudge remains one beat and does not advance the
+  // phase clock because it overlaps the producer's own interval.
+  const SHAPE_REFRESH_MS = 500;
+  const shapeWindowCount = phaseStateAtStart && chaseIntention
+    ? Math.max(1, Math.min(6, Math.ceil(effectiveTotalMs / SHAPE_REFRESH_MS)))
+    : 1;
+  const targetWindowsById = new Map();
+  let phaseCursor = phaseStateAtStart;
+  let elapsedShapeMs = 0;
+  let previousBallPoint = ballFrom;
+  for (let windowIndex = 0; windowIndex < shapeWindowCount; windowIndex += 1) {
+    const remainingMs = effectiveTotalMs - elapsedShapeMs;
+    const windowDurationMs = windowIndex === shapeWindowCount - 1
+      ? remainingMs
+      : Math.round(effectiveTotalMs / shapeWindowCount);
+    const progress = (windowIndex + 1) / shapeWindowCount;
+    const liveBallPoint = {
+      x: ballFrom.x + (ballTo.x - ballFrom.x) * progress,
+      y: ballFrom.y + (ballTo.y - ballFrom.y) * progress,
+      zone: zoneFromPercent(
+        ballFrom.x + (ballTo.x - ballFrom.x) * progress,
+        ballFrom.y + (ballTo.y - ballFrom.y) * progress,
+      ),
+    };
+    if (phaseCursor && chaseIntention) {
+      phaseCursor = updateTeamPhaseState(
+        phaseCursor,
+        teamPhaseFacts(snapshots, previousBallPoint, liveBallPoint, motionContext),
+        windowDurationMs,
+      );
+    }
+    const windowTargets = targets.map((target) => ({
+      ...target,
+      target: { ...(target.intentionTarget ?? target.target) },
+      intentionTarget: { ...(target.intentionTarget ?? target.target) },
+    }));
+    coordinateTargetProposals({
+      targets: windowTargets,
+      snapshots,
+      ballPoint: liveBallPoint,
+      phaseState: phaseCursor,
+      motionContext,
+      activeOwnerId: passerId ? null : snapshots.owner?.id,
+      recordSnapshot: true,
+      simulationTimeMs: (motionContext?.simulationTimeMs ?? 0) + elapsedShapeMs + windowDurationMs,
+    });
+    if (heldKeeper) {
+      enforceHeldKeeperDistance(windowTargets, snapshots.opponents, liveBallPoint, heldKeeper.id);
+    }
+    const eligibleWindow = windowTargets.filter((entry) => !excluded.has(String(entry.id)));
+    const separatedWindow = applyOffBallSeparation(eligibleWindow, [...originals.values()]);
+    if (heldKeeper) {
+      enforceHeldKeeperDistance(separatedWindow, snapshots.opponents, liveBallPoint, heldKeeper.id);
+    }
+    for (const target of separatedWindow) {
+      const windows = targetWindowsById.get(String(target.id)) || [];
+      windows.push({
+        durationMs: windowDurationMs,
+        target: { ...target.target },
+        intentionTarget: { ...(target.intentionTarget ?? target.target) },
+        shapeTarget: target.shapeTarget ? { ...target.shapeTarget } : null,
+        formationAnchor: target.formationAnchor ? { ...target.formationAnchor } : null,
+        teamJob: target.teamJob ?? null,
+        teamPhase: target.teamPhase ?? null,
+        occupiedLane: target.occupiedLane ?? null,
+        occupiedDepthBand: target.occupiedDepthBand ?? null,
+        currentRegion: target.currentRegion ?? null,
+        intendedRegion: target.intendedRegion ?? null,
+        regionMove: target.regionMove ?? null,
+        tacticalRole: target.tacticalRole ?? null,
+        duty: target.duty ?? null,
+      });
+      targetWindowsById.set(String(target.id), windows);
+    }
+    elapsedShapeMs += windowDurationMs;
+    previousBallPoint = liveBallPoint;
+  }
+  if (motionContext && phaseCursor) {
+    motionContext.teamPhase = phaseCursor;
+    if (chaseIntention) motionContext.simulationTimeMs += effectiveTotalMs;
+  }
+
   const moves = movingEntries
     .map((entry) => {
       // entry.player is the physics-facing player-attributes object
@@ -5150,15 +8424,100 @@ function reactOffBallContinuous(
       // need (playerId derivation, Object.assign(move.player, move.to)).
       // originals.get(entry.id) resolves the real roster entry, same
       // lookup reactOffBall()'s own byRole() helper already does.
-      const trajectory = sampleContinuousTrajectory({
-        from: entry.from,
-        to: entry.target,
-        player: entry.player,
-        totalMs: effectiveTotalMs,
-        reactionDelayMs: CONTACT_REACTION_DELAY_MS,
-        sampleCount: 10,
-      });
-      const finalPosition = trajectory[trajectory.length - 1].position;
+      // Off-Ball Motion v3 (2026-08-26) -- a real reported bug: this
+      // reaction used to always start from a dead stop, even for a player
+      // motionContext already knows was mid-stride a moment ago (from an
+      // earlier reaction this SAME possession, or -- once the carry
+      // window's own width gets capped against a short producer -- from
+      // being cut off mid-run rather than genuinely arriving). Continuing
+      // their real tracked velocity instead of zeroing it is what actually
+      // reads as one continuous run across action boundaries; a player
+      // with no tracked velocity (freshly idle, or motionContext-less test
+      // fixture) still gets the honest {0,0} start via
+      // sampleContinuousTrajectory()'s own default.
+      let incomingVelocity = motionContext?.state?.players?.[entry.id]?.velocity ?? null;
+      let cursor = entry.from;
+      let elapsedMs = 0;
+      const trajectory = [];
+      const windows = targetWindowsById.get(String(entry.id)) || [{
+        durationMs: effectiveTotalMs,
+        target: entry.target,
+        intentionTarget: entry.target,
+        teamJob: entry.teamJob ?? null,
+        teamPhase: entry.teamPhase ?? null,
+        shapeTarget: entry.shapeTarget ?? null,
+        formationAnchor: entry.formationAnchor ?? null,
+        occupiedLane: entry.occupiedLane ?? null,
+        occupiedDepthBand: entry.occupiedDepthBand ?? null,
+        currentRegion: entry.currentRegion ?? null,
+        intendedRegion: entry.intendedRegion ?? null,
+        regionMove: entry.regionMove ?? null,
+        tacticalRole: entry.tacticalRole ?? null,
+        duty: entry.duty ?? null,
+      }];
+      // Playback Fluidity v1 (2026-09-05) -- a real reported bug: "players
+      // freeze". A long producer window (a six-second keeper hold) is split
+      // into SHAPE_REFRESH_MS beats so the shape can evolve as the ball
+      // moves. When the ball is not moving, every one of those beats
+      // resolves to the SAME tactical target -- so the player covered the
+      // whole distance flat out inside the first beat or two and then stood
+      // still for the rest, with each remaining beat correctly finding
+      // nothing left to do. Measured on a real trace: every off-ball mover
+      // finished at 33% of a 6000ms window and held for the other 4 seconds.
+      //
+      // Consecutive beats that share a target are not several decisions, they
+      // are one. Merging them back into a single leg lets advanceMotion()
+      // pace that leg across its real window (see its own CHASE_INTENTIONS
+      // comment) -- a player with seven yards to cover and six seconds to do
+      // it jogs, which is both what really happens and what removes the
+      // stall. Beats whose target genuinely CHANGES are untouched, so a
+      // reshape that responds to a moving ball still re-plans exactly as
+      // before.
+      const mergedWindows = [];
+      for (const window of windows) {
+        const previous = mergedWindows[mergedWindows.length - 1];
+        const sameTarget = previous
+          && Math.abs(previous.target.x - window.target.x) < 0.05
+          && Math.abs(previous.target.y - window.target.y) < 0.05
+          && (previous.teamJob ?? null) === (window.teamJob ?? null);
+        if (sameTarget) previous.durationMs += window.durationMs;
+        else mergedWindows.push({ ...window });
+      }
+      let previousWindowJob = motionContext?.state?.players?.[entry.id]?.teamJob ?? null;
+      for (const [index, window] of mergedWindows.entries()) {
+        const sameContinuingJob = previousWindowJob && previousWindowJob === window.teamJob;
+        const motion = advanceMotion({
+          from: cursor,
+          intentionTarget: window.target,
+          player: entry.player,
+          elapsedMs: window.durationMs,
+          incomingVelocity,
+          reactionDelayMs: index === 0 && !sameContinuingJob ? (entry.reactionDelayMs ?? CONTACT_REACTION_DELAY_MS) : 0,
+          sampleCount: Math.max(4, Math.min(10, Math.ceil(window.durationMs / 90))),
+          intention: entry.action,
+          role: window.teamJob ?? entry.role,
+        });
+        for (const sample of motion.trajectory) {
+          const progressMs = elapsedMs + sample.progress * window.durationMs;
+          if (trajectory.length && progressMs <= trajectory[trajectory.length - 1].progress * effectiveTotalMs + 0.001) continue;
+          trajectory.push({ ...sample, progress: effectiveTotalMs ? progressMs / effectiveTotalMs : 1 });
+        }
+        cursor = motion.position;
+        incomingVelocity = motion.velocity;
+        previousWindowJob = window.teamJob;
+        elapsedMs += window.durationMs;
+      }
+      const finalPosition = cursor;
+      const finalWindow = windows[windows.length - 1];
+      // Burst Stamina v1 -- every off-ball JOB this planner actually
+      // assigns drains/refills the SAME battery an on-ball carry does
+      // (drainOnBallAction()'s own matching call in the possession loop),
+      // by the real distance just covered. originals.get(entry.id) is the
+      // real simulatedRoster entry (has .burst01/.match01) when called
+      // from the real possession loop; a no-op (no burst01 at all) for
+      // any direct resolver-level test fixture, same convention as
+      // drainOnBallAction() itself.
+      applyBurstOffBallJob(originals.get(entry.id), entry.action, yardDistance(entry.from, finalPosition), effectiveTotalMs, entry.motion);
       return {
         id: entry.id,
         player: originals.get(entry.id),
@@ -5166,7 +8525,19 @@ function reactOffBallContinuous(
         to: finalPosition,
         action: entry.action,
         role: entry.role,
-        intentionTarget: entry.target,
+        intentionTarget: finalWindow.intentionTarget ?? finalWindow.target,
+        formationAnchor: finalWindow.formationAnchor,
+        shapeTarget: finalWindow.shapeTarget,
+        teamJob: finalWindow.teamJob,
+        teamPhase: finalWindow.teamPhase,
+        occupiedLane: finalWindow.occupiedLane,
+        occupiedDepthBand: finalWindow.occupiedDepthBand,
+        currentRegion: finalWindow.currentRegion,
+        intendedRegion: finalWindow.intendedRegion,
+        regionMove: finalWindow.regionMove,
+        tacticalRole: finalWindow.tacticalRole,
+        duty: finalWindow.duty,
+        velocity: incomingVelocity,
         trajectory,
       };
     });
@@ -5266,14 +8637,19 @@ function reactOffBallContinuous(
     const tick = (motionContext.state?.tick || 0) + 1;
     const nextPlayers = { ...(motionContext.state?.players || {}) };
     for (const move of moves) {
-      // A continuous run naturally arrives at (or near) rest relative to
-      // its own destination -- zero end velocity is the honest state to
-      // hand off to whatever movement model reacts next (this pass's own
-      // full post-action reposition, or a later action's reactOffBall()),
-      // same convention resolveMotionBatch() already uses for a completed
-      // tactical move.
+      // The trajectory's own final sample already carries the honest exit
+      // velocity: zero when the run genuinely arrived at its destination
+      // (sampleContinuousTrajectory()'s own arrived-within-0.35yd check),
+      // but a real, non-zero closing velocity when this reaction's own
+      // window got capped short of the real intentionTarget (e.g. a carry
+      // window capped against a short producer interval) -- a player cut
+      // off mid-stride, not one who calmly arrived. Handing that off
+      // (2026-08-26, Off-Ball Motion v3 fix) instead of always forcing
+      // zero is what lets the NEXT reaction continue their real run
+      // instead of a stop-then-relaunch at every action boundary.
+      const exitVelocity = move.trajectory?.[move.trajectory.length - 1]?.velocity ?? { x: 0, y: 0 };
       nextPlayers[move.id] = {
-        velocity: { x: 0, y: 0 },
+        velocity: exitVelocity,
         intention: {
           action: move.action,
           role: move.role,
@@ -5282,13 +8658,25 @@ function reactOffBallContinuous(
           age: 0,
           retained: false,
         },
+        teamJob: move.teamJob,
+        teamPhase: move.teamPhase,
+        formationAnchor: move.formationAnchor,
+        shapeTarget: move.shapeTarget,
+        occupiedLane: move.occupiedLane,
+        occupiedDepthBand: move.occupiedDepthBand,
+        currentRegion: move.currentRegion,
+        intendedRegion: move.intendedRegion,
+        regionMove: move.regionMove,
+        tacticalRole: move.tacticalRole,
+        duty: move.duty,
         lastPosition: { ...move.to },
       };
     }
     motionContext.state = { tick, players: nextPlayers };
   }
   for (const move of moves) {
-    Object.assign(move.player, move.to);
+    Object.assign(move.player, move.to, { engineJob: move.teamJob ?? move.action });
+    if (move.role === "keeper") move.player.keeperVelocity = move.velocity;
   }
 }
 
@@ -5317,11 +8705,115 @@ const INTERLEAVED_REACTION_DURATION = MOVEMENT_DURATIONS.touch;
 // happening underneath. Shortened outright: costs no REAL convergence
 // this step wasn't already failing to deliver, cuts the visible pause.
 const POST_ACTION_CONVERGENCE_MS = 200;
+// How long a keeper who's just caught the ball holds it while the side
+// settles, before picking a distribution -- a real, visible pause (not the
+// instant re-decision every other reception gets), long enough for
+// teammates to actually offer themselves as outlets first. Retained as the
+// legacy lower bound for callers/tests; GK.HOLD now uses the maximum because
+// opponent proximity is not legal pressure while the ball is in the hands.
+const GK_HOLD_MS = 1400;
+// Keeper Hold & Walk v1 (2026-08-31) -- a real, explicit demand: "he
+// should be able to walk freely with the ball in his hands inside the
+// penalty box... after 6 seconds he must release it." The real law of
+// the game's own outer limit -- never exceeded regardless of how little
+// pressure they're under.
+const GK_HOLD_MAX_MS = 6000;
+// Keeper Hold & Walk v1 -- a real short wander inside the keeper's own
+// box while they decide (2-6 real yards, a stroll with the ball tucked
+// under an arm, never a sprint), replacing the old single frozen-still
+// hold. Deterministic (seeded, same convention as every other
+// possession-loop RNG stream) so an identical seed reproduces an
+// identical walk. Clamped to the real penalty area (PENALTY_AREA,
+// pitchGeometry.js) -- a keeper holding the ball cannot leave their own
+// box at all, a real law of the game, not just a tactical preference.
+function keeperWalkTarget(keeper, ownGoalDirection, seed, actionsCount) {
+  const random = seededRandom(hashString(`match-lab:freeplay:gk-hold-walk:${seed}:${actionsCount}`));
+  const angle = random() * Math.PI * 2;
+  const distanceYards = 2 + random() * 4;
+  const rawYard = toYardPoint(keeper);
+  const wandered = fromYardPoint({
+    x: rawYard.x + Math.cos(angle) * distanceYards,
+    y: rawYard.y + Math.sin(angle) * distanceYards,
+  });
+  const ownGoalY = defendingGoalYForDirection(ownGoalDirection);
+  const clampedX = clamp(50 - PENALTY_AREA.halfWidthPct, 50 + PENALTY_AREA.halfWidthPct, wandered.x);
+  const clampedY = ownGoalY === 0
+    ? clamp(0, PENALTY_AREA.depthPct, wandered.y)
+    : clamp(100 - PENALTY_AREA.depthPct, 100, wandered.y);
+  return { x: clampedX, y: clampedY, zone: zoneFromPercent(clampedX, clampedY) };
+}
 // See reactOffBall()'s own comment on defensiveFraction -- a defender
 // scrambling to recover during a live, moving passage of play closes
 // ground with real urgency, not at the same measured pace as an
 // attacker's own tactical off-ball positioning.
 const INTERLEAVED_DEFENSIVE_REACTION_FRACTION = 0.5;
+
+// On-ball gait + possession stamina v1 (2026-08-31) -- "readable film":
+// the chosen gait (determineCarryGait(), spatialDecision.js) now shows
+// up directly in the trace label, not just the touch spacing/pace
+// underneath it, so a browser round can tell "sprinting into space"
+// from "shepherding it under pressure" without opening the movement-
+// timing detail.
+function gaitActionPhrase(gait) {
+  switch (gait) {
+    case "full-sprint": return "sprints into space";
+    case "controlled-sprint": return "drives forward under control";
+    case "lateral-control": return "drives down the touchline";
+    case "close-control":
+    default: return "close-controls it forward";
+  }
+}
+function gaitSetOffPhrase(gait) {
+  switch (gait) {
+    case "full-sprint": return "sets off at full sprint";
+    case "controlled-sprint": return "sets off, pushing into space";
+    case "lateral-control": return "sets off down the touchline";
+    case "close-control":
+    default: return "sets off, tight to the ball";
+  }
+}
+
+// Burst Stamina v1 (2026-08-31) -- "Trace one line when a gait is denied
+// by burst." Re-derives what the gait WOULD have been at a full tank
+// (burst01=1) and compares -- the cheapest, most honest way to know
+// "was burst actually the reason," since determineCarryGait() itself
+// stays a pure function with no diagnostic output of its own. A cue-only
+// event (no ballFrom/ballTo/duration) -- pure commentary, never disturbs
+// the timeline. Silent whenever burst wasn't the deciding factor (full
+// tank would have picked the SAME gait, or something no better).
+function pushGaitDenialTrace(trace, owner, opponents, attackingDirection, gait, destination) {
+  if (typeof owner.burst01 !== "number" || owner.burst01 >= 1) return;
+  const fullTankGait = determineCarryGait(owner, opponents, attackingDirection, 1, destination);
+  if (fullTankGait === gait) return;
+  const rank = { "full-sprint": 3, "controlled-sprint": 2, "lateral-control": 1, "close-control": 0 };
+  if ((rank[fullTankGait] ?? 0) <= (rank[gait] ?? 0)) return;
+  trace.push(
+    traceEvent(
+      "P.CARRY.GAIT",
+      `${playerName(owner.player)}: ${fullTankGait} denied (burst ${Math.round(owner.burst01 * 100)}%), ${gait}`,
+      { actor: owner, movement: "reposition", outcome: "neutral" },
+    ),
+  );
+}
+
+// Burst Stamina v1 -- "show burst01 live" via the SAME Attribute-influence
+// disclosure every other trace event already renders theirs through
+// (renderTrace()'s own attributionEntryMarkup()), not a bespoke new
+// widget. Reads as a real reading on every on-ball P.CARRY/P.PROGRESS.WON
+// this possession produces, not just the rarer moment pushGaitDenialTrace()
+// fires -- absent (never a fabricated "100%") for any direct resolver
+// call against a hand-built fixture with no burst01 at all.
+function burstAttribution(owner) {
+  if (typeof owner?.burst01 !== "number") return undefined;
+  return [{
+    attr: "Stamina",
+    value: Math.round(playerAttribute(owner.player, "Stamina")),
+    quantity: "burst01 (this possession)",
+    baseline: Math.round((owner.match01 ?? 1) * 100),
+    actual: Math.round(owner.burst01 * 100),
+    unit: "%",
+  }];
+}
 
 // interleaveOffBall (default false): OFF by default because
 // reactOffBall() mutates whatever roster entries groups.teammates/
@@ -5408,20 +8900,133 @@ function resolveDribble(
     // Directional continuity -- see resolveCarry()'s own recordCarryDirection()
     // comment.
     if (interleaveOffBall) recordCarryDirection(owner, origin, advanced);
-    const carryPressure = pressureAt(origin, groups.opponents);
-    const gait = determineCarryGait(origin, groups.opponents);
-    const touches = planCarryTouches(origin, advanced, gait, {
-      player: owner.player,
+    // On-ball gait + possession stamina v1 (2026-08-31) -- see
+    // determineCarryGait()'s own header (spatialDecision.js) for the full
+    // reported-bug rationale on why this is no longer a bare pressure
+    // ternary. owner.burst01 is the possession-local battery
+    // (runConstructedPossession()'s own init/drain, never the shared
+    // player object) -- absent for a direct resolver call against a
+    // hand-built fixture, which correctly reads as a full tank (?? 1).
+    const attackingDirection = state.attackingDirection[owner.team];
+    const gait = determineCarryGait(owner, groups.opponents, attackingDirection, owner.burst01 ?? 1, advanced);
+    pushGaitDenialTrace(trace, owner, groups.opponents, attackingDirection, gait, advanced);
+    const carryPressure = effectiveCarryPressure(
+      pressureAt(origin, groups.opponents), owner, gait, attackingDirection,
+    );
+    // A fatigued carrier's own physical ceiling fades for the REST of
+    // this possession (staminaScaledPlayer()'s own header) -- scoped to
+    // just the trajectory-building calls below, never the shared roster
+    // entry itself.
+    const staminaPlayer = staminaScaledPlayer(owner.player, owner.burst01);
+    const kineticOwner = staminaPlayer === owner.player ? owner : { ...owner, player: staminaPlayer };
+    // Ground Roll v2 -- see spatialDecision.js's own header comment on
+    // simulateCarryTouches(). Each touch is a live-simulated impulse +
+    // independent roll + chase, not a pre-beaded line to `advanced`.
+    const carryEntryVelocity = readMotionRecord(motionContext, owner.id, origin).velocity;
+    const touches = simulateCarryTouches(origin, advanced, gait, {
+      incomingVelocity: carryEntryVelocity,
+      player: kineticOwner.player,
       pressure: carryPressure,
       seed: `${owner.id}:dribble:${origin.x}:${origin.y}:${advanced.x}:${advanced.y}`,
+      opponents: groups.opponents,
+      ignorePokes: true,
     });
+    // Ball Out of Bounds v1 (2026-09-01) -- see resolveCarry()'s own
+    // matching comment for the full reasoning: classifyPitchExit() is
+    // computed FIRST, nothing pushed to `trace` until it genuinely
+    // returns a real restart, so a missing team/attacking-direction
+    // context falls through to the ordinary completion path with zero
+    // risk of double-authoring the same touches.
+    const dribbleExitedTouch = touches.at(-1);
+    const dribblePitchExit = dribbleExitedTouch?.exitedPitch
+      ? classifyPitchExit({
+          exit: dribbleExitedTouch.exitedPitch,
+          lastTouchTeam: owner.team,
+          attackingDirectionByTeam: state.attackingDirection,
+        })
+      : null;
+    if (dribblePitchExit) {
+      const priorTouches = touches.slice(0, -1);
+      const priorSpanMs = priorTouches.reduce((sum, touch) => sum + touch.durationMs, 0);
+      const exitTotalMs = interleaveOffBall ? priorSpanMs + dribbleExitedTouch.durationMs : 0;
+      if (interleaveOffBall) {
+        trace.push(
+          traceEvent(
+            "P.PROGRESS.START",
+            `${playerName(owner.player)} goes at ${playerName(defender.player)}`,
+            { actor: owner, defender, movement: "dribble", outcome: "neutral", duration: exitTotalMs },
+          ),
+        );
+      }
+      let exitCursor = origin;
+      priorTouches.forEach((touch) => {
+        const to = { ...touch.ballTo, zone: zoneFromPercent(touch.ballTo.x, touch.ballTo.y) };
+        trace.push(
+          traceEvent(
+            "P.PROGRESS.TOUCH",
+            `${playerName(owner.player)} touches it past ${playerName(defender.player)}`,
+            {
+              actor: owner,
+              defender,
+              playerMoves: [{ player: owner, from: exitCursor, to, action: "touch", trajectory: touch.chaseTrajectory }],
+              movement: "touch",
+              outcome: "success",
+              ballFrom: exitCursor,
+              ballTo: to,
+              ballTrajectory: touch.ballTrajectory,
+              duration: touch.durationMs,
+              contact: { point: to, actor: owner, type: "touch", phase: "end" },
+              ownerBefore: owner,
+              ownerAfter: owner,
+              attribution: touch.kinetics?.attribution,
+              ...(interleaveOffBall ? { overlapWithPrevious: true, overlapStartOffsetMs: touch.startOffsetMs } : null),
+            },
+          ),
+        );
+        exitCursor = to;
+      });
+      const exitTo = { ...dribbleExitedTouch.ballTo, zone: zoneFromPercent(dribbleExitedTouch.ballTo.x, dribbleExitedTouch.ballTo.y) };
+      const restartResult = pushPitchExitRestart(trace, {
+        actor: owner, ballFrom: exitCursor, exit: dribblePitchExit, movement: "touch",
+        playerMoves: [{ player: owner, from: exitCursor, to: exitTo, action: "touch", trajectory: dribbleExitedTouch.chaseTrajectory }],
+        ballTrajectory: dribbleExitedTouch.ballTrajectory,
+        ...(interleaveOffBall ? { overlapWithPrevious: true, overlapStartOffsetMs: priorSpanMs } : null),
+      });
+      return { ...restartResult, gait, offBallInterleaved: false };
+    }
+    // Gameplay v3.1 -- see resolveCarry()'s own matching comment ("Fix
+    // the event clock, not hermite"). P.PROGRESS.START owns ONE wide
+    // primary interval spanning the real total window up front; every
+    // touch and the final P.PROGRESS.WON then overlap INTO it (their own
+    // real spacing preserved via overlapStartOffsetMs) instead of each
+    // claiming its own fresh slot -- otherwise the off-ball reaction
+    // below can only ever reach back to the LAST touch, never the whole
+    // carry. Deliberately a NEW marker, not the existing P.PROGRESS event
+    // above -- that one's ballFrom===ballTo (stationary) would otherwise
+    // add a redundant, conflicting "ball sits still" trajectory spanning
+    // the SAME window the touches are genuinely moving the ball through.
+    // Ground Roll v1 -- real per-touch roll-to-a-stop timing
+    // (simulateCarryTouches()'s own durationMs, ballRollPhysics.js), not a
+    // flat MOVEMENT_DURATIONS.touch per touch regardless of distance.
+    const progressTouchSpanMs = touches.reduce((sum, touch) => sum + touch.durationMs, 0);
+    let progressTotalMs = interleaveOffBall
+      ? Math.max(
+          carryWindowDurationMs(owner, origin, advanced),
+          progressTouchSpanMs + MOVEMENT_DURATIONS.dribble,
+        )
+      : 0;
+    if (interleaveOffBall) {
+      trace.push(
+        traceEvent(
+          "P.PROGRESS.START",
+          `${playerName(owner.player)} goes at ${playerName(defender.player)}`,
+          { actor: owner, defender, movement: "dribble", outcome: "neutral", duration: progressTotalMs },
+        ),
+      );
+    }
     let cursor = origin;
-    touches.forEach((waypoint, index) => {
-      const to = {
-        x: waypoint.x,
-        y: waypoint.y,
-        zone: zoneFromPercent(waypoint.x, waypoint.y),
-      };
+    touches.forEach((touch) => {
+      const to = { ...touch.ballTo, zone: zoneFromPercent(touch.ballTo.x, touch.ballTo.y) };
       trace.push(
         traceEvent(
           "P.PROGRESS.TOUCH",
@@ -5429,52 +9034,79 @@ function resolveDribble(
           {
             actor: owner,
             defender,
-            mover: owner,
-            moveFrom: cursor,
-            moveTo: to,
+            // Ground Roll v2 -- the owner's own CHASE, not the ball's
+            // path: a real accelerating run behind an independently
+            // decelerating ball, sharing only its start/contact points
+            // with ballFrom/ballTo, never its shape.
+            playerMoves: [{ player: owner, from: cursor, to, action: "touch", trajectory: touch.chaseTrajectory }],
             movement: "touch",
             outcome: "success",
             ballFrom: cursor,
             ballTo: to,
+            // Explicit, physically-real ball trajectory (mode "rolling")
+            // in place of buildBallTrajectory()'s own generic
+            // "touch"->controlled-ground curve -- that mapping is what
+            // parented the ball to the owner's own dot every previous
+            // pass at this. This ball has left the foot; it is not
+            // controlled again until the contact below.
+            ballTrajectory: touch.ballTrajectory,
+            duration: touch.durationMs,
+            // Contact happens at ARRIVAL (the carrier closing the gap on
+            // their own rolling touch), not at the kick instant.
             contact: {
-              point: cursor,
+              point: to,
               actor: owner,
               type: "touch",
-              phase: "start",
+              phase: "end",
             },
             ownerBefore: owner,
             ownerAfter: owner,
-            attribution: waypoint.kinetics?.attribution,
+            attribution: touch.kinetics?.attribution,
+            ...(interleaveOffBall
+              ? { overlapWithPrevious: true, overlapStartOffsetMs: touch.startOffsetMs }
+              : null),
           },
         ),
       );
       cursor = to;
-      // Every physical touch interval gets a concurrent off-ball update.
-      // These overlap the touch, so coverage improves without adding time
-      // or asking playback to extrapolate beyond an authored endpoint.
-      if (interleaveOffBall) {
-        reactOffBall(groups, cursor, trace, {
-          fraction: INTERLEAVED_REACTION_FRACTION,
-          defensiveFraction: INTERLEAVED_DEFENSIVE_REACTION_FRACTION,
-          duration: INTERLEAVED_REACTION_DURATION,
-          motionContext,
-        });
-      }
+      // Off-Ball Motion v3 (2026-08-26) -- see this file's own reported-bug
+      // comment: a per-touch reactOffBall() call here (the old beat model)
+      // meant off-ball players got a full fresh re-plan + a velocity reset
+      // to zero every ~220ms, "go-stop-go" for the whole carry. ONE
+      // reactOffBallContinuous() call now covers the WHOLE window instead
+      // -- see just below, after the touches loop.
     });
+    acceptCarryOvershoot(origin, advanced, touches);
+    const progressWonMove = carryLegMoverTrajectory(kineticOwner, advanced, groups.opponents, {
+      from: cursor, floorMs: MOVEMENT_DURATIONS.dribble,
+      // World Motion Contract v1 -- continue the run the touches above
+      // were already making, instead of restarting from a standstill.
+      entrySpeedYps: touches.at(-1)?.exitSpeedYps ?? speedYpsFromVelocity(carryEntryVelocity),
+      entryVelocity: touches.at(-1)?.chaseTrajectory?.at(-1)?.velocity ?? carryEntryVelocity,
+    });
+    if (interleaveOffBall) {
+      // The reservation must end with the actual run. The preliminary
+      // estimate includes a fixed dribble beat and acceleration from rest;
+      // retaining it makes a moving striker wait before the next shot.
+      progressTotalMs = progressTouchSpanMs + progressWonMove.duration;
+      const reservation = [...trace].reverse().find(event => event.code === "P.PROGRESS.START");
+      reservation.duration = progressTotalMs;
+    }
     trace.push(
       traceEvent(
         "P.PROGRESS.WON",
-        `${playerName(owner.player)} beats ${playerName(defender.player)} and advances cleanly`,
-        // mover: owner -- the carrier moves WITH the ball to its real
-        // endpoint (explicit, not inferred from ballFrom/ballTo -- see
-        // traceEvent()'s own comment on why shots/passes must never be
-        // read this way).
+        `${playerName(owner.player)} beats ${playerName(defender.player)} and ${gaitActionPhrase(gait)}`,
+        // The carrier moves WITH the ball to its real endpoint (explicit,
+        // not inferred from ballFrom/ballTo -- see traceEvent()'s own
+        // comment on why shots/passes must never be read this way).
         {
           actor: owner,
           defender,
-          mover: owner,
-          moveFrom: cursor,
-          moveTo: advanced,
+          ...progressWonMove,
+          // Ground Roll v2 follow-up -- the ball's own track mirrors the
+          // carrier's real (hermite) path instead of an independently
+          // shaped curve; see carryLegBallTrajectory()'s own comment.
+          ballTrajectory: carryLegBallTrajectory(progressWonMove.playerMoves[0].trajectory, cursor, advanced),
           movement: "dribble",
           outcome: "success",
           ballFrom: cursor,
@@ -5487,9 +9119,37 @@ function resolveDribble(
           },
           ownerBefore: owner,
           ownerAfter: owner,
+          attribution: burstAttribution(owner),
+          ...(interleaveOffBall
+            ? { overlapWithPrevious: true, overlapStartOffsetMs: progressTouchSpanMs }
+            : null),
         },
       ),
     );
+    // ONE continuous off-ball reaction spanning the WHOLE carry window
+    // (origin to `advanced`, not touch to touch) -- overlaps the carry's
+    // own just-pushed events (whichever is the most recent primary
+    // interval on the timeline: the final P.PROGRESS.WON leg for a
+    // multi-touch beat, or the SAME event for a distance too short to
+    // subdivide into touches at all), chasing the real, uncapped
+    // intentionTarget over that real window instead of an 8-yard-capped
+    // shuffle repeated on every touch.
+    if (interleaveOffBall) {
+      reactOffBallContinuous(
+        groups, origin, advanced,
+        progressTotalMs,
+        trace,
+        {
+          motionContext, excludedIds: [owner.id], overlapWithPrevious: true, chaseIntention: true,
+          // Progression Contest v1 -- this branch's own off-ball reaction
+          // is the ONLY one that ever runs for a clean P.PROGRESS.WON
+          // (offBallInterleaved below skips the generic post-action
+          // reshape entirely), so the beaten defender's own cover-shadow
+          // must be threaded in here directly.
+          beatenPresserId: defender.id,
+        },
+      );
+    }
     return {
       outcome: "ADVANCE",
       code: "P.PROGRESS.WON",
@@ -5500,6 +9160,13 @@ function resolveDribble(
       ballEnd: advanced,
       restart: null,
       reason: "dribble-advance",
+      beatenDefenderId: defender.id,
+      gait,
+      // Off-Ball Motion v3 -- the WHOLE window already got ONE continuous
+      // off-ball reaction just above; runConstructedPossession()'s own
+      // post-action convergence must not run a SECOND one on top (a fresh
+      // trajectory, velocity reset to zero) for players already mid-run.
+      offBallInterleaved: interleaveOffBall,
     };
   }
   const raceWasClose = progressionDuel.probability > 0.4;
@@ -5525,7 +9192,7 @@ function resolveDribble(
     raceWasClose,
     random,
   );
-  const engagementType =
+  const feasibleEngagementType =
     rawEngagementType === "D.STAND" && !canStandingTackle(owner, defender)
       ? canSlidingTackle(owner, defender)
         ? "D.SLIDE"
@@ -5533,6 +9200,14 @@ function resolveDribble(
       : rawEngagementType === "D.SLIDE" && !canSlidingTackle(owner, defender)
         ? "D.DUEL"
         : rawEngagementType;
+  const engagementType = applyTacklingInstruction(
+    feasibleEngagementType,
+    markingSettingsFor(defender.team).tackling,
+    {
+      canStand: canStandingTackle(owner, defender),
+      canSlide: canSlidingTackle(owner, defender),
+    },
+  );
   trace.push(
     traceEvent(
       engagementType,
@@ -5562,14 +9237,7 @@ function resolveDribble(
       outcome: engagementOutcomeLabel(engagement.outcome),
       ballFrom: reaction.contactPoint,
       ballTo: reaction.contactPoint,
-      playerMoves: [
-        {
-          player: defender,
-          from: pointOf(defender),
-          to: reaction.contactPoint,
-          action: "challenge",
-        },
-      ],
+      ...realMoverTrajectory(defender, reaction.contactPoint, { action: "challenge" }),
       // The duel result is revealed at the END of its physical interval.
       // On a won tackle the defender makes the decisive contact; otherwise
       // the carrier remains the last verified player at this ball point.
@@ -5591,12 +9259,48 @@ function resolveDribble(
   );
   if (reaction.code) {
     const touchActor = engagement.outcome === "beaten" ? owner : defender;
+    // Engagement Breaker v1 -- both the winner (WITH the ball) and the
+    // loser (left behind) get a real, Pace-timed escape trajectory; see
+    // duelReaction()'s own header for the reported-bug rationale. "loose"
+    // has no winner/loser position to author -- only the ball's own real
+    // knock-on pop, unchanged from a single ballFrom/ballTo leg.
+    // Playback Fluidity v1 (2026-09-05) -- every contest outcome authors
+    // real bodies moving, including the ones nobody wins. `reaction.separation`
+    // is the physical fact and is present for all of them; winner/loser stay
+    // the POSSESSION fact. Previously only a won/beaten outcome moved anybody,
+    // so a knocked-loose challenge froze both players for the whole window.
+    const separationPairs = reaction.separation
+      ?? (reaction.winner && reaction.loser
+        ? [
+          { player: reaction.winner, point: reaction.winnerPoint, action: "escape" },
+          { player: reaction.loser, point: reaction.loserPoint, action: "beaten" },
+        ]
+        : null);
+    let separationMoves = null;
+    let separationDurationMs = MOVEMENT_DURATIONS.deflection;
+    if (separationPairs) {
+      const leadPlayer = separationPairs[0];
+      separationDurationMs = Math.max(
+        MOVEMENT_DURATIONS.deflection,
+        Math.round(CONTACT_REACTION_DELAY_MS + timeToReach(leadPlayer.player.player, yardDistance(reaction.contactPoint, leadPlayer.point)) * 1000),
+      );
+      separationMoves = separationPairs.map((pair) => ({
+        player: pair.player,
+        from: reaction.contactPoint,
+        to: pair.point,
+        action: pair.action,
+        trajectory: sampleContinuousTrajectory({
+          from: reaction.contactPoint, to: pair.point, player: pair.player.player,
+          totalMs: separationDurationMs, reactionDelayMs: CONTACT_REACTION_DELAY_MS,
+          sampleCount: Math.max(6, Math.min(14, Math.ceil(separationDurationMs / 140))),
+        }),
+      }));
+    }
     trace.push(
       traceEvent(reaction.code, reaction.label, {
         actor: touchActor,
-        mover: reaction.mover,
-        moveFrom: reaction.mover ? reaction.contactPoint : null,
-        moveTo: reaction.mover ? reaction.ballEnd : null,
+        duration: separationDurationMs,
+        ...(separationMoves ? { playerMoves: separationMoves } : null),
         movement: "deflection",
         outcome:
           engagement.outcome === "won"
@@ -5658,6 +9362,7 @@ function resolveDribble(
       nextOwnerId: advantagePlayed ? owner.id : null,
       ballEnd: advantagePlayed ? reaction.ballEnd : reaction.contactPoint,
       restart: advantagePlayed ? null : foul.restart,
+      restartTakingTeam: owner.team,
       reason: advantagePlayed ? "foul-advantage-played" : "foul",
     };
   }
@@ -5687,10 +9392,24 @@ function resolveDribble(
     ballEnd: reaction.ballEnd,
     restart: null,
     reason: `tackle-${engagement.outcome}`,
+    // Progression Contest v1 -- only a genuine "beaten" outcome (the
+    // attacker escapes despite losing the earlier progression duel,
+    // T.BEATEN.ESCAPE) leaves a specific defender behind the play; "won"
+    // is the DEFENDER winning (no beaten body to cover for), "loose" has
+    // no clear beaten party. No offBallInterleaved field on this return
+    // at all, so runConstructedPossession()'s generic post-action
+    // reshape always reads this back.
+    beatenDefenderId: engagement.outcome === "beaten" ? defender.id : null,
   };
 }
 
 function oneOnOneTargetPoint(shooter, execution) {
+  // Shot As Projectile v1 -- place-*/blast/shoot-early now carry a REAL
+  // geometric point (shot.actualPoint, from resolveOneOnOneShotDescriptor())
+  // via executeGeometricOneOnOneShot() -- used directly when present.
+  // The fixed "near a post or dead center" 3-way fallback below is what
+  // chip/round-keeper/square-pass still produce (unchanged, deferred).
+  if (execution?.shot?.actualPoint) return execution.shot.actualPoint;
   const target = execution?.shot?.actualTarget;
   const goalY = goalLineY(shooter);
   if (target === "left") {
@@ -5735,8 +9454,7 @@ function resolveFreePlayOneOnOne(
     teammates: groups.teammates,
     actualKeeperState: context.actualKeeperState,
     perceivedKeeperState,
-    defenderPressure: context.defenderPressure,
-    chanceContext: context,
+    defenderPressure: clamp(0, 1, context.defenderPressure + (context.actualKeeperState.pressure ?? 0)),
     executionRandom,
     keeperResponseRandom,
   });
@@ -5759,6 +9477,7 @@ function resolveFreePlayOneOnOne(
         oneOnOne: true,
         selectedAction: decision.selectedAction,
         distanceToGoalYards: context.distanceYards,
+        distanceToGoalMetres: context.distanceYards * 0.9144,
         shotAngleDegrees: context.shotAngleDegrees,
         defenderPressure: context.defenderPressure,
       },
@@ -5767,7 +9486,17 @@ function resolveFreePlayOneOnOne(
 
   const ballResult = execution.ballResult;
   const offTarget = ballResult === "wide" || ballResult === "over";
-  const aimPoint = offTarget
+  const shotFlight = execution.shot?.flight;
+  const saveEnvelope = execution.shot?.keeperEnvelope;
+  const shotDuration = shotFlight
+    ? (saveEnvelope?.reached ? saveEnvelope.atMs : shotFlight.durationMs) : null;
+  const keeperMotion = shotFlight ? advanceKeeperSaveMotion({
+    from: pointOf(keeper), intentionTarget: shotFlight.actual, player: keeper.player,
+    elapsedMs: shotDuration, reactionDelayMs: reactionDelayMsFor(keeper.player),
+    intention: "intercept", paceToArrival: false,
+  }) : null;
+  const keeperBodyPoint = keeperMotion?.position ?? pointOf(keeper);
+  const aimPoint = shotFlight ? shotPositionAtElapsed(shotFlight, shotDuration) : offTarget
     ? missPointFor(
         shooter,
         keeper,
@@ -5786,6 +9515,17 @@ function resolveFreePlayOneOnOne(
       keeper,
       movement: "shot",
       outcome: offTarget ? "fail" : "success",
+      ...(shotFlight ? { duration: shotDuration,
+        playerMoves: [{ player: keeper, from: pointOf(keeper), to: keeperBodyPoint,
+          action: "intercept", trajectory: keeperMotion.trajectory,
+          motionModel: keeperMotion.motionModel, reactionDelayMs: keeperMotion.reactionDelayMs }],
+        ballTrajectory: Array.from({ length: 13 }, (_, index) => ({
+          progress: index / 12, position: shotPositionAtElapsed(shotFlight, shotDuration * index / 12),
+          velocity: { x: (shotFlight.actual.x - shotFlight.from.x) / shotFlight.durationMs,
+            y: (shotFlight.actual.y - shotFlight.from.y) / shotFlight.durationMs },
+          mode: "airborne",
+        })),
+      } : {}),
       ballFrom: pointOf(shooter),
       ballTo: aimPoint,
       contact: {
@@ -5817,6 +9557,12 @@ function resolveFreePlayOneOnOne(
   }
 
   const side = aimPoint.x < 50 ? "left" : "right";
+  if (ballResult === "rebound-in-play" || ballResult === "post-rebound") {
+    const physicalSave = { code: execution.code, physicsCode: ballResult === "post-rebound" ? "K.SAVE.6" : "K.SAVE.2" };
+    pushPhysicalReboundEvent(trace, { shooterEntry: shooter, keeperEntry: { ...keeper, ...keeperBodyPoint },
+      save: physicalSave, contactPoint: aimPoint });
+    return physicalSave.reboundTransition;
+  }
   const post = postPointFor(shooter, side);
   let endpoint = aimPoint;
   let segments = [aimPoint];
@@ -5851,6 +9597,12 @@ function resolveFreePlayOneOnOne(
   }
 
   const keeperContact = !execution.goal && execution.keeperAction;
+  if (keeperMotion && keeperContact && ballResult === "held") {
+    endpoint = keeperBodyPoint;
+    segments = [aimPoint, endpoint];
+  }
+  const legacyRecoveryMotion = keeperContact && !keeperMotion
+    ? realMoverTrajectory(keeper, aimPoint, { action: "recover" }) : null;
   trace.push(traceEvent(
     execution.code,
     execution.goal
@@ -5868,14 +9620,16 @@ function resolveFreePlayOneOnOne(
       ballFrom: aimPoint,
       ballTo: endpoint,
       pathSegments: segments,
-      mover: keeperContact ? keeper : null,
-      moveFrom: keeperContact ? pointOf(keeper) : null,
-      moveTo: keeperContact ? aimPoint : null,
+      ...(legacyRecoveryMotion ?? {}),
+      ...(legacyRecoveryMotion ? { contactTiming: "sequential" } : {}),
+      ...(keeperMotion && keeperContact ? { duration: 120 } : {}),
       contact: keeperContact ? {
         point: aimPoint,
+        ...(keeperMotion ? { bodyPoint: keeperBodyPoint,
+          reachAllowanceYards: KEEPER_DIVE_ARM_YARDS + jumpReachYards(keeper.player) } : {}),
         actor: keeper,
         type: execution.keeperAction,
-        phase: "start",
+        phase: legacyRecoveryMotion ? "end" : "start",
       } : null,
       ownerBefore: null,
       ownerAfter: nextOwnerId ? keeper : null,
@@ -5905,6 +9659,27 @@ function resolveFreePlayOneOnOne(
   };
 }
 
+// Gameplay v3 (2026-08-28) -- shared core for "resolve one geometric shot
+// attempt from wherever this shooter's own entry says they are right
+// now," reused by resolveShoot()'s own initial attempt AND by its
+// rebound follow-up below ("Rebound = bounce vector + existing loose
+// live race... If someone is actually there, they can shoot through
+// this same path" -- not reboundShotChance as a second, separate
+// scorer). Returns the raw pieces (descriptor + geometric keeper
+// outcome, or save:null for a genuinely off-target attempt) -- callers
+// push their OWN trace events, since an initial attempt and a scrambled
+// rebound narrate very differently.
+function resolveGeometricShotAttempt(shooterEntry, keeperEntry, finishType, pressure, random) {
+  const descriptor = resolveShotDescriptor(shooterEntry, keeperEntry, finishType, pressure, random);
+  if (!descriptor.onTarget) return { descriptor, save: null };
+  if (!keeperEntry) return { descriptor, save: { code: "K.SAVE.0", goal: true, rebound: false } };
+  const keeperEnvelope = simulateShotKeeperEnvelope(descriptor.flight, keeperEntry);
+  const save = keeperEnvelope.reached
+    ? geometricKeeperSaveFlavor(keeperEntry.player, finishType, random)
+    : { code: "K.SAVE.0", goal: true, rebound: false };
+  return { descriptor, save };
+}
+
 function resolveShoot(groups, availability, random, trace) {
   const owner = groups.owner;
   const defender = engagingOpponent(owner, groups.opponents);
@@ -5920,7 +9695,12 @@ function resolveShoot(groups, availability, random, trace) {
   const pressure = defender
     ? computePressure(defender.player, owner.zone, 0)
     : 0.1;
-  const finishType = selectFinishType(owner.player, random, pressure);
+  // Bugfix (2026-09-03) -- see selectFinishType()'s own header. A covering
+  // defender merely "holding the lane" (outside DUEL_RANGE_YARDS) drops
+  // pressure to a near-zero flat default with zero regard for how tight
+  // the actual angle is -- this is what makes the real geometry matter.
+  const shotAngle = shotAngleTightness(owner, state.attackingDirection[owner.team]);
+  const finishType = selectFinishType(owner.player, random, pressure, shotAngle);
   trace.push(
     traceEvent(
       finishType.toUpperCase(),
@@ -5934,29 +9714,52 @@ function resolveShoot(groups, availability, random, trace) {
     pressure,
     random,
   );
-  const attempt = resolveFinishAttempt(finishType, owner.player, random);
-  const miss = attempt.onTarget
+  // Shot As Projectile v1 (2026-08-27) -- see this file's own
+  // resolveShotDescriptor() header comment. Replaces the old two-roll
+  // pipeline (resolveFinishAttempt()'s "is it on target," then
+  // resolveShotBlock()'s "does a defender get a body on it") with one
+  // genuine geometric point, computed ONCE and reused for every
+  // downstream reference (on-target event, block's own ballFrom, save's
+  // own contact point) -- same "never re-drawn per call site" contract
+  // Shot Placement v1 already established for shotAimPoint below.
+  const descriptor = resolveShotDescriptor(owner, keeper, finishType, pressure, random);
+  const onTargetCode = `F.${finishType.toUpperCase()}`;
+  const miss = descriptor.onTarget
     ? null
-    : missPointFor(owner, keeper, strikeMechanics, attempt.code);
-  // Shot Placement v1 (2026-08-20) -- computed ONCE, right where the shot
-  // is confirmed on target, and reused for every downstream reference to
-  // "where this shot is actually going" (the on-target event itself, a
-  // block's own ballFrom, and the save's own contact point below) --
-  // never re-drawn per call site, which would consume random() again and
-  // silently produce a DIFFERENT point for the same shot at each
-  // reference (breaking the exact continuity this project's own contact-
-  // continuity regression suite specifically exists to catch).
-  const shotAimPoint = attempt.onTarget
-    ? shotPlacementSpread(owner, keeper, pressure, random)
-    : null;
+    : missPointFor(owner, keeper, strikeMechanics, descriptor.missCode);
+  const shotKeeperEnvelope = keeper && !isKeeperBeaten(owner, keeper)
+    ? simulateShotKeeperEnvelope(descriptor.flight, keeper) : { reached: false };
+  const firstBlock = descriptor.onTarget && defender ? shotBlockingDefender(descriptor.flight, defender) : null;
+  const shotEndMs = descriptor.onTarget
+    ? firstBlock?.atMs ?? (shotKeeperEnvelope.reached ? shotKeeperEnvelope.atMs : descriptor.flight.durationMs)
+    : descriptor.flight.durationMs;
+  const shotAimPoint = descriptor.onTarget ? shotPositionAtElapsed(descriptor.flight, shotEndMs) : null;
+  const keeperMotion = descriptor.onTarget && keeper ? advanceKeeperSaveMotion({
+    from: pointOf(keeper), intentionTarget: descriptor.actualPoint, player: keeper.player,
+    elapsedMs: shotEndMs, reactionDelayMs: reactionDelayMsFor(keeper.player),
+    intention: "intercept", paceToArrival: false,
+  }) : null;
+  const keeperAtContact = keeperMotion ? { ...keeper, ...keeperMotion.position } : keeper;
   trace.push(
-    traceEvent(attempt.code, attempt.onTarget ? "On target" : "Off target", {
+    traceEvent(descriptor.onTarget ? onTargetCode : descriptor.missCode, descriptor.onTarget ? "On target" : "Off target", {
       actor: owner,
       keeper,
       movement: "shot",
-      outcome: attempt.onTarget ? "success" : "fail",
+      duration: shotEndMs,
+      playerMoves: keeperMotion ? [{ player: keeper, from: pointOf(keeper), to: keeperMotion.position,
+        action: "intercept", trajectory: keeperMotion.trajectory,
+        motionModel: keeperMotion.motionModel, reactionDelayMs: reactionDelayMsFor(keeper.player), intention: { action: "intercept", target: descriptor.actualPoint } }] : null,
+      ballTrajectory: descriptor.onTarget ? Array.from({ length: 13 }, (_, index) => {
+        const progress = index / 12;
+        return { progress, position: shotPositionAtElapsed(descriptor.flight, progress * shotEndMs),
+          velocity: { x: (descriptor.flight.actual.x - descriptor.flight.from.x) / descriptor.flight.durationMs,
+            y: (descriptor.flight.actual.y - descriptor.flight.from.y) / descriptor.flight.durationMs },
+          verticalVelocity: 2 * descriptor.actualHeightYards * progress * shotEndMs / descriptor.flight.durationMs ** 2,
+          mode: "airborne" };
+      }) : undefined,
+      outcome: descriptor.onTarget ? "success" : "fail",
       ballFrom: pointOf(owner),
-      ballTo: attempt.onTarget ? shotAimPoint : miss.point,
+      ballTo: descriptor.onTarget ? shotAimPoint : miss.point,
       contact: {
         point: pointOf(owner),
         actor: owner,
@@ -5965,15 +9768,15 @@ function resolveShoot(groups, availability, random, trace) {
       },
       ownerBefore: owner,
       ownerAfter: null,
-      badge: attempt.onTarget ? null : miss.badge,
-      heightCue: attempt.onTarget ? false : miss.heightCue,
+      badge: descriptor.onTarget ? null : miss.badge,
+      heightCue: descriptor.onTarget ? false : miss.heightCue,
       ...strikeMechanics,
     }),
   );
-  if (!attempt.onTarget) {
+  if (!descriptor.onTarget) {
     return {
       outcome: "NO GOAL",
-      code: attempt.code,
+      code: descriptor.missCode,
       resolved: true,
       terminal: true,
       possession: "dead",
@@ -5984,12 +9787,10 @@ function resolveShoot(groups, availability, random, trace) {
     };
   }
   if (defender) {
-    const block = resolveShotBlock(
-      defender.player,
-      finishType,
-      FIXED_MINUTE,
-      random,
-    );
+    const blockContact = shotBlockingDefender(descriptor.flight, defender);
+    const block = blockContact
+      ? { blocked: true, outcome: geometricBlockOutcome(random), code: "D.BLOCK" }
+      : { blocked: false };
     if (block.blocked) {
       // Chains from the on-target event's own endpoint (the ball already
       // heading goalward) redirected to the defender, instead of resetting
@@ -6081,17 +9882,21 @@ function resolveShoot(groups, availability, random, trace) {
       reason: keeperBeaten ? "keeper-beaten-goal" : "empty-net-goal",
     };
   }
-  const save = resolveKeeperSave(
-    owner.player,
-    keeper.player,
-    finishType,
-    FIXED_MINUTE,
-    random,
-    owner.zone,
-  );
+  // Shot As Projectile v1 -- geometry decides whether the keeper ever
+  // gets there at all (simulateShotKeeperEnvelope(), the shot-side twin
+  // of Slice A's own simulateFlightUntilContact()); if travel time
+  // exceeds the flight's own remaining time at every tick, this is a
+  // structural K.SAVE.0 (clean, no-touch beaten goal) regardless of
+  // Reflexes -- attributes only ever decide the FLAVOR of a save the
+  // keeper's own body genuinely reached (geometricKeeperSaveFlavor()).
+  const keeperEnvelope = shotKeeperEnvelope;
+  const save = keeperEnvelope.reached
+    ? geometricKeeperSaveFlavor(keeper.player, finishType, random)
+    : { code: "K.SAVE.0", goal: true, rebound: false };
   const saveEndpoint = pushKeeperSaveEvent(trace, {
     shooterEntry: owner,
-    keeperEntry: keeper,
+    keeperEntry: keeperAtContact,
+    keeperContactResolved: true,
     save,
     strikeMechanics,
     contactPoint: shotAimPoint,
@@ -6109,73 +9914,193 @@ function resolveShoot(groups, availability, random, trace) {
       reason: "shot-save-goal",
     };
   }
-  if (!save.rebound) {
+  if (save.reboundTransition || !save.rebound) {
     return keeperSaveTransition(save, keeper, saveEndpoint, "shot");
   }
   if (!defender) {
-    const scored =
-      random() <
-      transitionShotChance(
-        owner.player,
-        keeper.player,
-        FIXED_MINUTE,
-        0.32,
-        poacherScore,
+    // Gameplay v3 -- "Rebound = bounce vector + existing loose live race
+    // (not reboundShotChance as scorer). If someone is actually there,
+    // they can shoot through this same path." Reuses the SAME
+    // bounce+race primitives Passing v3's own bounce-on-failed-control
+    // mechanic established (looseBallBouncePoint/looseBallFlightMs/
+    // looseBallRaceContact) instead of a flat probability deciding
+    // whether an "unchallenged" rebound goes in -- and races the REAL
+    // full opponent list, not just whoever was already marking the
+    // original shot (engagingOpponent()'s own DUEL_RANGE_YARDS check,
+    // which is exactly why `defender` is null here even when other
+    // opponents genuinely exist further out): a spilled ball off a save
+    // is a genuinely fresh contest, not still scoped to the original
+    // shot's own marker.
+    const bouncePoint = looseBallBouncePoint(saveEndpoint, pointOf(owner), random);
+    // Ball Out of Bounds v1 -- see resolveLooseBallBounce()'s own matching
+    // comment. The keeper's own parry is the last touch here, not the
+    // shooter -- a rebound pushed behind is a corner, exactly like any
+    // other save sent behind for one.
+    const reboundPitchExit = classifyPitchExit({
+      from: saveEndpoint, to: bouncePoint, lastTouchTeam: keeper.team, attackingDirectionByTeam: state.attackingDirection,
+    });
+    if (reboundPitchExit) {
+      return pushPitchExitRestart(trace, {
+        actor: keeper, ballFrom: saveEndpoint, exit: reboundPitchExit, movement: "clearance",
+        contact: { point: saveEndpoint, actor: keeper, type: "parry", phase: "start" },
+      });
+    }
+    const bounceDurationMs = looseBallFlightMs(yardDistance(saveEndpoint, bouncePoint));
+    const raceContact = looseBallRaceContact(owner, saveEndpoint, bouncePoint, bounceDurationMs, groups);
+    if (!raceContact) {
+      trace.push(
+        traceEvent(
+          "REBOUND.LOOSE",
+          "The rebound spills loose, unchallenged",
+          {
+            actor: owner,
+            keeper,
+            movement: "rebound-shot",
+            outcome: "loose",
+            ballFrom: saveEndpoint,
+            ballTo: bouncePoint,
+            duration: bounceDurationMs,
+            contact: { point: saveEndpoint, actor: owner, type: "rebound-shot", phase: "start" },
+            ownerBefore: owner,
+            ownerAfter: null,
+          },
+        ),
       );
-    const reboundMiss = scored ? null : missPointFor(owner, keeper, null, null);
-    const reboundEnd = scored
-      ? netPointFor(owner, shotPlacementSpread(owner, keeper, REBOUND_SHOT_PRESSURE, random).x)
-      : reboundMiss.point;
+      return {
+        outcome: "NO GOAL",
+        code: "REBOUND.LOOSE",
+        resolved: true,
+        terminal: true,
+        possession: "loose",
+        nextOwnerId: null,
+        ballEnd: bouncePoint,
+        restart: null,
+        reason: "rebound-loose-uncontested",
+      };
+    }
+    const winner = raceContact.candidate;
+    if (winner.id !== owner.id) {
+      // A genuinely different body reached the loose ball first -- a
+      // real turnover, not a miss.
+      trace.push(
+        traceEvent(
+          "REBOUND.LOST",
+          `${playerName(winner.player)} beats ${playerName(owner.player)} to the rebound`,
+          {
+            actor: winner,
+            defender: owner,
+            movement: "rebound-shot",
+            outcome: "turnover",
+            playerMoves: [{ player: winner, from: pointOf(winner), to: raceContact.atPoint, action: "recover-loose-ball" }],
+            ballFrom: saveEndpoint,
+            ballTo: raceContact.atPoint,
+            duration: raceContact.atMs,
+            contact: { point: raceContact.atPoint, actor: winner, type: "recovery", phase: "end" },
+            ownerBefore: null,
+            ownerAfter: winner,
+          },
+        ),
+      );
+      return {
+        outcome: "NO GOAL",
+        code: "REBOUND.LOST",
+        resolved: true,
+        terminal: true,
+        possession: "turnover",
+        nextOwnerId: winner.id,
+        ballEnd: raceContact.atPoint,
+        restart: null,
+        reason: "rebound-lost",
+      };
+    }
+    // The shooter themselves gets there first -- a real follow-up shot
+    // from the rebound spot, through the SAME geometric mouth tick
+    // every other migrated attempt uses (resolveGeometricShotAttempt()),
+    // never reboundShotChance as a second, separate scorer.
     trace.push(
       traceEvent(
-        scored ? "REBOUND.GOAL" : "REBOUND.MISS",
-        scored
-          ? `${playerName(owner.player)} scrambles it in, unchallenged`
-          : "The rebound drifts away, unchallenged",
+        "REBOUND.WON",
+        `${playerName(owner.player)} reacts first to the loose ball`,
         {
           actor: owner,
           keeper,
           movement: "rebound-shot",
-          outcome: scored ? "goal" : "fail",
-          // Continues from saveEndpoint -- the save's real endpoint (a
-          // parry/post-rebound spot), only reachable when save.rebound is
-          // true (K.SAVE.2/.5/.6), not back from the original shooter.
-          // mover/moveTo: the scorer genuinely moves to the rebound spot to
-          // meet the ball there -- a real browser round caught this being
-          // missing (the "contact" record already named them as the
-          // contacting actor, but nothing ever moved their own MARKER
-          // there, so a scored rebound visually looked like the ball never
-          // left the keeper).
-          mover: owner,
-          moveTo: saveEndpoint,
+          outcome: "success",
+          // realMoverTrajectory()'s own `from` must be the SHOOTER's real
+          // last authored position (matching what looseBallRaceContact()
+          // itself already raced from -- earliestReachableContact() judges
+          // every candidate, owner included, from their own entry
+          // position, never saveEndpoint), not the ball's own save/parry
+          // point -- those two are close but rarely identical, and the
+          // gap is exactly a continuity-chain break (a player who last
+          // authored a move ending at their own real spot cannot have
+          // this next one silently start from the ball's spot instead).
+          ...realMoverTrajectory(owner, raceContact.atPoint, { from: pointOf(owner), floorMs: MOVEMENT_DURATIONS["rebound-shot"] }),
           ballFrom: saveEndpoint,
-          ballTo: reboundEnd,
-          badge: scored ? null : reboundMiss.badge,
-          contact: {
-            point: saveEndpoint,
-            actor: owner,
-            type: "rebound-shot",
-            phase: "start",
-          },
-          ownerBefore: owner,
-          ownerAfter: null,
+          ballTo: raceContact.atPoint,
+          duration: raceContact.atMs,
+          contact: { point: raceContact.atPoint, actor: owner, type: "control", phase: "start" },
+          ownerBefore: null,
+          ownerAfter: owner,
         },
       ),
     );
-    return {
-      outcome: scored ? "GOAL" : "NO GOAL",
-      code: scored ? "REBOUND.GOAL" : "REBOUND.MISS",
-      resolved: true,
-      // A miss is the ball genuinely leaving play, not a keeper catch --
-      // see resolveCross()'s identical fix and resolveReboundScramble()'s
-      // own comment on this exact bug.
-      terminal: true,
-      possession: "dead",
-      nextOwnerId: null,
-      ballEnd: reboundEnd,
-      restart: scored ? "kickoff" : "goal-kick",
-      reason: scored ? "rebound-goal-uncontested" : "rebound-miss-uncontested",
+    const reboundOwnerEntry = {
+      ...owner,
+      x: raceContact.atPoint.x,
+      y: raceContact.atPoint.y,
+      zone: raceContact.atPoint.zone,
     };
+    const reboundAttempt = resolveGeometricShotAttempt(reboundOwnerEntry, keeper, finishType, REBOUND_SHOT_PRESSURE, random);
+    if (!reboundAttempt.save) {
+      const reboundMiss = missPointFor(reboundOwnerEntry, keeper, null, reboundAttempt.descriptor.missCode);
+      trace.push(
+        traceEvent(reboundAttempt.descriptor.missCode, "The rebound effort goes off target", {
+          actor: reboundOwnerEntry,
+          keeper,
+          movement: "shot",
+          outcome: "fail",
+          ballFrom: raceContact.atPoint,
+          ballTo: reboundMiss.point,
+          badge: reboundMiss.badge,
+          heightCue: reboundMiss.heightCue,
+          contact: { point: raceContact.atPoint, actor: reboundOwnerEntry, type: "shot", phase: "start" },
+          ownerBefore: reboundOwnerEntry,
+          ownerAfter: null,
+        }),
+      );
+      return {
+        outcome: "NO GOAL",
+        code: reboundAttempt.descriptor.missCode,
+        resolved: true,
+        terminal: true,
+        possession: "dead",
+        nextOwnerId: null,
+        ballEnd: reboundMiss.point,
+        restart: "goal-kick",
+        reason: "rebound-shot-off-target",
+      };
+    }
+    const reboundSaveEndpoint = pushKeeperSaveEvent(trace, {
+      shooterEntry: reboundOwnerEntry,
+      keeperEntry: keeper,
+      save: reboundAttempt.save,
+      contactPoint: reboundAttempt.descriptor.actualPoint,
+    });
+    if (reboundAttempt.save.goal) {
+      return {
+        outcome: "GOAL",
+        code: reboundAttempt.save.code,
+        resolved: true,
+        terminal: true,
+        possession: "dead",
+        nextOwnerId: null,
+        ballEnd: reboundSaveEndpoint,
+        restart: "kickoff",
+        reason: "rebound-shot-goal",
+      };
+    }
+    return keeperSaveTransition(reboundAttempt.save, keeper, reboundSaveEndpoint, "rebound-shot");
   }
   return resolveReboundScramble(
     owner,
@@ -6257,6 +10182,14 @@ function resolveCarry(
     y: point.y,
     zone: zoneFromPercent(point.x, point.y),
   };
+  // Progression Contest v1 (2026-08-28) -- the OTHER beaten-presser
+  // trigger this feature names, distinct from an actual duel/shield win:
+  // an open carry with nobody in contest range at all can still leave
+  // whoever WAS marking the owner at the start of it a real distance
+  // behind the ball's own new position. Captured before any poke check
+  // below might return early (a poked carry is a turnover, not a beaten
+  // defender -- nothing to cover for there).
+  const originEngager = engagingOpponent(pointOf(owner), groups.opponents);
   const origin = pointOf(owner);
   // Directional continuity -- see planCarryDestination()'s own comment.
   // Real possession-loop carries only (interleaveOffBall gates every
@@ -6264,66 +10197,312 @@ function resolveCarry(
   // a direct resolver call against a hand-built test fixture must never
   // pick up this side effect either.
   if (interleaveOffBall) recordCarryDirection(owner, origin, advanced);
-  const carryPressure = pressureAt(origin, groups.opponents);
-  const gait = determineCarryGait(origin, groups.opponents);
-  const touches = planCarryTouches(origin, advanced, gait, {
-    player: owner.player,
+  // On-ball gait + possession stamina v1 (2026-08-31) -- see
+  // determineCarryGait()'s own header (spatialDecision.js) for the full
+  // reported-bug rationale. owner.burst01 is the possession-local
+  // battery (runConstructedPossession()'s own init/drain, never the
+  // shared player object) -- absent for a direct resolver call against a
+  // hand-built fixture, which correctly reads as a full tank (?? 1).
+  const attackingDirection = state.attackingDirection[owner.team];
+  const gait = determineCarryGait(owner, groups.opponents, attackingDirection, owner.burst01 ?? 1, advanced);
+  pushGaitDenialTrace(trace, owner, groups.opponents, attackingDirection, gait, advanced);
+  const carryPressure = effectiveCarryPressure(
+    pressureAt(origin, groups.opponents), owner, gait, attackingDirection,
+  );
+  // A fatigued carrier's own physical ceiling fades for the REST of this
+  // possession (staminaScaledPlayer()'s own header) -- scoped to just
+  // the trajectory-building calls below, never the shared roster entry.
+  const staminaPlayer = staminaScaledPlayer(owner.player, owner.burst01);
+  const kineticOwner = staminaPlayer === owner.player ? owner : { ...owner, player: staminaPlayer };
+  // Ground Roll v2 -- see resolveDribble()'s own matching comment and
+  // spatialDecision.js's simulateCarryTouches() header.
+  const carryEntryVelocity = readMotionRecord(motionContext, owner.id, origin).velocity;
+  let touches = simulateCarryTouches(origin, advanced, gait, {
+    incomingVelocity: carryEntryVelocity,
+    player: kineticOwner.player,
     pressure: carryPressure,
     seed: `${owner.id}:carry:${origin.x}:${origin.y}:${advanced.x}:${advanced.y}`,
+    opponents: groups.opponents,
   });
+  // Progression Contest v1 (2026-08-28) -- a real reported bug: "carry is
+  // not a contest... 10 yards of immune rolling" -- simulateCarryTouches()
+  // now flags AT MOST one genuine poke opportunity (an opponent
+  // physically within real standing-tackle range of the LIVE, still-
+  // rolling ball -- see its own header), but only reports the geometry;
+  // this is the only place that actually rolls the duel, same shape as
+  // resolveDribble()'s own progressionDuel just with different labels
+  // (poking a rolling ball loose is a snap of Dribbling/Technique/
+  // Agility against Tackling/Anticipation/Strength, not a full tackle
+  // engagement). The decision layer (spatialDecision.js) never sees or
+  // rolls this -- it stays exactly as attribute/RNG-blind as before.
+  const pokeIndex = touches.findIndex((touch) => touch.pokeAttempt);
+  if (pokeIndex !== -1) {
+    const poker = touches[pokeIndex].pokeAttempt.opponent;
+    const pokeDuel = localizedDuel(
+      owner.player,
+      poker.player,
+      ["Dribbling", "Technique", "Agility"],
+      ["Tackling", "Anticipation", "Strength"],
+      FIXED_MINUTE,
+      random,
+      owner.zone,
+    );
+    if (!pokeDuel.won) {
+      // The carrier rode every touch STRICTLY BEFORE this one exactly as
+      // simulated (they had genuinely already controlled the ball
+      // there); the poked touch itself never completes to its own
+      // natural stop -- the ball is loose from the exact point the
+      // defender actually reached it, not wherever the untouched roll
+      // would have ended.
+      const pokeTouch = touches[pokeIndex];
+      const priorTouches = touches.slice(0, pokeIndex);
+      const priorSpanMs = priorTouches.reduce((sum, touch) => sum + touch.durationMs, 0);
+      const pokeTotalMs = interleaveOffBall
+        ? priorSpanMs + pokeTouch.durationMs
+        : 0;
+      if (interleaveOffBall) {
+        trace.push(
+          traceEvent(
+            "P.CARRY.START",
+            `${playerName(owner.player)} ${gaitSetOffPhrase(gait)}`,
+            { actor: owner, movement: "dribble", outcome: "neutral", duration: pokeTotalMs },
+          ),
+        );
+      }
+      let cursor = origin;
+      priorTouches.forEach((touch) => {
+        const to = { ...touch.ballTo, zone: zoneFromPercent(touch.ballTo.x, touch.ballTo.y) };
+        trace.push(
+          traceEvent(
+            "P.CARRY.TOUCH",
+            `${playerName(owner.player)} touches it forward`,
+            {
+              actor: owner,
+              playerMoves: [{ player: owner, from: cursor, to, action: "touch", trajectory: touch.chaseTrajectory }],
+              movement: "touch",
+              outcome: "success",
+              ballFrom: cursor,
+              ballTo: to,
+              ballTrajectory: touch.ballTrajectory,
+              duration: touch.durationMs,
+              contact: { point: to, actor: owner, type: "touch", phase: "end" },
+              ownerBefore: owner,
+              ownerAfter: owner,
+              attribution: touch.kinetics?.attribution,
+              ...(interleaveOffBall ? { overlapWithPrevious: true, overlapStartOffsetMs: touch.startOffsetMs } : null),
+            },
+          ),
+        );
+        cursor = to;
+      });
+      const pokePoint = { ...pokeTouch.ballTo, zone: zoneFromPercent(pokeTouch.ballTo.x, pokeTouch.ballTo.y) };
+      trace.push(
+        traceEvent(
+          "T.POKE",
+          `${playerName(poker.player)} pokes it away from ${playerName(owner.player)}`,
+          {
+            actor: owner,
+            defender: poker,
+            movement: "scramble",
+            outcome: "turnover",
+            ballFrom: cursor,
+            ballTo: pokePoint,
+            ballTrajectory: pokeTouch.ballTrajectory,
+            duration: pokeTouch.durationMs,
+            contact: { point: pokePoint, actor: poker, type: "tackle", phase: "end" },
+            ownerBefore: owner,
+            ownerAfter: null,
+            ...(interleaveOffBall ? { overlapWithPrevious: true, overlapStartOffsetMs: priorSpanMs } : null),
+          },
+        ),
+      );
+      return {
+        outcome: "POKE",
+        code: "T.POKE",
+        resolved: true,
+        terminal: true,
+        possession: "loose",
+        nextOwnerId: null,
+        ballEnd: pokePoint,
+        restart: null,
+        reason: "carry-poked",
+        gait,
+        offBallInterleaved: false,
+      };
+    }
+    // A missed poke does not stop the ball or give the carrier an early
+    // touch. Re-run the same deterministic impulses without that attempted
+    // contact; obstacle steering is retained and no gameplay RNG is drawn.
+    touches = simulateCarryTouches(origin, advanced, gait, {
+      player: kineticOwner.player, pressure: carryPressure,
+      seed: `${owner.id}:carry:${origin.x}:${origin.y}:${advanced.x}:${advanced.y}`,
+      opponents: groups.opponents, ignorePokes: true, incomingVelocity: carryEntryVelocity,
+    });
+  }
+  // Ball Out of Bounds v1 (2026-09-01) -- if the very last touch already
+  // carried the ball off the pitch (simulateOneTouch()'s own header), the
+  // carry ends exactly there -- no further "drive forward under control"
+  // leg, no normal completion. classifyPitchExit() is computed FIRST,
+  // with nothing pushed to `trace` yet -- only once it genuinely returns a
+  // real restart do we author anything, so a missing team/attacking-
+  // direction context (should never happen against a real possession)
+  // falls through to the ordinary completion path below with zero risk of
+  // double-authoring the same touches.
+  const exitedTouch = touches.at(-1);
+  const pitchExit = exitedTouch?.exitedPitch
+    ? classifyPitchExit({
+        exit: exitedTouch.exitedPitch,
+        lastTouchTeam: owner.team,
+        attackingDirectionByTeam: state.attackingDirection,
+      })
+    : null;
+  if (pitchExit) {
+    const priorTouches = touches.slice(0, -1);
+    const priorSpanMs = priorTouches.reduce((sum, touch) => sum + touch.durationMs, 0);
+    const exitTotalMs = interleaveOffBall ? priorSpanMs + exitedTouch.durationMs : 0;
+    if (interleaveOffBall) {
+      trace.push(
+        traceEvent(
+          "P.CARRY.START",
+          `${playerName(owner.player)} ${gaitSetOffPhrase(gait)}`,
+          { actor: owner, movement: "dribble", outcome: "neutral", duration: exitTotalMs },
+        ),
+      );
+    }
+    let exitCursor = origin;
+    priorTouches.forEach((touch) => {
+      const to = { ...touch.ballTo, zone: zoneFromPercent(touch.ballTo.x, touch.ballTo.y) };
+      trace.push(
+        traceEvent(
+          "P.CARRY.TOUCH",
+          `${playerName(owner.player)} touches it forward`,
+          {
+            actor: owner,
+            playerMoves: [{ player: owner, from: exitCursor, to, action: "touch", trajectory: touch.chaseTrajectory }],
+            movement: "touch",
+            outcome: "success",
+            ballFrom: exitCursor,
+            ballTo: to,
+            ballTrajectory: touch.ballTrajectory,
+            duration: touch.durationMs,
+            contact: { point: to, actor: owner, type: "touch", phase: "end" },
+            ownerBefore: owner,
+            ownerAfter: owner,
+            attribution: touch.kinetics?.attribution,
+            ...(interleaveOffBall ? { overlapWithPrevious: true, overlapStartOffsetMs: touch.startOffsetMs } : null),
+          },
+        ),
+      );
+      exitCursor = to;
+    });
+    const exitTo = { ...exitedTouch.ballTo, zone: zoneFromPercent(exitedTouch.ballTo.x, exitedTouch.ballTo.y) };
+    const restartResult = pushPitchExitRestart(trace, {
+      actor: owner, ballFrom: exitCursor, exit: pitchExit, movement: "touch",
+      playerMoves: [{ player: owner, from: exitCursor, to: exitTo, action: "touch", trajectory: exitedTouch.chaseTrajectory }],
+      ballTrajectory: exitedTouch.ballTrajectory,
+      ...(interleaveOffBall ? { overlapWithPrevious: true, overlapStartOffsetMs: priorSpanMs } : null),
+    });
+    return { ...restartResult, gait, offBallInterleaved: false };
+  }
+  // Gameplay v3.1 -- "Fix the event clock, not hermite." Each
+  // P.CARRY.TOUCH below still needs its own real, sequential, chained
+  // ballFrom/ballTo -- continuity AND the carrier's own touch-by-touch
+  // running both depend on that staying true -- but as independent
+  // PRIMARY timeline intervals, only the MOST RECENT one is ever
+  // reachable by a later overlapWithPrevious call (matchLabPlayback.js's
+  // lastPrimaryInterval is a single slot, not a history), which is
+  // exactly why the off-ball reaction below used to only ever cover the
+  // last touch's own ~220ms, not the whole carry. P.CARRY.START owns ONE
+  // wide primary interval spanning the real total carry time up front;
+  // every touch and the final P.CARRY then overlap INTO it (their own
+  // real spacing preserved via overlapStartOffsetMs) instead of each
+  // claiming a fresh slot, so the off-ball reaction that follows can
+  // finally bind to a window wide enough to cover the whole thing. No
+  // ballFrom/ballTo/contact of its own -- a pure timing reservation,
+  // invisible to the ball/continuity tracks. Gated by interleaveOffBall,
+  // same convention as every other side effect in this file -- a direct
+  // resolver call against a hand-built test fixture keeps today's exact
+  // shape (each touch its own short primary) unchanged.
+  // Ground Roll v1 -- real per-touch roll-to-a-stop timing (see
+  // resolveDribble()'s own matching comment).
+  const carryTouchSpanMs = touches.reduce((sum, touch) => sum + touch.durationMs, 0);
+  let carryTotalMs = interleaveOffBall
+    ? Math.max(
+        carryWindowDurationMs(owner, origin, advanced),
+        carryTouchSpanMs + MOVEMENT_DURATIONS.dribble,
+      )
+    : 0;
+  if (interleaveOffBall) {
+    trace.push(
+      traceEvent(
+        "P.CARRY.START",
+        `${playerName(owner.player)} ${gaitSetOffPhrase(gait)}`,
+        { actor: owner, movement: "dribble", outcome: "neutral", duration: carryTotalMs },
+      ),
+    );
+  }
   let cursor = origin;
-  touches.forEach((waypoint, index) => {
-    const to = {
-      x: waypoint.x,
-      y: waypoint.y,
-      zone: zoneFromPercent(waypoint.x, waypoint.y),
-    };
+  touches.forEach((touch) => {
+    const to = { ...touch.ballTo, zone: zoneFromPercent(touch.ballTo.x, touch.ballTo.y) };
     trace.push(
       traceEvent(
         "P.CARRY.TOUCH",
         `${playerName(owner.player)} touches it forward`,
         {
           actor: owner,
-          mover: owner,
-          moveFrom: cursor,
-          moveTo: to,
+          // Ground Roll v2 -- the owner's own chase, distinct from the
+          // ball's independent roll (see resolveDribble()'s own comment).
+          playerMoves: [{ player: owner, from: cursor, to, action: "touch", trajectory: touch.chaseTrajectory }],
           movement: "touch",
           outcome: "success",
           ballFrom: cursor,
           ballTo: to,
+          ballTrajectory: touch.ballTrajectory,
+          duration: touch.durationMs,
           contact: {
-            point: cursor,
+            point: to,
             actor: owner,
             type: "touch",
-            phase: "start",
+            phase: "end",
           },
           ownerBefore: owner,
           ownerAfter: owner,
-          attribution: waypoint.kinetics?.attribution,
+          attribution: touch.kinetics?.attribution,
+          ...(interleaveOffBall
+            ? { overlapWithPrevious: true, overlapStartOffsetMs: touch.startOffsetMs }
+            : null),
         },
       ),
     );
     cursor = to;
-    // Same continuous coverage as a successful dribble: every touch gets
-    // a concurrent off-ball reaction rather than one midpoint burst.
-    if (interleaveOffBall) {
-      reactOffBall(groups, cursor, trace, {
-        fraction: INTERLEAVED_REACTION_FRACTION,
-        defensiveFraction: INTERLEAVED_DEFENSIVE_REACTION_FRACTION,
-        duration: INTERLEAVED_REACTION_DURATION,
-        motionContext,
-      });
-    }
+    // Off-Ball Motion v3 (2026-08-26) -- see resolveDribble()'s own
+    // matching comment: a per-touch reactOffBall() call here is exactly
+    // the reported "go-stop-go" bug. ONE reactOffBallContinuous() call now
+    // covers the WHOLE carry window instead -- see just below.
   });
+  acceptCarryOvershoot(origin, advanced, touches);
+  const carryMove = carryLegMoverTrajectory(kineticOwner, advanced, groups.opponents, {
+      from: cursor, floorMs: MOVEMENT_DURATIONS.dribble,
+      // World Motion Contract v1 -- continue the run the touches above
+      // were already making, instead of restarting from a standstill.
+      entrySpeedYps: touches.at(-1)?.exitSpeedYps ?? speedYpsFromVelocity(carryEntryVelocity),
+      entryVelocity: touches.at(-1)?.chaseTrajectory?.at(-1)?.velocity ?? carryEntryVelocity,
+    });
+  if (interleaveOffBall) {
+    carryTotalMs = carryTouchSpanMs + carryMove.duration;
+    const reservation = [...trace].reverse().find(event => event.code === "P.CARRY.START");
+    reservation.duration = carryTotalMs;
+  }
   trace.push(
     traceEvent(
       "P.CARRY",
-      `${playerName(owner.player)} carries it forward into space`,
+      `${playerName(owner.player)} ${gaitActionPhrase(gait)}`,
       {
         actor: owner,
-        mover: owner,
-        moveFrom: cursor,
-        moveTo: advanced,
+        ...carryMove,
+        // Ground Roll v2 follow-up -- see resolveDribble()'s own matching
+        // comment and carryLegBallTrajectory()'s header.
+        ballTrajectory: carryLegBallTrajectory(carryMove.playerMoves[0].trajectory, cursor, advanced),
         movement: "dribble",
         outcome: "success",
         ballFrom: cursor,
@@ -6331,9 +10510,39 @@ function resolveCarry(
         contact: { point: cursor, actor: owner, type: "touch", phase: "start" },
         ownerBefore: owner,
         ownerAfter: owner,
+        attribution: burstAttribution(owner),
+        ...(interleaveOffBall
+          ? { overlapWithPrevious: true, overlapStartOffsetMs: carryTouchSpanMs }
+          : null),
       },
     ),
   );
+  // ONE continuous off-ball reaction spanning the WHOLE carry window --
+  // see resolveDribble()'s own matching call for the full rationale. Now
+  // reaches all the way back to the FIRST touch (via P.CARRY.START's own
+  // wide anchor above), not just the final P.CARRY leg.
+  // Progression Contest v1 -- a real margin, not the ~1yd noise an
+  // ordinary tight carry produces (a marker who was NEVER actually
+  // engaging at all reads as null here, same "was there a real
+  // engager" gate engagingOpponent()/DUEL_RANGE_YARDS already applies
+  // everywhere else).
+  const beatenDefenderId = originEngager && yardDistance(originEngager, advanced) > 3
+    ? originEngager.id
+    : null;
+  if (interleaveOffBall) {
+    reactOffBallContinuous(
+      groups, origin, advanced,
+      carryTotalMs,
+      trace,
+      {
+        motionContext, excludedIds: [owner.id], overlapWithPrevious: true, chaseIntention: true,
+        // This branch's own off-ball reaction is the ONLY one that ever
+        // runs for a normal completed carry (offBallInterleaved below
+        // skips the generic post-action reshape entirely).
+        beatenPresserId: beatenDefenderId,
+      },
+    );
+  }
   return {
     outcome: "CARRY",
     code: "P.CARRY",
@@ -6344,6 +10553,10 @@ function resolveCarry(
     ballEnd: advanced,
     restart: null,
     reason: "carry-advance",
+    beatenDefenderId,
+    gait,
+    // Off-Ball Motion v3 -- see resolveDribble()'s own matching field.
+    offBallInterleaved: interleaveOffBall,
   };
 }
 
@@ -6359,7 +10572,14 @@ function resolveCarry(
 // in draft-run.js's own tick loop to stay "faithful to" here -- this is
 // genuinely new, Match-Lab-only ground, same as the two "no such thing as"
 // concepts (holding, shielding) the user asked for by name.
-function resolveHold(groups, availability, random, trace) {
+// Playback Fluidity v1 (2026-09-05) -- takes the standard resolver tail
+// (interleaveOffBall, motionContext) so a hold beat can keep the REST of the
+// pitch moving through it. A hold is the one action where the ball genuinely
+// does not travel, which is exactly why it used to freeze everything: with no
+// ball movement and no off-ball reaction, all 22 players stood still for the
+// whole window. Ten outfield players do not stop running because the carrier
+// is shielding.
+function resolveHold(groups, availability, random, trace, interleaveOffBall = false, motionContext = null) {
   const owner = groups.owner;
   const defender = engagingOpponent(owner, groups.opponents);
   if (!defender) {
@@ -6377,17 +10597,22 @@ function resolveHold(groups, availability, random, trace) {
           outcome: "neutral",
           ballFrom: pointOf(owner),
           ballTo: pointOf(owner),
-          contact: {
-            point: pointOf(owner),
-            actor: owner,
-            type: "touch",
-            phase: "start",
-          },
           ownerBefore: owner,
           ownerAfter: owner,
         },
       ),
     );
+    // Playback Fluidity v1 (2026-09-05) -- NOT interleaving an off-ball
+    // reaction here, deliberately, and this is the interesting negative
+    // result of that pass. Doing so is the obvious fix for the 400ms orphan
+    // the harness reports on this beat, and it does remove the freeze -- but
+    // moving ten players during a hold changes their positions, which changes
+    // the next decision, and it measurably re-broke the recorded
+    // congested-pass-loop bug scenario (the possession started hitting the
+    // 50-action cap again). The freeze is real and still needs fixing; it
+    // needs a change that does not feed back into candidate generation, which
+    // is more than a resolver-local edit. Left as reported work rather than
+    // traded for a worse regression.
     return {
       outcome: "HOLD",
       code: "P.HOLD",
@@ -6427,38 +10652,64 @@ function resolveHold(groups, availability, random, trace) {
         outcome: "neutral",
         ballFrom: contactPoint,
         ballTo: contactPoint,
-        playerMoves: [
-          {
-            player: defender,
-            from: pointOf(defender),
-            to: contactPoint,
-            action: "challenge",
-          },
-        ],
+        // The challenge approach takes its real ETA. If already engaged,
+        // this caption accompanies the following physical shield separation.
+        ...(yardDistance(defender, contactPoint) > 0.001
+          ? realMoverTrajectory(defender, contactPoint, { action: "challenge" })
+          : { duration: 0 }),
       },
     ),
   );
   if (shieldDuel.won) {
+    // Engagement Breaker v1 -- a real contest ends with the winner
+    // stepping away WITH the ball (a real escape line), and the loser
+    // left behind with a genuine gap -- not both bodies parked on the
+    // exact contact point forever (see contestSeparationPoints()'s own
+    // header for the full reported-bug rationale). Both moves are real,
+    // Pace-timed trajectories, not a flat-duration snap.
+    const { winnerPoint, loserPoint } = contestSeparationPoints(contactPoint, owner.team);
+    const escapeDurationMs = Math.max(
+      MOVEMENT_DURATIONS.hold,
+      Math.round(CONTACT_REACTION_DELAY_MS + timeToReach(owner.player, yardDistance(contactPoint, winnerPoint)) * 1000),
+    );
+    const ownerTrajectory = sampleContinuousTrajectory({
+      from: contactPoint, to: winnerPoint, player: owner.player,
+      totalMs: escapeDurationMs, reactionDelayMs: CONTACT_REACTION_DELAY_MS,
+      sampleCount: Math.max(6, Math.min(14, Math.ceil(escapeDurationMs / 140))),
+    });
+    // from: contactPoint, NOT pointOf(defender) -- the preceding
+    // P.HOLD.SHIELD event's own playerMoves already walked the defender
+    // to contactPoint (the "challenge" move); pointOf() would re-read
+    // their stale, pre-challenge roster position instead.
+    const defenderTrajectory = sampleContinuousTrajectory({
+      from: contactPoint, to: loserPoint, player: defender.player,
+      totalMs: escapeDurationMs, reactionDelayMs: CONTACT_REACTION_DELAY_MS,
+      sampleCount: Math.max(6, Math.min(14, Math.ceil(escapeDurationMs / 140))),
+    });
     trace.push(
       traceEvent(
         "P.HOLD.SHIELD.WON",
-        `${playerName(owner.player)} holds off ${playerName(defender.player)} and keeps the ball`,
+        `${playerName(owner.player)} holds off ${playerName(defender.player)} and steps away with it`,
         {
           actor: owner,
           defender,
           movement: "hold",
           outcome: "success",
+          duration: escapeDurationMs,
+          playerMoves: [
+            { player: owner, from: contactPoint, to: winnerPoint, action: "escape", trajectory: ownerTrajectory },
+            { player: defender, from: contactPoint, to: loserPoint, action: "beaten", trajectory: defenderTrajectory },
+          ],
           ballFrom: contactPoint,
-          ballTo: contactPoint,
+          ballTo: winnerPoint,
           contact: {
             point: contactPoint,
             actor: owner,
             type: "touch",
-            phase: "end",
+            phase: "start",
           },
           ownerBefore: owner,
           ownerAfter: owner,
-          ownerAfterAt: "end",
         },
       ),
     );
@@ -6469,44 +10720,259 @@ function resolveHold(groups, availability, random, trace) {
       terminal: false,
       possession: "retained",
       nextOwnerId: owner.id,
-      ballEnd: contactPoint,
+      ballEnd: winnerPoint,
       restart: null,
       reason: "hold-shielded",
+      // Progression Contest v1 (2026-08-28) -- see planDefensiveRepositioning()'s
+      // own beatenPresserId comment: runConstructedPossession()'s generic
+      // post-action reshape (this resolver never interleaves its own --
+      // no offBallInterleaved field here) reads this back so the beaten
+      // defender recovers and a covering CB closes down, instead of
+      // waiting for an ordinary ADJUST beat.
+      beatenDefenderId: defender.id,
     };
   }
+  // Engagement Breaker v1 -- a lost shield is a knock-on, not an
+  // ownership teleport at the same XY: the ball pops loose a real 3-6yd
+  // (the defender's own forward direction, same escape geometry as the
+  // winning case above), unowned and rolling, and whoever ACTUALLY gets
+  // there first owns it next -- reusing the possession loop's own
+  // existing loose-ball recovery race (selectLooseBallRecovery(),
+  // triggered by possession:"loose"/nextOwnerId:null/ballEnd below),
+  // same mechanism T.LOOSE.DEFLECT's own tackle-duel "loose" outcome
+  // already relies on. Often the original owner recovers it. Often not.
+  const { winnerPoint: poppedPoint } = contestSeparationPoints(contactPoint, defender.team, 4.5);
+  // Playback Fluidity v1 (2026-09-05) -- the single worst freeze in the
+  // engine, measured at 28 windows of 400ms across 25 possessions. The
+  // WINNING branch above already separates both bodies with real, Pace-timed
+  // trajectories; this losing branch authored no player movement at all, so
+  // the ball popped loose while the two players who just collided stood
+  // perfectly still. A shield being lost is a physical event: the defender
+  // muscles through and carries on, the dispossessed player is knocked off
+  // balance the other way. Same helper, same trajectory sampling, same
+  // reaction delay as the winning branch -- this was an omission, not a
+  // different mechanic.
+  const lostSeparation = contestSeparationPoints(contactPoint, defender.team);
+  const shieldLostDurationMs = Math.max(
+    MOVEMENT_DURATIONS.scramble,
+    Math.round(CONTACT_REACTION_DELAY_MS + timeToReach(defender.player, yardDistance(contactPoint, lostSeparation.winnerPoint)) * 1000),
+  );
+  // Each body starts from where the timeline last authored it, never from
+  // its roster coordinate: the P.HOLD.SHIELD beat immediately above already
+  // moved the defender onto the contact point, and starting them anywhere
+  // else is a discontinuity the playback validator correctly rejects.
+  const shieldLostMoves = [
+    { player: defender, from: contactPoint, point: lostSeparation.winnerPoint, action: "challenge" },
+    { player: owner, from: pointOf(owner), point: lostSeparation.loserPoint, action: "beaten" },
+  ].map((pair) => ({
+    player: pair.player,
+    from: pair.from,
+    to: pair.point,
+    action: pair.action,
+    trajectory: sampleContinuousTrajectory({
+      from: pair.from, to: pair.point, player: pair.player.player,
+      totalMs: shieldLostDurationMs, reactionDelayMs: CONTACT_REACTION_DELAY_MS,
+      sampleCount: Math.max(6, Math.min(14, Math.ceil(shieldLostDurationMs / 140))),
+    }),
+  }));
   trace.push(
     traceEvent(
       "P.HOLD.SHIELD.LOST",
-      `${playerName(defender.player)} muscles the ball away from ${playerName(owner.player)}`,
+      `${playerName(defender.player)} muscles in and knocks the ball loose from ${playerName(owner.player)}`,
       {
         actor: defender,
         defender: owner,
-        movement: "hold",
-        outcome: "turnover",
+        movement: "scramble",
+        outcome: "neutral",
+        duration: shieldLostDurationMs,
+        playerMoves: shieldLostMoves,
         ballFrom: contactPoint,
-        ballTo: contactPoint,
+        ballTo: poppedPoint,
         contact: {
           point: contactPoint,
           actor: defender,
           type: "touch",
-          phase: "end",
+          phase: "start",
         },
         ownerBefore: owner,
-        ownerAfter: defender,
+        ownerAfter: null,
         ownerAfterAt: "end",
       },
     ),
   );
   return {
-    outcome: "DISPOSSESSED",
+    outcome: "LOOSE",
     code: "P.HOLD.SHIELD.LOST",
     resolved: true,
     terminal: true,
-    possession: "turnover",
-    nextOwnerId: defender.id,
+    possession: "loose",
+    nextOwnerId: null,
+    ballEnd: poppedPoint,
+    restart: null,
+    reason: "hold-shield-loose",
+  };
+}
+
+// Back-to-Goal Contest v1 (2026-08-24, Off-Ball v2) -- the real duel a
+// player holding the ball up with their back to goal actually faces, once
+// generateFreePlayCandidates() has already identified the engaging
+// defender as genuinely goal-side (between the owner and the goal they're
+// attacking) -- distinct from resolveHold()'s own shielding contest (no
+// defender in particular, or one not blocking the path forward) and from
+// resolveDribble()'s progression duel (the defender ISN'T goal-side
+// there). Re-derives the engager/goal-side check itself rather than
+// trusting availability.preselectedTargetId, same self-contained
+// convention resolveHold() already uses. Strength/Balance decide it, not
+// Pace/Acceleration -- a hold-up duel is about who out-muscles whom in a
+// tight space, not who's faster.
+function resolveBackToGoalContest(groups, availability, random, trace) {
+  const owner = groups.owner;
+  const attackingDirection = state.attackingDirection[owner.team];
+  const defender = engagingOpponent(owner, groups.opponents);
+  if (!defender || distanceToGoalYards(defender, attackingDirection) >= distanceToGoalYards(owner, attackingDirection)) {
+    // The geometry that earned this candidate no longer holds (defender
+    // moved off, or drifted goal-side of nobody in particular) -- an
+    // ordinary hold, not a fabricated contest against a defender who
+    // isn't actually blocking the path forward.
+    return resolveHold(groups, availability, random, trace);
+  }
+  const contactPoint = pointOf(owner);
+  const duel = localizedDuel(
+    owner.player, defender.player,
+    ["Balance", "Strength"],
+    ["Strength", "Tackling", "Aggression"],
+    FIXED_MINUTE, random, owner.zone,
+  );
+  // A clean win splits further into a full turn vs only a half-turn --
+  // one extra roll, only ever spent when the attacker actually won the
+  // underlying duel, never a second independent contest.
+  const outcome = !duel.won ? "pin" : random() < 0.5 ? "turned" : "half-turn";
+  const ownerYard = toYardPoint(owner);
+  const defenderYard = toYardPoint(defender);
+  const forwardSign = attackingDirection === "up" ? -1 : 1;
+  const lateralSign = ownerYard.x <= defenderYard.x ? -1 : 1;
+  // Engagement Breaker v1 (2026-08-28) -- a real reported bug: a "pin"
+  // used to leave the owner frozen at the exact contact point, same
+  // shape as P.HOLD.SHIELD's own zero-separation bug. Genuinely pinned
+  // (they couldn't turn) still isn't literally glued to the defender's
+  // own shoulder -- a modest shuffle, not the full escape distance a
+  // clean win gets.
+  const endPoint = outcome === "pin"
+    ? contestSeparationPoints(contactPoint, owner.team, 2, 1.5).winnerPoint
+    : (() => {
+        const raw = fromYardPoint({
+          x: ownerYard.x + lateralSign * (outcome === "turned" ? 3 : 4),
+          y: outcome === "turned" ? ownerYard.y + forwardSign * 4 : ownerYard.y - forwardSign * 2,
+        });
+        // fromYardPoint() returns a bare {x,y} -- every other resolver's own
+        // ballTo carries a real zone (zoneFromPercent()), and the NEXT
+        // event's own ballFrom will too; a missing zone here reads as a
+        // genuine continuity break even though x/y match exactly.
+        return { ...raw, zone: zoneFromPercent(raw.x, raw.y) };
+      })();
+  // Ball Out of Bounds v1 (2026-09-01) -- a spin/half-turn right next to
+  // the touchline/byline can genuinely carry the ball out (contestSeparation-
+  // Points()'s own "pin" point already stays in range via reflectIntoRange(),
+  // not a clamp, so this only ever fires for the turned/half-turn branch).
+  const backToGoalExit = classifyPitchExit({
+    from: contactPoint, to: endPoint, lastTouchTeam: owner.team, attackingDirectionByTeam: state.attackingDirection,
+  });
+  if (backToGoalExit) {
+    return pushPitchExitRestart(trace, {
+      actor: owner, ballFrom: contactPoint, exit: backToGoalExit, movement: "touch",
+      contact: { point: contactPoint, actor: owner, type: "touch", phase: "start" },
+    });
+  }
+  const code = outcome === "pin" ? "B2G.PIN" : outcome === "turned" ? "B2G.TURNED" : "B2G.HALF_TURN";
+  const label = outcome === "pin"
+    ? `${playerName(defender.player)} pins ${playerName(owner.player)}, who can't turn`
+    : outcome === "turned"
+      ? `${playerName(owner.player)} spins away from ${playerName(defender.player)} and faces goal`
+      : `${playerName(owner.player)} is forced wide, shielding it from ${playerName(defender.player)}`;
+  trace.push(
+    traceEvent(
+      code, label,
+      {
+        actor: owner,
+        defender,
+        movement: "hold",
+        outcome: outcome === "pin" ? "neutral" : "success",
+        mover: owner,
+        moveFrom: contactPoint,
+        moveTo: endPoint,
+        ...realMoverTrajectory(owner, endPoint, { from: contactPoint, action: "shield-turn", reactionDelayMs: 0 }),
+        ballFrom: contactPoint,
+        ballTo: endPoint,
+        contact: { point: contactPoint, actor: owner, type: "touch", phase: "start" },
+        ownerBefore: owner,
+        ownerAfter: owner,
+      },
+    ),
+  );
+  return {
+    outcome: outcome === "pin" ? "PINNED" : outcome === "turned" ? "TURNED" : "HALF_TURN",
+    code,
+    resolved: true,
+    terminal: false,
+    possession: "retained",
+    nextOwnerId: owner.id,
+    ballEnd: endPoint,
+    restart: null,
+    reason: `back-to-goal-${outcome}`,
+  };
+}
+
+// Keeper Catch & Distribution v1 (2026-08-23) -- the fourth of the four
+// legal distribution options once a keeper is genuinely holding the ball
+// (see keeperDistributionCandidates()): rather than throwing/punting it
+// away, they take a touch and put it down at their own feet. `held: false`
+// on the result is the explicit signal transitionBallState() needs (see its
+// own heldOverride param) -- they still OWN the ball afterward, they're
+// just no longer holding it in their hands, so the NEXT decision offers a
+// real pass/carry instead of another throw/punt/release choice.
+function resolveKeeperReleaseToFeet(groups, availability, random, trace) {
+  const owner = groups.owner;
+  const contactPoint = pointOf(owner);
+  const drop = projectRebound({ from: { ...contactPoint, height: 1.1 }, velocity: { x: 0, y: 0, z: 0 } });
+  const dropMs = drop.contacts[0].timeMs;
+  const dropTrajectory = drop.samples.filter(sample => sample.timeMs < dropMs)
+    .map(sample => ({ ...sample, progress: sample.timeMs / dropMs }));
+  dropTrajectory.push({ progress: 1, position: { ...contactPoint, height: 0 },
+    velocity: { x: 0, y: 0 }, verticalVelocity: 0, mode: "controlled-ground" });
+  trace.push(
+    traceEvent(
+      "GK.RELEASE",
+      `${playerName(owner.player)} takes a touch, releasing it to feet`,
+      {
+        actor: owner,
+        movement: "reception",
+        outcome: "success",
+        duration: dropMs,
+        ballTrajectory: dropTrajectory,
+        ballFrom: contactPoint,
+        ballTo: contactPoint,
+        contact: {
+          point: contactPoint,
+          actor: owner,
+          type: "control",
+          phase: "end",
+        },
+        ownerBefore: owner,
+        ownerAfter: owner,
+      },
+    ),
+  );
+  return {
+    outcome: "AT FEET",
+    code: "GK.RELEASE",
+    resolved: true,
+    terminal: false,
+    possession: "retained",
+    nextOwnerId: owner.id,
     ballEnd: contactPoint,
     restart: null,
-    reason: "hold-dispossessed",
+    reason: "keeper-release-to-feet",
+    held: false,
   };
 }
 
@@ -6516,14 +10982,482 @@ const FREE_PLAY_RESOLVERS = {
   cross: resolveCross,
   dribble: resolveDribble,
   shoot: resolveShoot,
+  // Direct restarts use the established free-kick pipeline (wall,
+  // free-kick strike, keeper and rebound), not the generic open-play shot
+  // resolver. restartExecution.js injects this like every other resolver.
+  "direct-free-kick": (groups, availability, random, trace) => {
+    const scenario = SCENARIOS.find((entry) => entry.id === "free-kick");
+    const wall = groups.opponents.filter(
+      (entry) => /^wall(?:-\d+)?$/.test(entry.restartRole ?? "") && isWallCandidate(entry),
+    );
+    const result = scenario.run({
+      attacker: [groups.owner],
+      keeper: groups.keeper ? [groups.keeper] : [],
+      wall,
+    }, availability ?? {}, random, trace);
+    const lastBallEvent = [...trace].reverse().find((event) => event.ballTo);
+    return {
+      resolved: true,
+      terminal: true,
+      possession: result.possession ?? (result.nextOwnerId ? "turnover" : result.restart ? "dead" : "loose"),
+      nextOwnerId: result.nextOwnerId ?? null,
+      ballEnd: result.ballEnd ?? lastBallEvent?.ballTo ?? pointOf(groups.owner),
+      restart: result.restart ?? null,
+      reason: result.reason ?? "direct-free-kick-resolved",
+      ...result,
+    };
+  },
   carry: resolveCarry,
   hold: resolveHold,
+  "back-to-goal": resolveBackToGoalContest,
+  "throw-short": resolvePass,
+  "throw-long": resolvePass,
+  punt: resolvePass,
+  "release-to-feet": resolveKeeperReleaseToFeet,
 };
 
 // A possession that's still "retained" after this many actions stops here
 // rather than looping forever -- a hard safeguard, not a realistic outcome
 // most chains reach (most terminate naturally within a few steps).
 const POSSESSION_MAX_ACTIONS = 50;
+
+// Burst Stamina v1 (2026-08-31) -- two independent tanks, not one.
+// match01 is conditionMultiplier()'s own real 90-minute curve (matchEngineCore.js,
+// unchanged, still keyed off `minute`) -- "how much of him is left
+// today." Match Lab resolves everything at FIXED_MINUTE, so this barely
+// drains inside a single possession, exactly as the real production
+// curve intends; it's read here, never reimplemented. burst01 is the
+// NEW tank this feature adds: "how much explosive work he has RIGHT
+// NOW" -- the 8-20 seconds of high-intensity running before the legs
+// go, independent of the 90-minute clock, drained per action and
+// refilled by jogging/standing jobs within the SAME possession. Both
+// are possession-local, attached directly to simulatedRoster (same
+// place lastCarryDirectionX/Y and engagementHistory already live) --
+// never the shared roster/database player object.
+const BURST_BASE = 0.5;
+const BURST_RANGE = 0.5;
+// The ONE formula for "what does this player's burst tank read before
+// they've done anything at all" -- conditionMultiplier() at FIXED_MINUTE
+// (production's own real 90-minute curve, read never reimplemented) times
+// a Stamina-scaled fraction of it. Used identically by
+// runConstructedPossession()'s own simulatedRoster init, buildPlaybackPlan()'s
+// initialBurst seed for the playback timeline, and renderPitch()'s own
+// stamina-bar seed at setup -- one formula, three real readers, never
+// three copies that could quietly drift apart.
+function freshBurst01(player) {
+  const match01 = conditionMultiplier(player, FIXED_MINUTE);
+  const burst01 = clamp(0, match01, (BURST_BASE + BURST_RANGE * (playerAttribute(player, "Stamina") / 20)) * match01);
+  return { burst01, match01 };
+}
+// cost = (yards/40) * intensity * (1.20 - WorkRate/50) -- yards-of-effort,
+// not a flat per-action tax: a short shuffle costs almost nothing, a
+// real 40-yard recovery sprint is the expensive one. High Work Rate
+// spends slightly LESS per yard (used to it) -- willingness to make the
+// run at all is a completely separate, SEPARATE gate (see
+// maybeAssignSupportRun()'s own comment: "Work Rate is willingness to
+// spend, not the tank").
+function burstEffortCost(yards, intensity, workRate) {
+  return (Math.max(0, Number(yards) || 0) / 40) * intensity * (1.20 - (Number(workRate) || 0) / 50);
+}
+// Per-event recovery while genuinely NOT doing high-intensity work
+// (jogging/standing jobs -- see BURST_JOB_INTENSITY's own "recovers"
+// entries). Capped at match01 -- jogging never restores match-long
+// fitness, only the burst tank, and never past today's own ceiling.
+function burstRecoveryTick(stamina, match01, durationMs) {
+  return 0.035 * (0.6 + (Number(stamina) || 0) / 50) * match01 * ((Number(durationMs) || 0) / 450);
+}
+// Named intensities from the spec's own table -- every off-ball JOB
+// name this file's own planDefensiveRepositioning()/planAttackerRepositioning()
+// results (and the on-ball gaits) ever produce is covered explicitly;
+// anything genuinely new defaults to the lightest, most forgiving
+// reading (a real, if approximate, job) rather than silently draining
+// nothing OR everything.
+const BURST_JOB_INTENSITY = {
+  "full-sprint": 1.00,
+  "run-in-behind": 0.85,
+  "recovery-track": 0.90, // 2a -- track-back after a turnover
+  "support-run": 0.80, // 2b -- box-to-box support run
+  "press-ball": 0.70,
+  "respect-held-ball": 0.25,
+  "cover-shadow": 0.70,
+  "controlled-sprint": 0.45,
+  "sliding-tackle": 0.55,
+  "aerial-duel": 0.30,
+  "close-control": 0.08,
+  "lateral-control": 0.08,
+  hold: 0.08,
+  pass: 0.04,
+  shot: 0.04,
+  throw: 0.04,
+  // Pattern Vocabulary V1, Step 1 (2026-09-02) -- explicit intensities so
+  // none of these silently fall to the unlisted 0.5 default. The box-meet
+  // slots replace the old shared "attack-box" (itself unlisted before this
+  // pass) with a real sprint intensity matching run-in-behind.
+  "attack-near": 0.75,
+  "attack-spot": 0.75,
+  "attack-far": 0.75,
+  "edge-rebound": 0.75,
+  "run-off-pass": 0.85,
+  "arc-overlap": 0.80,
+  "vacate-pocket": 0.55,
+  "peel-square": 0.55,
+  "check-decel": 0.40,
+  // Deliberately NOT 0.50 (the unlisted-action default `burstJobIntensity()`
+  // itself falls back to) -- a distinct real value so registration is
+  // independently testable, not indistinguishable from an unlisted job.
+  delay: 0.45,
+};
+// Jobs planDefensiveRepositioning()/planAttackerRepositioning() actually
+// name that count as genuinely low-intensity -- refill-eligible, never
+// drained. "recover"/"mark" are deliberately absent: a last-man/beaten-
+// presser recovery sprint is real work (folded into recovery-track's own
+// intensity below), and marking tracks a live attacker, not a jog.
+const BURST_REFILL_JOBS = new Set([
+  "hold-width", "pin-last-line", "screen", "shift-unit", "drop-deep",
+  "show-to-feet", "set-position", "support-short",
+  // Pattern Vocabulary V1, Step 1 -- show-wide is mostly positional (a
+  // valve, not a sprint).
+  "show-wide",
+]);
+// BURST_REFILL_JOBS is deliberately not consulted here: applyBurstOffBallJob
+// (below) already branches on it FIRST and returns before ever reaching
+// this call, so an unlisted action always means genuinely unmodeled
+// off-ball work, never a refill job slipping through -- the forgiving,
+// middling 0.5 default is for that, and that alone.
+function burstJobIntensity(action) {
+  return BURST_JOB_INTENSITY[action] ?? 0.5;
+}
+// Any resolved on-ball action (carry/dribble by GAIT, everything else a
+// flat negligible amount) drains the ACTOR only, by the real distance
+// they just covered -- never a reactor/off-ball player, see the
+// possession loop's own call site.
+const ON_BALL_OTHER_ACTION_YARDS = 2; // hold/pass/shot -- a token cost, not zero
+// A genuine full-sprint is real match-long wear, not just burst -- almost
+// cosmetic at FIXED_MINUTE's own single-possession scale (conditionMultiplier()'s
+// own 90-minute curve dwarfs it), but real over a full match's worth of
+// possessions. Never applied to any other gait/job -- match01 otherwise
+// stays exactly production's own read-only 90-minute number.
+const MATCH01_FULL_SPRINT_WEAR = 0.002;
+// Stage 5 (2026-09-06) -- a travelling action is priced from the motion it
+// actually performed, via motionEffortCost(). The gait name no longer decides
+// how hard the player worked; how fast they went does, which is the whole
+// point of the stage. Striking the ball (pass/shot/hold) is not travel at all
+// and keeps its own explicit token cost.
+function drainOnBallAction(owner, gait, yardsCovered, durationMs = 0) {
+  if (!owner || typeof owner.burst01 !== "number") return;
+  const workRate = playerAttribute(owner.player, "Work Rate");
+  if (gait === "full-sprint") {
+    owner.match01 = clamp(0, 1, (owner.match01 ?? 1) - MATCH01_FULL_SPRINT_WEAR);
+  }
+  if (gait && durationMs > 0) {
+    recordDistanceCovered(owner, yardsCovered, durationMs);
+    owner.burst01 = clamp(0, owner.match01 ?? 1, owner.burst01 + netBurstChange({
+      distanceYards: yardsCovered, durationMs, player: owner.player, workRate,
+    }));
+    return;
+  }
+  // Striking the ball is not travel: a pass, a shot or a hold keeps its own
+  // explicit token cost rather than being priced from a distance nobody moved.
+  owner.burst01 = clamp(0, owner.match01 ?? 1, owner.burst01 - burstEffortCost(
+    gait ? yardsCovered : ON_BALL_OTHER_ACTION_YARDS,
+    burstJobIntensity(gait ?? "pass"), workRate,
+  ));
+}
+
+// Every off-ball JOB reactOffBall()/reactOffBallContinuous() author a
+// real move for -- drains a genuinely high-intensity one (by the REAL
+// distance just covered, same yards-of-effort formula as the on-ball
+// side above), refills a genuinely low-intensity one (BURST_REFILL_JOBS)
+// by how long this beat actually lasted. `entry` is the real
+// simulatedRoster reference (originals.get(id) in both callers) --
+// absent/no-op for any direct call against a hand-built fixture that
+// never wired up the battery, same convention as drainOnBallAction().
+// Stage 5 (2026-09-06) -- the job NAME no longer decides anything here.
+//
+// Recovery used to be a hand-maintained list of job names, so a defender who
+// genuinely sprinted eight yards to hold a line recovered stamina for doing
+// it, while an unlisted job silently priced at 0.5. Both now follow from the
+// motion: a player moving below RECOVERY_LOAD_CEILING of their own top speed
+// is walking or jogging and recovers; anyone going faster than that pays for
+// the speed they actually held. `action` is retained only for the legacy
+// fallback below, which fires when a caller genuinely has no window to
+// measure against (a hand-built fixture with durationMs 0).
+function applyBurstOffBallJob(entry, action, moveDistanceYards, durationMs, motion = null) {
+  if (!entry || typeof entry.burst01 !== "number") return;
+  const match01 = entry.match01 ?? 1;
+  const stamina = playerAttribute(entry.player, "Stamina");
+  const workRate = playerAttribute(entry.player, "Work Rate");
+  if (!(durationMs > 0)) {
+    if (BURST_REFILL_JOBS.has(action)) {
+      entry.burst01 = clamp(0, match01, entry.burst01 + burstRecoveryTick(stamina, match01, durationMs));
+      return;
+    }
+    const intensity = burstJobIntensity(action);
+    if (intensity <= 0) return;
+    entry.burst01 = clamp(0, match01, entry.burst01 - burstEffortCost(moveDistanceYards, intensity, workRate));
+    return;
+  }
+  recordDistanceCovered(entry, moveDistanceYards, durationMs);
+  // One continuous signed change rather than a drain-or-recover branch. See
+  // netBurstChange(): the branch had a hard threshold that an ordinary jog
+  // sits almost exactly on, which is what made stamina appear to move at
+  // random from one beat to the next.
+  entry.burst01 = clamp(0, match01, entry.burst01 + netBurstChange({
+    distanceYards: moveDistanceYards, durationMs, player: entry.player, workRate,
+    entrySpeedYps: motion?.entrySpeedYps ?? 0,
+    exitSpeedYps: motion?.exitSpeedYps ?? 0,
+  }));
+}
+
+// Cumulative distance covered, in real yards, and the real time spent
+// covering it. Authoritative match state in its own right -- a manager wants
+// to see how far a player has run, and it is the honest basis for match-long
+// condition rather than a count of how many events happened to name them.
+function recordDistanceCovered(entry, yards, durationMs) {
+  if (!entry) return;
+  const distance = Math.max(0, Number(yards) || 0);
+  entry.distanceCoveredYards = (Number(entry.distanceCoveredYards) || 0) + distance;
+  entry.activeMs = (Number(entry.activeMs) || 0) + Math.max(0, Number(durationMs) || 0);
+}
+
+// Turnover Stamina Jobs v1 (2026-08-31) -- user's own 2a/2b scenarios.
+// Reuses this file's own realMoverTrajectory()/effortScaledAdvance()
+// movement primitives -- no new physics, just two dedicated, one-off
+// authored moves at the exact instant possession changes hands. AT MOST
+// one recovery runner (the team that just lost it) and one support
+// runner (the team that just won it) -- never a swarm, never more than
+// one body per side per turnover.
+// Real reported feedback (2026-09-01): "any role tracking back 10+ yards
+// in one beat reads as too sudden -- shorten the cap." TURNOVER_AHEAD_MARGIN_YARDS
+// stays the GATING question (is this player genuinely upfield of his own
+// side's remaining shape at all) -- a separate concern from how far ONE
+// authored beat actually covers, which is TURNOVER_RECOVERY_STRIDE_YARDS
+// below. A real recovery run/support run isn't solved in a single
+// event anyway: the regular off-ball reshaping keeps repositioning this
+// same player every following action for the rest of the possession, so
+// a modest first stride here (not the full distance back) reads as a
+// real jog getting underway, not a teleporting sprint.
+const TURNOVER_RECOVERY_STRIDE_YARDS = 8;
+const TURNOVER_JOB_MIN_YARDS = 5;
+const TURNOVER_AHEAD_MARGIN_YARDS = 12;
+// World Motion Contract v1 (2026-09-03) -- one authored turnover job,
+// expressed the way the contract requires: an INTENTION plus the real
+// motion it produces this window, never a coordinate write onto the
+// tactical target. Returns the trace-ready move (with its intention
+// attached for diagnostics) and the authoritative position/velocity to
+// commit, or null when the stride is too small to be worth an event.
+//
+// `motionContext` is optional purely so a direct unit-test call against a
+// hand-built fixture still works; when present, the player's own current
+// velocity is carried INTO the run (a defender already jogging back does
+// not restart from rest) and their exit velocity + intention are carried
+// back OUT for whoever moves them next. That hand-off is what stops the
+// next beat from re-launching them from a standstill.
+function planTurnoverRecoveryMove(entry, intentionTarget, {
+  intention, role, minimumYards = TURNOVER_JOB_MIN_YARDS, motionContext = null,
+}) {
+  const origin = pointOf(entry);
+  const record = readMotionRecord(motionContext, entry.id, origin);
+  const incomingVelocity = record.velocity;
+  // The honest window for this stride: their own reaction to genuinely
+  // losing the ball, plus the real time their own Pace/Acceleration need
+  // to cover the ground (the SAME kinetics realMoverTrajectory() uses --
+  // no second timing model).
+  const strideYards = yardDistance(origin, intentionTarget);
+  const windowMs = Math.max(
+    MOVEMENT_DURATIONS.reposition,
+    Math.round(CONTACT_REACTION_DELAY_MS + timeToReach(entry.player, strideYards) * 1000),
+  );
+  const motion = advanceMotion({
+    from: origin,
+    intentionTarget,
+    player: entry.player,
+    elapsedMs: windowMs,
+    incomingVelocity,
+    // A turnover IS a new stimulus -- they have to register that they
+    // lost it before they turn and go. A player already running this
+    // same recovery keeps their momentum via incomingVelocity above.
+    reactionDelayMs: speedYpsFromVelocity(incomingVelocity) > 0.5 ? 0 : CONTACT_REACTION_DELAY_MS,
+    intention,
+    role,
+  });
+  if (motion.distanceYards < minimumYards) return null;
+  return {
+    motion,
+    origin,
+    duration: windowMs,
+    playerMoves: [{
+      player: entry,
+      from: origin,
+      // The AUTHORITATIVE position genuinely reached in this window --
+      // not intentionTarget. These are different things and this is the
+      // line where that distinction is enforced.
+      to: motion.position,
+      action: intention,
+      trajectory: motion.trajectory,
+      intention: { action: intention, role, target: intentionTarget },
+    }],
+  };
+}
+
+// Commits one planned turnover move: authoritative position onto the
+// roster entry, velocity/intention/gait into the shared motion record.
+function commitTurnoverRecoveryMove(entry, planned, { intention, role, motionContext }) {
+  Object.assign(entry, planned.motion.position);
+  writeMotionRecord(motionContext, entry.id, {
+    position: planned.motion.position,
+    velocity: planned.motion.velocity,
+    intention,
+    intentionTarget: planned.motion.intentionTarget,
+    role,
+  });
+}
+
+function maybeAssignTurnoverStaminaJobs(previousOwner, losingTeammates, winningGroups, trace, alreadyMovedIds = new Set(), motionContext = null) {
+  // Real reported bug (2026-08-31): the regular post-action off-ball
+  // reshaping (reactOffBallContinuous(), called right after this returns
+  // -- see its own excludedIds comment) doesn't know either of these two
+  // players just got a DEDICATED job here, and independently plans its
+  // OWN target for them too (planDefensiveRepositioning()/
+  // planAttackerRepositioning() see them as ordinary opponents/teammates,
+  // nothing about this function is visible to them) -- a genuine SECOND,
+  // conflicting move landing on top of this one within the same action,
+  // which read as the player teleporting. Returned so the caller can
+  // exclude them from that later reshaping entirely for this one action.
+  const assignedIds = [];
+  // Other direction of the SAME real bug: a resolver that already
+  // interleaved its own full off-ball reaction earlier THIS action (the
+  // loose-ball recovery race is the concrete case that surfaced it) may
+  // have already given previousOwner/deepest a real job of their own --
+  // alreadyMovedIds (this action's own trace-so-far) catches that
+  // regardless of which specific mechanism moved them first.
+  // 2a -- the player who just lost the ball is furthest forward for
+  // their OWN side, tracks back if they're genuinely upfield of their
+  // own remaining teammates (a real defensive line proxy: the median
+  // depth of whoever's left), not just "anyone who had the ball."
+  const remainingTeammates = (losingTeammates || []).filter(Boolean);
+  if (
+    remainingTeammates.length
+    && typeof previousOwner?.burst01 === "number"
+    && !alreadyMovedIds.has(String(previousOwner.id))
+  ) {
+    const ownGoalDirection = state.attackingDirection[previousOwner.team] === "up" ? "down" : "up";
+    const depths = remainingTeammates.map((entry) => distanceToGoalYards(entry, ownGoalDirection));
+    const sorted = [...depths].sort((a, b) => a - b);
+    const medianDepth = sorted[Math.floor(sorted.length / 2)];
+    const ownDepth = distanceToGoalYards(previousOwner, ownGoalDirection);
+    if (ownDepth - medianDepth >= TURNOVER_AHEAD_MARGIN_YARDS) {
+      const ownerYard = toYardPoint(previousOwner);
+      const recoveryTarget = fromYardPoint({
+        x: ownerYard.x,
+        y: ownGoalDirection === "up" ? 0 : PITCH_LENGTH_YARDS,
+      });
+      const origin = pointOf(previousOwner);
+      const advanceYards = effortScaledAdvance(TURNOVER_RECOVERY_STRIDE_YARDS, previousOwner.player, previousOwner.burst01);
+      // The tactical destination for this stride. Still effort-scaled
+      // (a gassed player asks for less ground), but it is now an
+      // INTENTION TARGET handed to the motion layer, not a coordinate
+      // anybody is about to be teleported onto.
+      const intentionTarget = approachPoint(origin, recoveryTarget, advanceYards);
+      const planned = planTurnoverRecoveryMove(previousOwner, intentionTarget, {
+        intention: "recovery-track", role: "defender", motionContext,
+      });
+      if (planned) {
+        trace.push(
+          traceEvent(
+            "DEF.ADJUST",
+            `${playerName(previousOwner.player)} tracks back after losing it`,
+            {
+              actor: previousOwner,
+              duration: planned.duration,
+              playerMoves: planned.playerMoves,
+              movement: "reposition",
+              outcome: "neutral",
+              // Genuinely concurrent with the action that caused it --
+              // and, since World Motion Contract v1, no longer
+              // time-compressed into that action's window (see
+              // matchLabPlayback.js's own overlap comment): the run keeps
+              // its real duration and may finish after the triggering
+              // action does, exactly as a real recovery run does.
+              overlapWithPrevious: true,
+            },
+          ),
+        );
+        applyBurstOffBallJob(previousOwner, "recovery-track", planned.motion.distanceYards, planned.duration, planned.motion);
+        // Commit the position the motion layer says was actually reached
+        // (with velocity/intention handed on) -- any off-ball reaction
+        // planned later THIS SAME action (reactOffBall/
+        // reactOffBallContinuous, right below) reads pointOf(previousOwner)
+        // fresh; leaving the roster entry stale here is what produced a
+        // real discontinuity (a later event's own "from" disagreeing with
+        // this event's authored "to").
+        commitTurnoverRecoveryMove(previousOwner, planned, {
+          intention: "recovery-track", role: "defender", motionContext,
+        });
+        assignedIds.push(previousOwner.id);
+      }
+    }
+  }
+
+  // 2b -- the deepest player on the side that just WON it may support
+  // the attack. Willingness (Work Rate) is a SEPARATE gate from ability
+  // (burst) -- a low-WR player with plenty of burst left still doesn't
+  // fancy the run; a high-WR one drags themselves forward even tired.
+  const winningSide = (winningGroups.teammates || []).filter(
+    (entry) => !alreadyMovedIds.has(String(entry.id)),
+  );
+  if (winningSide.length) {
+    const attackingDirection = state.attackingDirection[winningGroups.owner.team];
+    const deepest = [...winningSide].sort(
+      (a, b) => distanceToGoalYards(b, attackingDirection) - distanceToGoalYards(a, attackingDirection),
+    )[0];
+    if (deepest && typeof deepest.burst01 === "number") {
+      const workRate01 = playerAttribute(deepest.player, "Work Rate") / 20;
+      const makeTheRun = (deepest.burst01 > 0.15 && workRate01 > 0.35) || workRate01 > 0.75;
+      if (makeTheRun) {
+        const origin = pointOf(deepest);
+        // The target sits comfortably beyond the real advance cap below --
+        // approachPoint() should be limited by effortScaledAdvance()'s own
+        // real effort/burst math, never by this heading point itself
+        // being too close.
+        const forwardTarget = pointAheadYards(origin, attackingDirection, TURNOVER_RECOVERY_STRIDE_YARDS * 1.5);
+        const advanceYards = effortScaledAdvance(TURNOVER_RECOVERY_STRIDE_YARDS, deepest.player, deepest.burst01);
+        const intentionTarget = approachPoint(origin, forwardTarget, advanceYards);
+        const planned = planTurnoverRecoveryMove(deepest, intentionTarget, {
+          intention: "support-run", role: "attacker", motionContext,
+        });
+        if (planned) {
+          trace.push(
+            traceEvent(
+              "ATT.ADJUST",
+              `${playerName(deepest.player)} joins the attack from deep`,
+              {
+                actor: deepest,
+                duration: planned.duration,
+                playerMoves: planned.playerMoves,
+                movement: "reposition",
+                outcome: "neutral",
+                overlapWithPrevious: true,
+              },
+            ),
+          );
+          applyBurstOffBallJob(deepest, "support-run", planned.motion.distanceYards, planned.duration, planned.motion);
+          // Commit the reached position -- see previousOwner's own matching
+          // comment above for why (real discontinuity if this stays stale).
+          commitTurnoverRecoveryMove(deepest, planned, {
+            intention: "support-run", role: "attacker", motionContext,
+          });
+          assignedIds.push(deepest.id);
+        } else {
+          applyBurstOffBallJob(deepest, "hold-width", 0, MOVEMENT_DURATIONS.reposition);
+        }
+      } else {
+        applyBurstOffBallJob(deepest, "hold-width", 0, MOVEMENT_DURATIONS.reposition);
+      }
+    }
+  }
+  return assignedIds;
+}
 
 // Possession Runner v1. Free Play used to resolve exactly one action and
 // stop -- a successful pass or dribble had nowhere to go, which is why
@@ -6548,11 +11482,497 @@ const POSSESSION_MAX_ACTIONS = 50;
 // the ball's conceptual position used to advance across steps, never the
 // player who'd just carried it there (see MATCH_LAB_PLAN.md, "Possession
 // Runner v1 -- Pass 1").
-function runConstructedPossession(seed) {
+/**
+ * Ends the authored dead ball and says why.
+ *
+ * A restart stops being a restart the moment the user moves the ball off
+ * its legal spot or hands it to somebody: what they have then authored is
+ * an ordinary open-play position, and pretending otherwise would either
+ * block Resolve & Play for no reason or execute a restart from a spot that
+ * is no longer legal for it.
+ */
+function cancelPendingRestart(reason) {
+  if (!state.pendingRestart) return;
+  state.pendingRestart = null;
+  state.restartSetupDraft = null;
+  if (state.ball) {
+    state.ball.phase = undefined;
+    state.ball.deadBall = false;
+  }
+  if (typeof renderSetupStatus === "function") {
+    renderSetupStatus(`Restart cancelled — ${reason}. This is now an open-play setup.`, "warn");
+  }
+}
+
+function handleAuthoredBallMove() {
+  if (state.pendingRestart && state.restartSetupDraft
+    && yardDistance(state.restartSetupDraft.ball, state.ball) > 0.5) {
+    cancelPendingRestart("the ball was dragged off its restart spot");
+  }
+  // A manually separated ball is an authored loose ball. The user can
+  // explicitly hand it to a player again from the roster controls.
+  if (state.ball.ownerId) {
+    state.ball.ownerId = null;
+    renderRoster();
+    renderActionTable();
+  }
+}
+
+function pendingRestartIsReady() {
+  const pending = state.pendingRestart;
+  const restart = state.restartSetupDraft;
+  const owner = state.roster.find((entry) => entry.id === state.ball.ownerId) ?? null;
+  return Boolean(
+    pending
+    && restart
+    && owner
+    && pending.takerId === owner.id
+    && restart.takerId === owner.id
+    && pending.requiredFirstAction === restart.requiredFirstAction
+    && String(pending.requiredFirstAction).startsWith("RESTART.")
+    && String(pending.requiredFirstAction).endsWith(".TAKE"),
+  );
+}
+
+// Restart Execution v2 (2026-09-04) -- commits the authoritative moves an
+// event batch authored, the same rule runConstructedPossession()'s own
+// action loop applies: an explicit physical move is simulation state, so a
+// player who visibly arrived somewhere makes their NEXT decision from
+// there. Extracted so the restart step can use the identical rule instead
+// of a second, drifting copy.
+function commitAuthoritativeMoves(trace, simulatedRoster, motionContext, fromIndex = 0) {
+  for (const event of trace.slice(fromIndex)) {
+    for (const move of event.playerMoves || []) {
+      if (move.authoritative === false) continue;
+      const movedEntry = simulatedRoster.find(
+        (entry) => String(entry.id) === String(move.playerId),
+      );
+      if (!movedEntry || !move.to) continue;
+      Object.assign(movedEntry, move.to);
+    }
+  }
+}
+
+// Restart Execution v2 -- the ball is live, so the dead-ball shape stops
+// being the shape anyone wants. Every player is given their own open-play
+// release target and moved there through the ORDINARY off-ball motion
+// system (reactOffBallContinuous), so Pace and Acceleration govern the
+// travel and nobody teleports from a restart coordinate to a formation dot.
+//
+// The targets come from the shared team-shape coordinator: the side in
+// possession expands into complementary jobs, the other drops into a
+// compact block, and both remain relative to authored formation anchors.
+function applyRestartRelease(simulatedRoster, possessionTeam, trace, motionContext, ballOwnerId = null) {
+  const owner = simulatedRoster.find((entry) => entry.id === ballOwnerId);
+  if (!owner) return null;
+  // Release is a phase change, never an unopposed scripted carry or a pause
+  // for the receiver. The next decision runs immediately; the existing
+  // action resolvers move both teams concurrently with its real duration.
+  trace.push(traceEvent("RESTART.RELEASE", `${playerName(owner.player)} can choose the next action as both teams release into open play`, {
+    actor: owner, outcome: "neutral", duration: 0,
+    ownerBefore: owner, ownerAfter: owner,
+  }));
+  return null;
+}
+
+// Live Restart Continuation v1 (2026-09-08) -- a ball leaving the pitch is
+// a stoppage, not the end of the simulated passage. The boundary resolver
+// supplies the awarded team and edge; this path sets the players for that
+// restart, executes the existing restart resolver, releases both shapes,
+// and hands its live owner back to the ordinary possession loop.
+const AUTOMATIC_RESTART_TYPES = new Set(["throw-in", "corner", "goal-kick"]);
+const MAX_AUTOMATIC_RESTARTS = 6;
+const THROW_IN_OUT_OF_PLAY_PAUSE_MS = 1000;
+const THROW_IN_OUTSIDE_PCT = (1.25 / 75) * 100;
+
+function otherRosterTeam(team, simulatedRoster) {
+  return [...new Set(simulatedRoster.map((entry) => entry.team).filter(Boolean))]
+    .find((candidate) => candidate !== team) ?? null;
+}
+
+function automaticRestartTakingTeam(result, simulatedRoster, ballState) {
+  if (result?.restartTakingTeam) return result.restartTakingTeam;
+  if (["kickoff", "goal-kick"].includes(result?.restart) && Number.isFinite(result.ballEnd?.y)) {
+    const defendingDirection = result.ballEnd.y < 50 ? "down" : "up";
+    return simulatedRoster.find((entry) => state.attackingDirection[entry.team] === defendingDirection)?.team ?? null;
+  }
+  const lastTouchTeam = ballState?.lastTouch?.team ?? null;
+  // A throw-in, corner or goal kick is always awarded to the other side
+  // from the last deliberate touch. Returns null rather than guessing when
+  // a synthetic/test result carries no law-relevant touch information.
+  return lastTouchTeam ? otherRosterTeam(lastTouchTeam, simulatedRoster) : null;
+}
+
+function automaticRestartSide(result) {
+  if (result?.restartEdge === "left" || result?.restartEdge === "right") {
+    return result.restartEdge;
+  }
+  return Number(result?.ballEnd?.x) < 50 ? "left" : "right";
+}
+
+function automaticRestartVariant(type, takingTeam, simulatedRoster) {
+  if (type !== "goal-kick") return type === "corner" ? "inswinger" : "short";
+  const keeper = simulatedRoster.find(
+    (entry) => entry.team === takingTeam && entry.role === "keeper",
+  );
+  if (keeper?.goalkeeperDistribution === "long") return "long";
+  if (keeper?.goalkeeperDistribution === "short") return "short";
+  const style = attackingSettingsFor(takingTeam).style;
+  return style === "direct" || style === "long-ball" ? "long" : "short";
+}
+
+function straightDeadBallTrajectory(from, to, durationMs) {
+  const duration = Math.max(1, durationMs);
+  const velocity = {
+    x: (to.x - from.x) / duration,
+    y: (to.y - from.y) / duration,
+  };
+  return [
+    { progress: 0, position: { ...from, height: 0 }, velocity: { ...velocity } },
+    { progress: 1, position: { ...to, height: 0 }, velocity: { x: 0, y: 0 } },
+  ];
+}
+
+function throwInOutsidePoint(point, side) {
+  return {
+    ...point,
+    x: side === "left" ? -THROW_IN_OUTSIDE_PCT : 100 + THROW_IN_OUTSIDE_PCT,
+    zone: point.zone,
+  };
+}
+
+function outOfPlayTrajectory(from, to, durationMs) {
+  const duration = Math.max(1, durationMs);
+  const travelShare = 0.22;
+  return [
+    {
+      progress: 0,
+      position: { ...from, height: 0 },
+      velocity: {
+        x: (to.x - from.x) / (duration * travelShare),
+        y: (to.y - from.y) / (duration * travelShare),
+      },
+    },
+    { progress: travelShare, position: { ...to, height: 0 }, velocity: { x: 0, y: 0 } },
+    { progress: 1, position: { ...to, height: 0 }, velocity: { x: 0, y: 0 } },
+  ];
+}
+
+/** Execute one awarded in-match restart and mutate only the run-local state. */
+function executeAutomaticRestart({
+  result, simulated, simulatedRoster, trace, motionContext, seed, restartIndex, matchSession = false,
+}) {
+  if (!AUTOMATIC_RESTART_TYPES.has(result?.restart) && !(matchSession && ["kickoff", "free-kick", "indirect-free-kick", "penalty"].includes(result?.restart))) return null;
+  const takingTeam = automaticRestartTakingTeam(result, simulatedRoster, simulated.ballState);
+  if (!takingTeam) return null;
+  const side = automaticRestartSide(result);
+  const type = ["indirect-free-kick", "penalty"].includes(result.restart) ? "free-kick" : result.restart;
+  const variant = result.restart === "penalty" ? "direct" : automaticRestartVariant(type, takingTeam, simulatedRoster);
+  const restart = createRestartSetup({
+    type,
+    takingTeam,
+    attackingDirectionByTeam: state.attackingDirection,
+    side,
+    spot: result.restart === "penalty"
+      ? { x: 50, y: state.attackingDirection[takingTeam] === "up" ? RESTART_PENALTY_DEPTH : 100 - RESTART_PENALTY_DEPTH }
+      : result.ballEnd ?? simulated.ballPoint,
+    takerId: "pending",
+    variant,
+  });
+  const teams = Object.fromEntries(
+    [...new Set(simulatedRoster.map((entry) => entry.team).filter(Boolean))]
+      .map((team) => [team, { entries: simulatedRoster
+        .filter((entry) => entry.team === team)
+        // Hand-authored probes and legacy saved scenarios may predate
+        // positionalSlot. Restart suitability still needs a safe football
+        // band; the live entry remains untouched and IDs map assignments
+        // back onto the authoritative clone below.
+        .map((entry) => ({
+          ...entry,
+          positionalSlot: entry.positionalSlot ?? (entry.role === "keeper" ? "GK" : "MC"),
+        })) }]),
+  );
+  const cornerPlans = state.cornerPlans ?? Object.fromEntries(
+    ["home", "away"]
+      .map((team) => [team, state.matchSetupDraft?.[team]?.cornerPlan ?? null])
+      .filter(([, plan]) => plan),
+  );
+  const placed = placeRestartParticipants(restart, teams, { cornerPlans });
+  if (!placed.takerId) return null;
+  const taker = simulatedRoster.find((entry) => entry.id === placed.takerId) ?? null;
+  if (result.restart === "penalty") {
+    const up = state.attackingDirection[takingTeam] === "up";
+    for (const entry of simulatedRoster) {
+      if (entry.id === placed.takerId) continue;
+      const point = placed.placements.get(entry.id) ?? pointOf(entry);
+      const penaltyPoint = entry.role === "keeper"
+        ? { x: 50, y: entry.team === takingTeam ? (up ? 96 : 4) : (up ? 0 : 100) }
+        : { x: point.x, y: up ? Math.max(28, point.y) : Math.min(72, point.y) };
+      placed.placements.set(entry.id, { ...penaltyPoint, zone: zoneFromPercent(penaltyPoint.x, penaltyPoint.y) });
+    }
+    placed.wallIds = [];
+  }
+  const takerSpot = placed.placements.get(placed.takerId) ?? null;
+  if (!taker || !takerSpot) return null;
+  // Every supported live restart dispatches to a pass/cross resolver. A
+  // partial developer probe with only its taker and goalkeeper cannot put
+  // that ball into play; leave its dead-ball result intact rather than
+  // asking a resolver to invent a receiver.
+  const targetExists = simulatedRoster.some((entry) =>
+    entry.team === takingTeam && entry.id !== placed.takerId && entry.role !== "keeper");
+  if (!targetExists) return null;
+  // Use the concrete taker placement as the single canonical ball spot.
+  // restartSetup's yard/percent mirror can differ by a few floating-point
+  // ulps from layoutPositions; allowing both representations through made
+  // the setup's ballTo and the take's ballFrom fail exact continuity.
+  const nominatedBall = {
+    ...takerSpot,
+    zone: zoneFromPercent(takerSpot.x, takerSpot.y),
+  };
+  const nominated = { ...restart, ball: nominatedBall, takerId: placed.takerId };
+  const concrete = simulatedRoster.map((entry) => {
+    const point = placed.placements.get(entry.id) ?? pointOf(entry);
+    return { ...entry, ...point, required: entry.id === placed.takerId };
+  });
+  const legality = validateRestartSetup(nominated, {
+    taking: concrete.filter((entry) => entry.team === takingTeam),
+    defending: concrete.filter((entry) => entry.team !== takingTeam),
+  });
+  if (!legality.valid) { if (matchSession) throw new Error(`Illegal ${result.restart}: ${legality.errors.join("; ")}`); return null; }
+
+  for (const entry of simulatedRoster) {
+    entry.formationAnchor ||= pointOf(entry);
+  }
+  const setupMoves = simulatedRoster.flatMap((entry) => {
+    const destination = placed.placements.get(entry.id) ?? pointOf(entry);
+    const to = { ...destination, zone: zoneFromPercent(destination.x, destination.y) };
+    if (yardDistance(pointOf(entry), to) <= 0.001) return [];
+    return [{ entry, from: pointOf(entry), to }];
+  });
+  const setupDurationMs = Math.max(
+    900,
+    ...setupMoves.map(({ entry, from, to }) =>
+      Math.ceil(timeToReach(entry.player, yardDistance(from, to)) * 1000)),
+  );
+  const authoredMoves = setupMoves.map(({ entry, from, to }) => ({
+    player: entry,
+    from,
+    to,
+    action: "restart-setup",
+    trajectory: sampleContinuousTrajectory({
+      from,
+      to,
+      player: entry.player,
+      totalMs: setupDurationMs,
+      reactionDelayMs: 0,
+      paceToArrival: true,
+      sampleCount: Math.max(10, Math.min(48, Math.ceil(setupDurationMs / 180))),
+    }),
+  }));
+  const setupTraceStart = trace.length;
+  let deadBallFrom = { ...simulated.ballPoint };
+  if (result.restart === "throw-in") {
+    const outside = throwInOutsidePoint(deadBallFrom, side);
+    trace.push(traceEvent("RESTART.WAIT", "The ball rolls clear before the throw-in is prepared", {
+      movement: "roll",
+      outcome: "neutral",
+      duration: THROW_IN_OUT_OF_PLAY_PAUSE_MS,
+      ballFrom: deadBallFrom,
+      ballTo: outside,
+      ballTrajectory: outOfPlayTrajectory(deadBallFrom, outside, THROW_IN_OUT_OF_PLAY_PAUSE_MS),
+      ballResult: "dead",
+      ownerBefore: null,
+      ownerAfter: null,
+      restart: "throw-in",
+    }));
+    deadBallFrom = outside;
+  }
+  const deadBallTo = { ...nominated.ball, zone: zoneFromPercent(nominated.ball.x, nominated.ball.y) };
+  trace.push(traceEvent(
+    "RESTART.SETUP",
+    `${takingTeam === "home" ? "Home" : "Away"} prepare the ${nominated.type}`,
+    {
+      actor: taker,
+      movement: "reposition",
+      outcome: "neutral",
+      duration: setupDurationMs,
+      playerMoves: authoredMoves,
+      ballFrom: deadBallFrom,
+      ballTo: deadBallTo,
+      ballTrajectory: straightDeadBallTrajectory(deadBallFrom, deadBallTo, setupDurationMs),
+      ballResult: "dead",
+      contact: { point: deadBallTo, actor: taker, type: "placement", phase: "end" },
+      contactTiming: "sequential",
+      ownerBefore: null,
+      ownerAfter: taker,
+      ownerAfterAt: "end",
+      restart: nominated.type,
+    },
+  ));
+  commitAuthoritativeMoves(trace, simulatedRoster, motionContext, setupTraceStart);
+  for (const entry of simulatedRoster) {
+    entry.restartRole = placed.roles.get(entry.id) ?? null;
+    const finalPoint = pointOf(entry);
+    writeMotionRecord(motionContext, entry.id, {
+      position: finalPoint,
+      velocity: { x: 0, y: 0 },
+      intention: null,
+      intentionTarget: finalPoint,
+      simulationTimeMs: (motionContext.simulationTimeMs ?? 0) + setupDurationMs,
+    });
+  }
+  motionContext.simulationTimeMs = (motionContext.simulationTimeMs ?? 0) + setupDurationMs;
+  motionContext.marking = {};
+  motionContext.teamShapeJobs = {};
+  motionContext.restartContext = {
+    status: "restart",
+    direct: variant === "long",
+    type: nominated.type,
+    variant,
+    style: attackingSettingsFor(takingTeam).style,
+  };
+  motionContext.teamPhase = updateTeamPhaseState(
+    motionContext.teamPhase,
+    {
+      possessionTeam: takingTeam,
+      owner: taker,
+      ballFrom: deadBallFrom,
+      ballPoint: deadBallTo,
+      attackingDirectionByTeam: state.attackingDirection,
+      restartActive: true,
+    },
+    setupDurationMs,
+  );
+  simulated.ownerId = taker.id;
+  simulated.ballPoint = deadBallTo;
+  simulated.ballState = transitionBallState({
+    previous: simulated.ballState,
+    endpoint: deadBallTo,
+    ownerId: taker.id,
+    ownerRole: taker.role,
+    restart: nominated.type,
+    trajectory: straightDeadBallTrajectory(deadBallFrom, deadBallTo, setupDurationMs),
+    lastTouchId: taker.id,
+    lastTouch: { playerId: taker.id, team: takingTeam, bodyPart: "unknown", deliberate: false, restart: nominated.type },
+  });
+
+  const restartGroups = freePlayGroups(taker.id, simulatedRoster, simulated.ballState);
+  const openingStyle = attackingSettingsFor(takingTeam).style;
+  const directOpening = variant === "long"
+    || openingStyle === "direct" || openingStyle === "long-ball";
+  motionContext.restartContext = {
+    status: "restart-release", direct: directOpening,
+    type: nominated.type, variant, style: openingStyle,
+  };
+  motionContext.teamPhase = updateTeamPhaseState(
+    motionContext.teamPhase,
+    {
+      possessionTeam: takingTeam,
+      owner: taker,
+      ballFrom: deadBallTo,
+      ballPoint: deadBallTo,
+      attackingDirectionByTeam: state.attackingDirection,
+      restartActive: false,
+      restartTaken: true,
+      directRestart: directOpening,
+    },
+    0,
+  );
+  const kickoffInstruction = attackingSettingsFor(takingTeam).kickoff;
+  if (nominated.type === "kickoff") motionContext.kickoffPlan = { team: takingTeam, instruction: kickoffInstruction, remaining: 3 };
+  const restartTraceStart = trace.length;
+  let nextResult = executeRestart({
+    restart: { ...nominated, ball: deadBallTo, openingStyle, kickoffInstruction },
+    groups: restartGroups,
+    resolvers: result.restart === "penalty" ? { ...FREE_PLAY_RESOLVERS, "direct-free-kick": resolveShoot } : FREE_PLAY_RESOLVERS,
+    random: seededRandom(hashString(
+      `match-lab:auto-restart:${seed}:${restartIndex}:${nominated.type}:${takingTeam}`,
+    )),
+    trace,
+    motionContext,
+    traceEvent,
+    playerName,
+    attackingGoalY: attackingGoalYForDirection(state.attackingDirection[takingTeam]),
+  });
+  if (result.restart === "penalty") {
+    const take = trace.slice(restartTraceStart).find((event) => event.code === "RESTART.FREE_KICK.TAKE");
+    if (take) { take.code = "RESTART.PENALTY.TAKE"; take.label = `${playerName(taker.player)} takes the penalty`; }
+  }
+  commitAuthoritativeMoves(trace, simulatedRoster, motionContext, restartTraceStart);
+  const restartTrace = trace.slice(restartTraceStart);
+  const lastBallEvent = restartTrace.slice().reverse().find((event) => event.ballTrajectory?.length);
+  const lastTouchEvent = restartTrace.slice().reverse().find((event) => event.lastTouch);
+  simulated.ballPoint = nextResult.ballEnd ?? simulated.ballPoint;
+  const liveOwner = nextResult.nextOwnerId
+    ? simulatedRoster.find((entry) => entry.id === nextResult.nextOwnerId) ?? null
+    : null;
+  simulated.ownerId = nextResult.nextOwnerId ?? null;
+  simulated.ballState = transitionBallState({
+    previous: simulated.ballState,
+    endpoint: simulated.ballPoint,
+    ownerId: simulated.ownerId,
+    ownerRole: liveOwner?.role ?? null,
+    restart: nextResult.restart ?? null,
+    trajectory: lastBallEvent?.ballTrajectory ?? [],
+    lastTouchId: lastTouchEvent?.lastTouch?.playerId ?? liveOwner?.id ?? null,
+    lastTouch: lastTouchEvent?.lastTouch ?? null,
+  });
+  if (nominated.type === "kickoff" && liveOwner && motionContext.kickoffPlan) motionContext.kickoffPlan.firstSide = liveOwner.x <= 50 ? -1 : 1;
+  if (liveOwner && !nextResult.restart) {
+    const release = applyRestartRelease(
+      simulatedRoster, liveOwner.team, trace, motionContext, liveOwner.id,
+    );
+    if (release?.ballEnd) {
+      simulated.ballPoint = release.ballEnd;
+      simulated.ballState = transitionBallState({
+        previous: simulated.ballState,
+        endpoint: release.ballEnd,
+        ownerId: liveOwner.id,
+        ownerRole: liveOwner.role,
+        trajectory: release.ballTrajectory ?? [],
+        lastTouchId: liveOwner.id,
+        lastTouch: { playerId: liveOwner.id, team: liveOwner.team, bodyPart: "foot", deliberate: true },
+      });
+      nextResult = { ...nextResult, ballEnd: release.ballEnd };
+    }
+  }
+  return nextResult;
+}
+
+function runConstructedPossession(seed, { continuation = null, maxActions = POSSESSION_MAX_ACTIONS, matchSession = false, stopAtStoppage = false } = {}) {
   const authoredOwner =
-    state.roster.find((entry) => entry.id === state.ball.ownerId) || null;
+    state.roster.find((entry) => entry.id === (continuation?.simulated.ownerId ?? state.ball.ownerId)) || (continuation ? state.roster[0] : null);
   const trace = [];
   const decisionMetrics = [];
+  const restartExpected = !continuation && Boolean(
+    state.ball?.deadBall || state.pendingRestart || state.restartSetupDraft,
+  );
+  if (restartExpected && !pendingRestartIsReady()) {
+    return {
+      result: {
+        outcome: "INVALID RESTART",
+        code: "RESTART.INVALID",
+        resolved: false,
+        terminal: true,
+        possession: "dead",
+        nextOwnerId: null,
+        ballEnd: { x: state.ball?.x ?? 50, y: state.ball?.y ?? 50 },
+        restart: state.pendingRestart?.type ?? state.restartSetupDraft?.type ?? null,
+        reason: "incomplete-authored-restart",
+      },
+      trace,
+      finalOwnerId: null,
+      actionsCount: 0,
+      finalPositions: state.roster.map((entry) => ({ ...entry })),
+      decisionMetrics,
+      possessionMetrics: {
+        decisions: 0, passesSelected: 0, carriesSelected: 0, shotsSelected: 0,
+        meanLegalPassingOptions: 0, minimumLegalPassingOptions: 0,
+        meanPressureAtDecision: 0, meanShotDistanceYards: null,
+        meanShotDistanceMetres: null,
+      },
+    };
+  }
   if (!authoredOwner) {
     const result = {
       outcome: "NO BALL OWNER",
@@ -6581,13 +12001,79 @@ function runConstructedPossession(seed) {
         minimumLegalPassingOptions: 0,
         meanPressureAtDecision: 0,
         meanShotDistanceYards: null,
+        meanShotDistanceMetres: null,
       },
     };
   }
 
-  const simulatedRoster = state.roster.map((entry) => ({ ...entry }));
-  const motionContext = { state: createMotionState() };
-  let simulated = {
+  const simulatedRoster = (continuation?.roster ?? state.roster).map((entry) => ({ ...entry }));
+  // Burst Stamina v1 (2026-08-31) -- see BURST_BASE's own header for the
+  // two-tank rationale. match01 is read from the REAL, unchanged
+  // conditionMultiplier() curve (matchEngineCore.js) -- Match Lab always
+  // resolves at FIXED_MINUTE, so this barely moves within one
+  // possession, exactly as intended; burst01 starts at a real,
+  // Stamina-scaled fraction of THAT ceiling (a tired match already caps
+  // how much burst is even available, before a single action happens)
+  // and can never exceed it afterward either. Both are possession-local,
+  // attached directly to simulatedRoster -- the SAME per-possession
+  // clone lastCarryDirectionX/Y already writes onto -- never the shared
+  // roster/database player object.
+  for (const entry of simulatedRoster) {
+    if (!continuation) Object.assign(entry, freshBurst01(entry.player));
+  }
+  // marking (2026-08-24, Off-Ball v2) -- sticky man/zonal assignment,
+  // { [defenderId]: { subjectId, mode, tightness } }, carried forward the
+  // same way motionContext.state already is for previousSupportId/
+  // previousDropId. Rebuilt from each reaction's own planDefensiveRepositioning()
+  // results (see reactOffBallContinuous()/reactOffBall()'s own persistence
+  // block) -- never mutated by spatialDecision.js itself, which stays a
+  // pure function throughout.
+  const teamIds = [...new Set(simulatedRoster.map((entry) => entry.team).filter(Boolean))];
+  const startingPossessionTeam = simulatedRoster.find((entry) => entry.id === authoredOwner.id)?.team ?? null;
+  const startsFromRestart = !continuation && Boolean(state.pendingRestart && state.restartSetupDraft);
+  const motionContext = continuation?.motionContext ?? {
+    seed,
+    state: createMotionState(),
+    marking: {},
+    teamPhase: createTeamPhaseState({
+      teams: teamIds,
+      possessionTeam: startingPossessionTeam,
+      restartActive: startsFromRestart,
+    }),
+    teamShapeJobs: {},
+    shapeSnapshots: [],
+    simulationTimeMs: 0,
+    restartContext: startsFromRestart
+      ? { status: "restart", direct: false, type: state.pendingRestart.type }
+      : null,
+  };
+  const initialShapeMetrics = Object.fromEntries(teamIds.map((team) => [
+    team,
+    teamShapeMetrics(simulatedRoster.filter((entry) => entry.team === team), {
+      ballPoint: pointOf(authoredOwner),
+      ownerId: authoredOwner.id,
+      attackingDirection: state.attackingDirection[team],
+    }),
+  ]));
+  // Engagement Breaker v1 (2026-08-28) -- per-possession memory of the
+  // last hold/duel engagement, reset fresh for every possession (never
+  // persisted across them). See generateFreePlayCandidates()'s own
+  // consumption of this (spatialDecision.js) for the full reported-bug
+  // rationale: without it, "hold" and dribble/back-to-goal against the
+  // SAME just-contested opponent were always legal candidates again on
+  // the very next decision, which is how a shield/duel could wrestle
+  // indefinitely without the ball ever actually moving on.
+  const engagementHistory = continuation?.engagementHistory ?? { consecutiveHoldOwnerId: null, recentPairs: [] };
+  // Bugfix slice (2026-09-02) -- a real reported bug: a congested midfield
+  // pile could hot-potato short passes/holds among itself indefinitely.
+  // engagementHistory above only ever bans the SAME single player from
+  // holding twice in a row, or the SAME owner/opponent pair re-engaging --
+  // neither notices "this GROUP has been going nowhere for N actions in a
+  // row," regardless of who's currently touching it. Reset fresh per
+  // possession, same convention as engagementHistory; consumed by
+  // passUtility()/holdUtility() (spatialDecision.js) via context.congestionStreak.
+  const congestionTracker = continuation?.congestionTracker ?? { lowProgressionStreak: 0 };
+  let simulated = continuation?.simulated ?? {
     ownerId: authoredOwner.id,
     ballPoint: pointOf(authoredOwner),
     ballState: createBallState({
@@ -6596,13 +12082,133 @@ function runConstructedPossession(seed) {
       ownerRole: authoredOwner.role,
     }),
   };
-  let result = null;
+  let result = continuation?.result ?? null;
   let actionsCount = 0;
   let endedByStoppage = false;
+  let automaticRestartCount = 0;
 
-  for (; actionsCount < POSSESSION_MAX_ACTIONS; actionsCount += 1) {
+  // Restart Execution v2 (2026-09-04) -- an authored dead ball must have
+  // its own RESTART.*.TAKE resolved BEFORE the possession loop below is
+  // allowed to generate a single candidate. This is the boundary Match
+  // Setup Integration v1 stopped at: the restart is now executed by the
+  // real resolvers (see src/lib/restartExecution.js) and only its OUTCOME
+  // feeds the ordinary loop, so a restart can never fall straight into a
+  // generic ACTION.CHOICE.
+  if (!continuation && state.pendingRestart && state.restartSetupDraft) {
+    const restartGroups = freePlayGroups(simulated.ownerId, simulatedRoster, simulated.ballState);
+    if (restartGroups.owner) {
+      const restartRandom = seededRandom(
+        hashString(`match-lab:restart:${state.pendingRestart.type}:${seed}`),
+      );
+      const restartAttackingGoalY = attackingGoalYForDirection(
+        state.attackingDirection[restartGroups.owner.team],
+      );
+      const kickoffInstruction = attackingSettingsFor(restartGroups.owner.team).kickoff;
+      if (state.pendingRestart.type === "kickoff") motionContext.kickoffPlan = {
+        team: restartGroups.owner.team, instruction: kickoffInstruction, remaining: 3,
+      };
+      const openingStyle = attackingSettingsFor(restartGroups.owner.team).style;
+      const directOpening = state.restartSetupDraft.variant === "long"
+        || openingStyle === "direct" || openingStyle === "long-ball";
+      motionContext.restartContext = {
+        status: "restart-release",
+        direct: directOpening,
+        type: state.pendingRestart.type,
+        variant: state.restartSetupDraft.variant,
+        style: openingStyle,
+      };
+      motionContext.teamPhase = updateTeamPhaseState(
+        motionContext.teamPhase,
+        {
+          possessionTeam: restartGroups.owner.team,
+          owner: restartGroups.owner,
+          ballFrom: simulated.ballPoint,
+          ballPoint: simulated.ballPoint,
+          attackingDirectionByTeam: state.attackingDirection,
+          restartActive: false,
+          restartTaken: true,
+          directRestart: directOpening,
+        },
+        0,
+      );
+      result = executeRestart({
+        restart: {
+          ...state.restartSetupDraft,
+          ball: simulated.ballPoint,
+          openingStyle,
+          kickoffInstruction,
+        },
+        groups: restartGroups,
+        resolvers: FREE_PLAY_RESOLVERS,
+        random: restartRandom,
+        trace,
+        motionContext,
+        traceEvent,
+        playerName,
+        attackingGoalY: restartAttackingGoalY,
+      });
+      // Commit the restart's own authoritative moves exactly as the loop
+      // below commits an action's, so the next decision reads real
+      // positions rather than the dead-ball layout.
+      commitAuthoritativeMoves(trace, simulatedRoster, motionContext);
+      simulated.ballPoint = result.ballEnd ?? simulated.ballPoint;
+      simulated.ballState = transitionBallState({
+        previous: simulated.ballState,
+        endpoint: simulated.ballPoint,
+        ownerId: result.nextOwnerId ?? null,
+        ownerRole: simulatedRoster.find((entry) => entry.id === result.nextOwnerId)?.role ?? null,
+        restart: result.restart ?? null,
+        lastTouch: trace.slice().reverse().find((event) => event.lastTouch)?.lastTouch ?? null,
+      });
+      simulated.ownerId = result.nextOwnerId;
+      // The ball is live now. Release the restart shape: every player heads
+      // for their own open-play job through the ordinary motion system, so
+      // Pace and Acceleration govern the travel and nobody teleports.
+      const liveOwner = simulatedRoster.find((entry) => entry.id === result.nextOwnerId) ?? null;
+      if (state.pendingRestart.type === "kickoff" && liveOwner && motionContext.kickoffPlan) motionContext.kickoffPlan.firstSide = liveOwner.x <= 50 ? -1 : 1;
+      const release = applyRestartRelease(
+        simulatedRoster,
+        liveOwner?.team ?? restartGroups.owner.team,
+        trace,
+        motionContext,
+        result.nextOwnerId,
+      );
+      if (release?.ballEnd && liveOwner) {
+        simulated.ballPoint = release.ballEnd;
+        simulated.ballState = transitionBallState({
+          previous: simulated.ballState,
+          endpoint: simulated.ballPoint,
+          ownerId: liveOwner.id,
+          ownerRole: liveOwner.role,
+          trajectory: release.ballTrajectory ?? [],
+          lastTouchId: liveOwner.id,
+          lastTouch: { playerId: liveOwner.id, team: liveOwner.team, bodyPart: "foot", deliberate: true },
+        });
+      }
+      if (!result.nextOwnerId || result.restart) {
+        endedByStoppage = true;
+      }
+    }
+  }
+
+  // An authored restart can itself go out. Continue that award too, using
+  // exactly the same dispatch as an exit from ordinary play.
+  while (result?.restart && (AUTOMATIC_RESTART_TYPES.has(result.restart) || matchSession) && automaticRestartCount < MAX_AUTOMATIC_RESTARTS) {
+    const resumed = executeAutomaticRestart({ result, simulated, simulatedRoster, trace, motionContext, seed, restartIndex: automaticRestartCount, matchSession });
+    if (!resumed) break;
+    result = resumed;
+    automaticRestartCount += 1;
+    endedByStoppage = !result.nextOwnerId || Boolean(result.restart);
+  }
+  if (result?.restart) endedByStoppage = true;
+  if (result?.possession === "loose" && !result.restart) {
+    endedByStoppage = false;
+    if (startsFromRestart) trace.push(traceEvent("RESTART.RELEASE", "The ball is live; both teams contest the loose reception", { duration: 0, outcome: "neutral" }));
+  }
+  for (; !endedByStoppage && actionsCount < maxActions; actionsCount += 1) {
+    const resumingLoose = !simulated.ownerId && !result?.restart && result?.possession === "loose";
     const groups = freePlayGroups(
-      simulated.ownerId,
+      simulated.ownerId ?? (resumingLoose ? simulated.ballState?.lastTouch?.playerId ?? simulatedRoster[0]?.id : null),
       simulatedRoster,
       simulated.ballState,
     );
@@ -6644,23 +12250,43 @@ function runConstructedPossession(seed) {
     const candidates = generateFreePlayCandidates(
       groups,
       state.attackingDirection[groups.owner.team],
+      attackingSettingsFor(groups.owner.team),
+      engagementHistory,
+      congestionTracker,
+      JOINT_CANDIDATE_DEPS,
     );
+    if (resumingLoose) candidates.splice(0, candidates.length, { type: "resume-loose", utility: 1 });
+    if (motionContext.kickoffPlan?.team !== groups.owner.team) motionContext.kickoffPlan = null;
+    applyKickoffInstructions(candidates, groups, state.attackingDirection[groups.owner.team], motionContext.kickoffPlan);
+    // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the leading
+    // pass/run ideas this decision considered, kept for the read-only
+    // diagnostics panel. Recorded BEFORE selection and never read back by
+    // the engine, so it cannot influence a choice or consume a draw.
+    recordJointCandidates(candidates);
     const decision = chooseCandidate(
       candidates,
       groups.owner.player,
       decisionRandom,
     );
+    const distanceToGoal = distanceToGoalYards(
+      groups.owner,
+      state.attackingDirection[groups.owner.team],
+    );
     const optionMetrics = {
       ...decisionOptionMetrics(candidates, groups),
       decisionIndex: actionsCount,
       ownerId: groups.owner.id,
-      distanceToGoalYards: distanceToGoalYards(
-        groups.owner,
-        state.attackingDirection[groups.owner.team],
+      distanceToGoalYards: distanceToGoal,
+      distanceToGoalMetres: distanceToGoal * 0.9144,
+      longRangeShotConfidence: longRangeShotConfidence(groups.owner.player),
+      shootingInstruction: shootingInstructionFor(
+        groups.owner, attackingSettingsFor(groups.owner.team),
       ),
       selectedAction: decision?.type ?? null,
     };
-    decisionMetrics.push(optionMetrics);
+    // A continuing loose-ball race has no new owner decision or choice cue.
+    // Keep the summary aligned with the actual decisions in the replay.
+    if (!resumingLoose) decisionMetrics.push(optionMetrics);
     if (!decision) {
       trace.push(
         traceEvent(
@@ -6686,19 +12312,60 @@ function runConstructedPossession(seed) {
       };
       break;
     }
-    trace.push(
+    if (!resumingLoose) trace.push(
       traceEvent(
         "ACTION.CHOICE",
-        decision.target
+        decision.kickoffTerritory
+          ? `${playerName(groups.owner.player)} aims for an attacking-third throw-in so the team can press`
+          : decision.target
           ? `${playerName(groups.owner.player)} chooses to ${decision.type} to ${playerName(decision.target.player)} · ${optionMetrics.legalPassingOptions} legal pass option${optionMetrics.legalPassingOptions === 1 ? "" : "s"}`
-          : `${playerName(groups.owner.player)} chooses to ${decision.type} · ${optionMetrics.legalPassingOptions} legal pass option${optionMetrics.legalPassingOptions === 1 ? "" : "s"}`,
+          : decision.type === "shoot"
+            ? `${playerName(groups.owner.player)} chooses to shoot from ${optionMetrics.distanceToGoalMetres.toFixed(1)} m (${optionMetrics.shootingInstruction === "encourage" ? "Shoot more" : optionMetrics.shootingInstruction === "discourage" ? "Shoot less" : "Balanced"}) · ${optionMetrics.legalPassingOptions} legal pass option${optionMetrics.legalPassingOptions === 1 ? "" : "s"}`
+            : `${playerName(groups.owner.player)} chooses to ${decision.type} · ${optionMetrics.legalPassingOptions} legal pass option${optionMetrics.legalPassingOptions === 1 ? "" : "s"}`,
         { actor: groups.owner, outcome: "neutral", metrics: optionMetrics },
       ),
     );
+    // Engagement Breaker v1 -- record what THIS decision was, for the
+    // NEXT ones' own candidate generation (generateFreePlayCandidates()/
+    // holdUtility(), spatialDecision.js). Each entry in recentPairs is
+    // UNORDERED (aId/bId, not ownerId/opponentId): a lost shield/duel
+    // swaps who owns the ball, so the winner's own very next decision
+    // has them as owner and the original holder as engager -- the
+    // reverse of this decision's own roles, which an ordered pair would
+    // never catch (a real fuzz-test-caught bug; see isSamePair()'s own
+    // comment, spatialDecision.js).
+    //
+    // A real reported bug (2nd fuzz catch): tracking a SINGLE "last pair"
+    // slot meant engaging a DIFFERENT opponent in between silently
+    // discarded the original pair's own still-active 4-action ban --
+    // wrestler A vs B, then a legal beat against C, then A vs B was
+    // immediately legal again with no ban in effect. recentPairs is now
+    // a list: every entry ages by one on every decision and expires
+    // independently once its own actionsAgo reaches 4, so an unrelated
+    // engagement in between can no longer erase an older pair's ban.
+    engagementHistory.consecutiveHoldOwnerId = decision.type === "hold" ? groups.owner.id : null;
+    engagementHistory.recentPairs = engagementHistory.recentPairs
+      .map((pair) => ({ ...pair, actionsAgo: pair.actionsAgo + 1 }))
+      .filter((pair) => pair.actionsAgo < 4);
+    if (decision.type === "hold" || decision.type === "dribble" || decision.type === "back-to-goal") {
+      const engagedOpponent = engagingOpponent(groups.owner, groups.opponents);
+      if (engagedOpponent) {
+        engagementHistory.recentPairs.push({ aId: groups.owner.id, bId: engagedOpponent.id, actionsAgo: 0 });
+      }
+    }
     const availability = {
       preselectedTargetId: decision.target ? decision.target.id : null,
       plannedMoveTo: decision.moveTo || null,
       offside: decision.offside || null,
+      // Keeper Catch & Distribution v1's throw-short/throw-long candidates
+      // (spatialDecision.js) name this explicitly -- a hand throw must
+      // never be resolved through selectPassType()'s own kicked-ball
+      // physics, whatever distance/lane geometry it would otherwise pick.
+      forcedPassType: decision.forcedPassType || null,
+      // Keep execution on the exact delivery the joint candidate judged.
+      // In particular, a controlled ball to a slow receiver's feet must not
+      // be reselected as a driven pass after ACTION.CHOICE.
+      plannedPassType: decision.joint?.passType || null,
       oneOnOneDecisionRandom: seededRandom(
         hashString(`match-lab:freeplay:one-on-one-decision:${seed}:${actionsCount}`),
       ),
@@ -6713,8 +12380,13 @@ function runConstructedPossession(seed) {
     // simulatedRoster clone, never a shared/reused fixture -- see
     // resolveDribble()'s own signature comment on why this must default
     // OFF everywhere else.
+    if (decision.kickoffTerritory) motionContext.territoryPress = { team: groups.owner.team, untilMs: (motionContext.simulationTimeMs ?? 0) + 20000 };
+    if (motionContext.kickoffPlan?.remaining > 0) {
+      motionContext.kickoffPlan.firstSide ??= (decision.target?.x ?? groups.owner.x) <= 50 ? -1 : 1;
+      motionContext.kickoffPlan.remaining -= 1;
+    }
     const actionTraceStart = trace.length;
-    result = FREE_PLAY_RESOLVERS[decision.type](
+    result = resumingLoose ? result : FREE_PLAY_RESOLVERS[decision.type](
       groups,
       availability,
       executionRandom,
@@ -6722,6 +12394,61 @@ function runConstructedPossession(seed) {
       true,
       motionContext,
     );
+    // Burst Stamina v1 -- drains the ACTOR of this decision only (never a
+    // reactor/off-ball player) by the REAL distance they just covered.
+    // result.gait is only ever set by resolveCarry()/resolveDribble()'s
+    // own WON branch; every other resolver (hold/pass/shoot/...) drains
+    // a flat, negligible token amount instead (see drainOnBallAction()'s
+    // own ON_BALL_OTHER_ACTION_YARDS).
+    // Stage 5 -- the real world time this action occupied, so the drain can be
+    // priced from speed rather than from the gait's name. Primary intervals
+    // only: an overlapping beat shares the same wall clock and would
+    // double-count it.
+    const onBallSpanMs = trace.slice(actionTraceStart).reduce(
+      (total, event) => total + (event.overlapWithPrevious ? 0 : (Number(event.duration) || 0)),
+      0,
+    );
+    drainOnBallAction(
+      groups.owner, result.gait,
+      result.ballEnd ? yardDistance(simulated.ballPoint, result.ballEnd) : 0,
+      onBallSpanMs,
+    );
+    // Bugfix slice -- see congestionTracker's own header above. Computed
+    // from the REAL resolved outcome (ballEnd), not the decision alone --
+    // a short pass that's actually intercepted/lost still counts toward
+    // the streak (it genuinely went nowhere either way), while any OTHER
+    // kind of decision (carry, cross, through, shoot, dribble) resets it
+    // outright -- exactly the "raise carry-away/switch/through" half of
+    // the fix, achieved by letting THOSE options win on their own merits
+    // once hold/short-pass are crushed, never by inventing a bonus for them.
+    const congestionNetProgression = result.ballEnd
+      ? progressionYards(simulated.ballPoint, result.ballEnd, state.attackingDirection[groups.owner.team])
+      : 0;
+    const congestionShortStall = decision.type === "hold"
+      || (decision.type === "pass" && yardDistance(groups.owner, decision.target ?? groups.owner) < CONGESTION_SHORT_PASS_YARDS);
+    congestionTracker.lowProgressionStreak = (congestionShortStall && congestionNetProgression < CONGESTION_MIN_PROGRESSION_YARDS)
+      ? congestionTracker.lowProgressionStreak + 1
+      : 0;
+    // Physical windows continue existing jobs. This never generates a fresh
+    // off-ball target or consumes another decision draw during a hold.
+    if (!result.offBallInterleaved) {
+      const produced = trace.splice(actionTraceStart);
+      let continuedIntentions = false;
+      const involved = produced.flatMap(event => [event.actorId, event.targetId,
+        event.defenderId, event.keeperId, ...(event.playerMoves || []).map(move => move.playerId)]);
+      for (const event of produced) {
+        trace.push(event);
+        if (event.timelineRole === "cue" || event.overlapWithPrevious || !event.duration) continue;
+        const moves = continueMotionIntentions(simulatedRoster, motionContext, event.duration, involved);
+        if (moves.length) {
+          continuedIntentions = true;
+          trace.push(traceEvent("MOTION.CONTINUE", "Players continue their committed jobs", {
+            movement: "reposition", duration: event.duration, overlapWithPrevious: true, playerMoves: moves,
+          }));
+        }
+      }
+      result.intentionsContinued = continuedIntentions;
+    }
     const actionTrace = trace.slice(actionTraceStart);
     // Every explicit physical move is authoritative simulation state, not
     // animation metadata. Previously only the next ball owner was committed,
@@ -6735,8 +12462,30 @@ function runConstructedPossession(seed) {
         );
         if (!movedEntry || !move.to) continue;
         Object.assign(movedEntry, move.to);
+        // Commit the carrier's actual outgoing stride. Previously the roster
+        // position changed but its motion record stayed stale, so each fresh
+        // carry restarted from rest while pursuing defenders kept momentum.
+        if (move.trajectory?.length && String(event.ownerAfterId) === String(move.playerId)
+            && ["touch", "dribble"].includes(event.movement)) {
+          writeMotionRecord(motionContext, move.playerId, {position:move.to,
+            velocity:move.trajectory.at(-1).velocity,intention:"carry",intentionTarget:move.to});
+        }
+        // Gameplay v3.2 -- this used to zero velocity/intention for EVERY
+        // non-reposition move (reception, touch, dribble, tackle,
+        // interception, advance...), not just a genuine stand-still. A
+        // receiver taking a touch, or a carrier mid-dribble, is not
+        // planting -- their next off-ball-style call (a knock-on's own
+        // trailing reaction, or simply becoming off-ball themselves later
+        // in the possession) inherits this SAME motionContext entry via
+        // sampleContinuousTrajectory()'s own incomingVelocity, so zeroing
+        // it here restarted their run from rest for no football reason.
+        // Contact-pin already wins for the actor's own RENDERED position
+        // at the moment of contact (playback's own stationaryContact/
+        // contactArrivalTiming paths, unaffected by this). "hold" (Hold-Up
+        // Play, GK.HOLD) is the one movement that IS a genuine, deliberate
+        // stand-still -- that one still zeroes.
         if (
-          event.movement !== "reposition" &&
+          event.movement === "hold" &&
           motionContext.state.players?.[move.playerId]
         ) {
           motionContext.state.players[move.playerId] = {
@@ -6775,17 +12524,195 @@ function runConstructedPossession(seed) {
         lastTouchId: lastTouchEvent?.lastTouch?.playerId ?? null,
         lastTouch: lastTouchEvent?.lastTouch ?? null,
       });
-      const recoveredBy = selectLooseBallRecovery(simulatedRoster, looseState);
+      // Dynamic Ball Claim v2 (2026-09-04) -- selectLooseBallRecovery() is
+      // kept as the STATIC fallback only: it answers "who is nearest" from a
+      // 320ms predictBallPosition() look-ahead, which is the right question
+      // when there is no real momentum to race (every "possession: loose"
+      // producer that carries no ballVelocity) and the wrong one the moment
+      // the ball is genuinely rolling. Where there IS real momentum, this is
+      // replaced below by claimLooseBall(), which races the ACTUAL
+      // decelerating roll across its whole length. Measured, at a real
+      // through-ball landing speed of 26 yd/s: the 320ms prediction sees the
+      // ball 5.8 yards from where it went loose while it genuinely travels
+      // 91 yards over 7 seconds -- so the old claim was effectively always
+      // awarded to whoever stood nearest the landing spot, who then chased a
+      // ball running away from them until it went out. That is the reported
+      // "passer chasing a loose ball" bug, and it was structural.
+      let recoveredBy = selectLooseBallRecovery(simulatedRoster, looseState);
       if (recoveredBy) {
-        const recoveryDuration = Math.max(
+        // Loose Ball Momentum v1 (2026-08-31) -- a real reported bug: the
+        // ball used to freeze dead at result.ballEnd the instant it went
+        // loose, then teleport-adjacent to that SAME static point once
+        // recoveredBy arrived -- "stops suddenly like it got stuck in
+        // mud." Real ground roll now: the ball keeps traveling in its OWN
+        // real landing velocity (flightLandingVelocity()'s own header),
+        // decelerating under GROUND_FRICTION_YPS2 (ballRollPhysics.js,
+        // the SAME friction model carry touches already roll under), and
+        // recoveredBy races the ACTUAL rolling ball, not a stationary
+        // target. Falls back to the exact original static-point behavior
+        // when there's no real velocity to work with (result.ballVelocity
+        // absent -- every OTHER "possession: loose" producer besides
+        // pushLooseDeliveryChase -- or negligible).
+        const velocity = result.ballVelocity ?? { x: 0, y: 0 };
+        const velocityYardPerMs = {
+          x: velocity.x * (PITCH_WIDTH_YARDS / 100),
+          y: velocity.y * (PITCH_LENGTH_YARDS / 100),
+        };
+        // Bugfix slice (2026-09-02) -- a real reported bug: flightLandingVelocity()
+        // reports the delivery's own RAW AVERAGE flight speed (e.g. ~20-26 yd/s for
+        // a ground/driven-ground pass, per matchPassFlight.js's own PASS_TYPE_PROFILE)
+        // -- treating that unattenuated as the GROUND ROLL's own launch speed makes
+        // rollStopDistanceYards() come out to 34-91 real yards under
+        // GROUND_FRICTION_YPS2, almost always enough to reach a boundary from a
+        // through ball's own characteristically deep landing spot, regardless of how
+        // far that landing spot genuinely was from the actual line. A real ball loses
+        // real energy on its own first bounce/skid before it ever settles into a pure
+        // ground roll; LOOSE_DELIVERY_ROLL_RETENTION models that (roughly quarters
+        // the natural roll distance, since stop distance scales with speed squared),
+        // so a miss landing well inside the pitch can genuinely die on the grass or
+        // be recovered, instead of a restart being close to guaranteed. Scoped
+        // entirely to THIS roll's own launch speed -- the real per-tick race, the
+        // genuine-exit check, and result.ballVelocity itself (used elsewhere for
+        // reporting) are all untouched.
+        const LOOSE_DELIVERY_ROLL_RETENTION = 0.5;
+        const speedYps = Math.hypot(velocityYardPerMs.x, velocityYardPerMs.y) * 1000
+          * (result.ballVelocityPhase === "rolling" ? 1 : LOOSE_DELIVERY_ROLL_RETENTION);
+        let recoveryPoint = result.ballEnd;
+        let recoveryDuration = Math.max(
           MOVEMENT_DURATIONS.scramble,
-          Math.round(
-            timeToReach(
-              recoveredBy.player,
-              yardDistance(recoveredBy, result.ballEnd),
-            ) * 1000,
-          ),
+          Math.round(timeToReach(recoveredBy.player, yardDistance(recoveredBy, result.ballEnd)) * 1000),
         );
+        let rollTrajectory = null;
+        // Ball Out of Bounds v1 (2026-09-01) -- set only when the roll
+        // genuinely crosses a touchline/byline before either the natural
+        // stop or the recoverer's own arrival; when set, this REPLACES the
+        // whole "recovered" outcome below rather than being layered on
+        // top of it.
+        let genuinePitchExit = null;
+        if (speedYps > CLAIM_MIN_ROLL_SPEED_YPS) {
+          // A point far along the SAME real heading the ball actually
+          // landed with -- pointAlongMovement() only needs a genuine
+          // direction, not an exact distant target, so this stays valid
+          // for any real rollStopDistanceYards() this speed produces.
+          const aimPoint = {
+            x: result.ballEnd.x + velocity.x * 100000,
+            y: result.ballEnd.y + velocity.y * 100000,
+          };
+          // A rolling ball heading toward the touchline/byline is a real,
+          // finite ray -- pointAlongMovement()'s own interpolation has no
+          // notion of the pitch's own edges and will happily walk past
+          // them (a real bug this exact fix surfaced: an out-of-bounds
+          // recovery point corrupted every downstream pressure/off-ball
+          // calculation for the rest of the possession). Still clamped to
+          // [0,100] both axes at every RECOVERY sample below -- a genuine
+          // exit is handled as its own real restart just below instead,
+          // never silently clamped away.
+          // Recomputes zone from the CLAMPED coordinate, never just copies
+          // whatever pointAlongMovement() attached to the pre-clamp point --
+          // the exact "silently carries no zone, or the WRONG one once
+          // clamped" bug this project's own history already caught twice.
+          const clampToPitch = (point) => {
+            const x = clamp(0, 100, point.x);
+            const y = clamp(0, 100, point.y);
+            return { x, y, zone: zoneFromPercent(x, y) };
+          };
+          const naturalStopMs = rollStopDurationMs(speedYps);
+          const ROLL_SAMPLE_MS = 40;
+          // The roll's real last toucher -- whoever's touch actually sent
+          // it loose, not the recoverer racing it -- is who a restart
+          // gets attributed to. Without real last-touch data, this never
+          // fabricates a classification (classifyPitchExit()'s own rule).
+          const rollLastTouchId = lastTouchEvent?.lastTouch?.playerId ?? null;
+          const rollLastTouchTeam = lastTouchEvent?.lastTouch?.team ?? null;
+          const rollLastTouchEntry = rollLastTouchId
+            ? simulatedRoster.find((entry) => entry.id === rollLastTouchId) ?? null
+            : null;
+          const pitchExit = (rollLastTouchEntry && rollLastTouchTeam)
+            ? classifyPitchExit({
+                from: result.ballEnd,
+                to: aimPoint,
+                lastTouchTeam: rollLastTouchTeam,
+                attackingDirectionByTeam: state.attackingDirection,
+              })
+            : null;
+          const naturalStopDistanceYards = rollStopDistanceYards(speedYps);
+          const exitDistanceYards = pitchExit ? yardDistance(result.ballEnd, pitchExit.ballEnd) : null;
+          const genuineExit = Boolean(pitchExit) && exitDistanceYards <= naturalStopDistanceYards;
+          const exitTimeMs = genuineExit ? rollDurationForDistance(speedYps, exitDistanceYards) : null;
+          // Once the ball would genuinely be out, the recovery race never
+          // gets to search past that instant -- a ball that's crossed the
+          // line can't be recovered, same as real football.
+          // Dynamic Ball Claim v2 -- this used to be a one-player search:
+          // whoever selectLooseBallRecovery() had already picked was walked
+          // along the roll to see when they caught it, and nobody else was
+          // ever considered again. The race is now re-run continuously
+          // across the whole roll for EVERY player on the pitch, so the
+          // claim can genuinely change hands as the ball slows: a player who
+          // starts further away but whose path converges on the roll now
+          // wins it from someone who was merely closest at the instant it
+          // came loose. Same friction model (ballRollPhysics.js), same
+          // kinetics (timeToReach), same 40ms cadence, and no RNG at all.
+          const claim = claimLooseBall({
+            from: result.ballEnd,
+            aim: aimPoint,
+            speedYps,
+            candidates: simulatedRoster,
+            exitDistanceYards: genuineExit ? exitDistanceYards : null,
+            sampleMs: ROLL_SAMPLE_MS,
+            clampPoint: clampToPitch,
+          });
+          recordBallClaim(claim);
+          // A ball that crosses the line has no winner and no pickup. Any
+          // other roll always ends with somebody reaching it, at worst as a
+          // standing pickup once it has stopped -- which is exactly the
+          // outcome the previous code produced for that case.
+          const claimWinner = claim.claimant ?? claim.pickup?.entry ?? null;
+          if (claimWinner) recoveredBy = claimWinner;
+          const interceptMs = claim.interceptMs;
+          if (genuineExit && interceptMs === null) {
+            const exitTrajectorySamples = Math.max(2, Math.min(16, Math.ceil(exitTimeMs / 120)));
+            const exitTrajectory = Array.from({ length: exitTrajectorySamples + 1 }, (_, index) => {
+              const progress = index / exitTrajectorySamples;
+              return {
+                progress,
+                position: index === exitTrajectorySamples
+                  ? { ...pitchExit.ballEnd }
+                  : pointAlongMovement(result.ballEnd, aimPoint, rollTraveledYards(speedYps, exitTimeMs * progress)),
+              };
+            });
+            genuinePitchExit = pushPitchExitRestart(trace, {
+              actor: rollLastTouchEntry, ballFrom: result.ballEnd, exit: pitchExit, movement: "touch",
+              ballTrajectory: exitTrajectory,
+              duration: Math.round(exitTimeMs),
+              // Nobody touches this ball. It rolls out on its own, and
+              // claim.abandoned says exactly who could not get there and
+              // why. rollLastTouchEntry is the restart's ATTRIBUTION, not
+              // a player making a contact at the line -- see
+              // pushPitchExitRestart()'s own pinActorToExit header.
+              pinActorToExit: false,
+            });
+          } else {
+            const realDurationMs = interceptMs ?? Math.max(naturalStopMs, claim.pickup?.arrivalMs ?? 0);
+            const realDistanceYards = interceptMs !== null
+              ? rollTraveledYards(speedYps, interceptMs)
+              : rollStopDistanceYards(speedYps);
+            recoveryPoint = clampToPitch(pointAlongMovement(result.ballEnd, aimPoint, realDistanceYards));
+            recoveryDuration = Math.ceil(realDurationMs);
+            const trajectorySampleCount = Math.max(2, Math.min(16, Math.ceil(realDurationMs / 120)));
+            rollTrajectory = Array.from({ length: trajectorySampleCount + 1 }, (_, index) => {
+              const progress = index / trajectorySampleCount;
+              return {
+                progress,
+                position: index === trajectorySampleCount
+                  ? { ...recoveryPoint }
+                  : clampToPitch(pointAlongMovement(result.ballEnd, aimPoint, rollTraveledYards(speedYps, recoveryDuration * progress))),
+              };
+            });
+          }
+        }
+        if (genuinePitchExit) {
+          result = genuinePitchExit;
+        } else {
         trace.push(
           traceEvent(
             "LOOSE.RECOVERED",
@@ -6793,14 +12720,15 @@ function runConstructedPossession(seed) {
             {
               actor: recoveredBy,
               mover: recoveredBy,
-              moveTo: result.ballEnd,
+              moveTo: recoveryPoint,
               movement: "scramble",
               outcome: "success",
               duration: recoveryDuration,
               ballFrom: result.ballEnd,
-              ballTo: result.ballEnd,
+              ballTo: recoveryPoint,
+              ...(rollTrajectory ? { ballTrajectory: rollTrajectory } : {}),
               contact: {
-                point: result.ballEnd,
+                point: recoveryPoint,
                 actor: recoveredBy,
                 type: "recovery",
                 phase: "end",
@@ -6812,14 +12740,51 @@ function runConstructedPossession(seed) {
             },
           ),
         );
+        // Gameplay v3.1 -- this used to be a sequential scramble for
+        // recoveredBy alone: everyone else on the pitch stood frozen for
+        // the whole recoveryDuration, then twitched through a 200ms
+        // POST_ACTION_CONVERGENCE_MS reshape once the loop noticed
+        // possession had settled. The CM 03/04 rule applies here just as
+        // much as during the flight itself -- the ball being loose on the
+        // ground instead of in the air doesn't pause the other 21 jobs.
+        // Queried from recoveredBy's own perspective (they're about to be
+        // the next owner) so teammates/opponents split correctly; overlaps
+        // the LOOSE.RECOVERED interval just pushed above instead of
+        // inserting a new sequential beat.
+        const recoveryGroups = freePlayGroups(
+          recoveredBy.id,
+          simulatedRoster,
+          simulated.ballState,
+        );
+        reactOffBallContinuous(
+          recoveryGroups,
+          recoveryPoint,
+          recoveryPoint,
+          recoveryDuration,
+          trace,
+          {
+            motionContext,
+            excludedIds: [recoveredBy.id],
+            overlapWithPrevious: true,
+            chaseIntention: true,
+          },
+        );
         result = {
           ...result,
           terminal: false,
           possession:
             recoveredBy.team === groups.owner.team ? "retained" : "turnover",
           nextOwnerId: recoveredBy.id,
+          // Loose Ball Momentum v1 -- the real point the ball actually
+          // rolled to, never the original static landing spot; the outer
+          // loop's own authoritative-move commit (right below) must move
+          // recoveredBy HERE, or the trace's own real animation and the
+          // simulated roster's own position silently disagree.
+          ballEnd: recoveryPoint,
           reason: `${result.reason}-recovered`,
+          offBallInterleaved: true,
         };
+        }
       }
     }
     // Atomic transition: ball position, the simulated position of whoever
@@ -6893,7 +12858,95 @@ function runConstructedPossession(seed) {
         lastTouchId:
           lastTouchEvent?.lastTouch?.playerId ?? nextOwner?.id ?? null,
         lastTouch: lastTouchEvent?.lastTouch ?? null,
+        // Object.hasOwn, not `result.held ?? undefined` -- a resolver that
+        // never mentions `held` at all (everything except a keeper catch/
+        // release) must fall through to transitionBallState()'s own
+        // ownerRole-based default, while resolveKeeperReleaseToFeet()'s
+        // explicit `held: false` must actually override it.
+        heldOverride: Object.hasOwn(result, "held") ? result.held : undefined,
       });
+      // Keeper Catch & Distribution v1 (2026-08-23) -- a catch is not the
+      // end of the possession: the side gets a real beat to settle before
+      // the keeper picks a distribution (generateFreePlayCandidates() only
+      // offers throw-short/throw-long/punt/release-to-feet while
+      // ballState.phase === "held", never a shot or a dribble out of their
+      // hands).
+      // Keeper Hold & Walk v1 (2026-08-31) -- a real reported gap: the
+      // keeper used to freeze dead still at the exact catch point for a
+      // flat GK_HOLD_MS, then pass "exactly from where he collects the
+      // ball." Now a real short walk inside the box (keeperWalkTarget()'s
+      // own header) lasts up to GK_HOLD_MAX_MS. Opponent proximity cannot
+      // shorten it because they are not allowed to pressure a held ball.
+      if (result.held) {
+        const keeperGroups = freePlayGroups(nextOwner.id, simulatedRoster, simulated.ballState);
+        // Proximity cannot shorten this window: an opponent is not allowed
+        // to pressure a goalkeeper while the ball is in his hands. Once the
+        // ball is dropped to the feet, the normal pressure model resumes.
+        const holdDurationMs = GK_HOLD_MAX_MS;
+        const walkTarget = keeperWalkTarget(nextOwner, state.attackingDirection[nextOwner.team], seed, actionsCount);
+        const holdMove = realMoverTrajectory(nextOwner, walkTarget, { floorMs: holdDurationMs, action: "hold-walk" });
+        const holdBallFrom = simulated.ballPoint;
+        trace.push(
+          traceEvent(
+            "GK.HOLD",
+            `${playerName(nextOwner.player)} holds it, walking it around the box`,
+            {
+              actor: nextOwner,
+              ...holdMove,
+              movement: "hold",
+              outcome: "neutral",
+              ballFrom: holdBallFrom,
+              ballTo: walkTarget,
+              // The ball is in his hands, so it follows HIS path, not a
+              // straight line between the same two endpoints.
+              ballTrajectory: heldBallTrajectory(holdMove.playerMoves[0].trajectory, holdBallFrom),
+              ballResult: "held",
+              ownerBefore: nextOwner,
+              ownerAfter: nextOwner,
+            },
+          ),
+        );
+        // Commit immediately -- the same real-discontinuity reasoning as
+        // every other post-actionTrace mutation this file makes (Burst
+        // Stamina v1's own turnover jobs, this exact pattern). The ball
+        // travels IN HIS HANDS, so its own simulated position/state must
+        // move with him too, not linger at the original catch point.
+        Object.assign(nextOwner, walkTarget);
+        simulated.ballPoint = walkTarget;
+        simulated.ballState = { ...simulated.ballState, position: walkTarget };
+        // Real reported bug (2026-09-01): "most of the players get
+        // frozen and not moving for a time." Only the keeper himself
+        // ever got an authored move for this whole window -- harmless
+        // at the OLD flat 1.4s GK_HOLD_MS, but Keeper Hold & Walk v1
+        // stretched this same window up to a real 6 real seconds
+        // (GK_HOLD_MAX_MS) with nobody else on the pitch doing anything
+        // the whole time. The other 21 players keep working their own
+        // real jobs (shape/marking/support) for the SAME real duration,
+        // exactly like every other long window in this file already
+        // does (a pass flight, a loose-ball scramble).
+        reactOffBallContinuous(
+          keeperGroups,
+          holdBallFrom,
+          walkTarget,
+          holdDurationMs,
+          trace,
+          {
+            motionContext,
+            excludedIds: [nextOwner.id],
+            overlapWithPrevious: true,
+            chaseIntention: true,
+            keeperHolding: true,
+          },
+        );
+        // A keeper catch/hold never set this before (nothing else here
+        // ever interleaved its own reaction) -- forcing it now stops the
+        // generic post-action reshape further below from ALSO re-planning
+        // everyone a second time on top of the real reaction just
+        // authored, the exact double-move conflict Turnover Stamina
+        // Jobs v1's own header already documents for this same class of
+        // bug.
+        result = { ...result, offBallInterleaved: true };
+      }
     }
     // Off-Ball Goalkeeper Awareness (2026-08-18) -- only while the
     // possession CONTINUES: a dead ball has no next decision for this to
@@ -6908,6 +12961,84 @@ function runConstructedPossession(seed) {
     // never consumes decisionRandom or executionRandom.
     const continuesLive = Boolean(result.nextOwnerId && !result.restart);
     if (continuesLive) {
+      const phaseGroups = freePlayGroups(result.nextOwnerId, simulatedRoster, simulated.ballState);
+      if (phaseGroups.owner) {
+        const phaseSnapshots = {
+          owner: phaseGroups.owner,
+          teammates: phaseGroups.teammates,
+          opponents: phaseGroups.opponents,
+          ownKeepers: phaseGroups.ownKeepers || [],
+          opposingKeepers: phaseGroups.opposingKeepers || (phaseGroups.keeper ? [phaseGroups.keeper] : []),
+        };
+        const elapsedForNonInterleaved = result.offBallInterleaved
+          ? 0
+          : Math.max(0, ...actionTrace.map((event) => Number(event.duration) || 0));
+        motionContext.teamPhase = updateTeamPhaseState(
+          motionContext.teamPhase,
+          teamPhaseFacts(
+            phaseSnapshots,
+            groups.owner ? pointOf(groups.owner) : simulated.ballPoint,
+            simulated.ballPoint,
+            motionContext,
+          ),
+          elapsedForNonInterleaved,
+        );
+        if (elapsedForNonInterleaved) motionContext.simulationTimeMs += elapsedForNonInterleaved;
+      }
+    }
+    // Turnover Stamina Jobs v1 -- fires exactly once, at the instant
+    // possession genuinely changes TEAM (not merely re-authored to the
+    // same side, e.g. a knock-on to a teammate). groups.owner/teammates
+    // above are still this action's PRE-resolution snapshot (the side
+    // that just lost it); simulated.ballState was already committed
+    // above, so freePlayGroups() for the new owner reflects real
+    // post-action positions. turnoverJobIds feeds the regular reshaping
+    // call further below (its own excludedIds) -- see
+    // maybeAssignTurnoverStaminaJobs()'s own header for the real
+    // teleport bug this prevents.
+    let turnoverJobIds = [];
+    if (continuesLive) {
+      const newOwnerEntry = simulatedRoster.find((entry) => entry.id === result.nextOwnerId);
+      if (newOwnerEntry && groups.owner && newOwnerEntry.team !== groups.owner.team) {
+        const winningGroups = freePlayGroups(result.nextOwnerId, simulatedRoster, simulated.ballState);
+        // Real reported bug (2026-08-31), other direction: a resolver that
+        // ALREADY interleaved its own full off-ball reaction THIS action
+        // (result.offBallInterleaved -- the loose-ball recovery race is
+        // the concrete case that surfaced it, but any interleaved resolver
+        // qualifies) may have already given the exact player this
+        // function would pick a real job of their own. Scanning this
+        // action's own trace-so-far for who has ALREADY moved is the
+        // general fix -- correct regardless of which specific mechanism
+        // moved them first, not just the loose-ball case that happened to
+        // catch it.
+        const alreadyMovedIds = new Set(
+          trace.slice(actionTraceStart).flatMap(
+            (event) => (event.playerMoves || []).map((move) => String(move.playerId)),
+          ),
+        );
+        turnoverJobIds = maybeAssignTurnoverStaminaJobs(
+          groups.owner, groups.teammates, winningGroups, trace, alreadyMovedIds,
+          // World Motion Contract v1 -- the shared per-player motion
+          // record, so a recovery/support run carries velocity in and
+          // hands velocity + its own live intention back out instead of
+          // every beat restarting from a standstill.
+          motionContext,
+        );
+      }
+    }
+    // Off-Ball Motion v3 (2026-08-26) -- a real reported bug: this call ran
+    // UNCONDITIONALLY after every continuing action, including one that
+    // had already just interleaved a full-window continuous reaction of
+    // its own (resolvePass/resolveCarry/resolveDribble, via
+    // result.offBallInterleaved -- see each of their own matching return
+    // fields). A second reaction on top -- a brand-new trajectory, velocity
+    // reset to zero, an 8-yard-capped target -- is the "second hitch"
+    // reported both mid-carry AND mid-pass (players visibly freezing then
+    // snapping). Skipped ONLY for that case; a short, non-interleaved
+    // action (hold, back-to-goal, a failed touch with no flight) still
+    // gets this, unchanged, since nothing else moved anyone toward their
+    // real spot yet.
+    if (continuesLive && !result.offBallInterleaved && !result.intentionsContinued) {
       // Off-Ball Attacker/Defender/Goalkeeper Awareness -- the full,
       // guaranteed-convergence reaction at the end of every action. Motion
       // v1 plans every role from one snapshot and commits them atomically;
@@ -6944,14 +13075,40 @@ function runConstructedPossession(seed) {
         simulated.ballPoint,
         POST_ACTION_CONVERGENCE_MS,
         trace,
-        { motionContext, overlapWithPrevious: false },
+        {
+          motionContext,
+          // Overlap the just-finished reception/touch instead of inserting
+          // a sequential dead beat. The ball owner is excluded so a contact
+          // keyframe at the same timestamp cannot be replaced. Off-ball
+          // players lean toward their next marks DURING the first touch,
+          // then the next action starts with no freeze.
+          overlapWithPrevious: true,
+          // CAPPED, not the uuncapped intentionTarget this same function
+          // chases during an actual pass flight (the call above, which
+          // genuinely owns a multi-second window) -- POST_ACTION_CONVERGENCE_MS
+          // is deliberately short, and asking a short window to cover a
+          // far tactical destination is exactly the "2-second reshape
+          // squeezed into 160ms" pause-then-burst a real browser round
+          // reported. A short nudge toward the SAME direction, capped by
+          // this window's own real pace budget, reads as natural instead.
+          chaseIntention: false,
+          excludedIds: [defendingGroups.owner?.id, result.nextOwnerId, ...turnoverJobIds].filter(Boolean),
+          // Progression Contest v1 -- catches every resolver that does
+          // NOT interleave its own off-ball reaction (resolveHold's
+          // SHIELD.WON, resolveDribble's T.BEATEN.ESCAPE) via whichever
+          // one just set beatenDefenderId on its own return; a resolver
+          // that already interleaved (resolveDribble's clean P.PROGRESS.WON,
+          // resolveCarry's own completion) skipped this whole branch via
+          // offBallInterleaved and threaded it directly into its OWN call
+          // instead -- see each of their own matching comments.
+          beatenPresserId: result.beatenDefenderId || null,
+        },
       );
-    } else if (result.restart && groups.owner) {
-      // Motion continues until the whistle/ball-out instant. A terminal
-      // outcome used to skip this entire batch, freezing every uninvolved
-      // player throughout the final tackle or ball flight. Keep the direct
-      // participants on their resolver-authored tracks, while the remaining
-      // players carry their real tactical intentions through that interval.
+    } else if (result.restart && !AUTOMATIC_RESTART_TYPES.has(result.restart) && groups.owner) {
+      // Fouls and other whistle stoppages still allow the players already
+      // reacting to the live duel to move up to that whistle. A ball that
+      // has crossed a boundary is handled separately: it must not trigger
+      // a newly planned open-play shape before the restart setup begins.
       const directParticipants = actionTrace
         .flatMap((event) => [
           event.actorId,
@@ -6978,17 +13135,47 @@ function runConstructedPossession(seed) {
         },
       );
     }
+    // A genuine pitch exit now flows through the same set-piece engine as
+    // an authored Match Setup restart. Keep following consecutive awarded
+    // restarts (for example a corner immediately headed behind) with a hard
+    // chain cap so an adversarial resolver cannot create an infinite loop.
+    if (result.restart && AUTOMATIC_RESTART_TYPES.has(result.restart)) {
+      if (stopAtStoppage) {
+        simulated.ownerId = null;
+        endedByStoppage = true;
+        break;
+      }
+      while (
+        result.restart
+        && AUTOMATIC_RESTART_TYPES.has(result.restart)
+        && automaticRestartCount < MAX_AUTOMATIC_RESTARTS
+      ) {
+        const resumed = executeAutomaticRestart({
+          result,
+          simulated,
+          simulatedRoster,
+          trace,
+          motionContext,
+          seed,
+          restartIndex: automaticRestartCount,
+        });
+        if (!resumed) break;
+        automaticRestartCount += 1;
+        result = resumed;
+      }
+    }
     simulated.ownerId = result.nextOwnerId;
     // Direct resolvers still report a clean interception/tackle/keeper catch
     // as terminal for their isolated action contract. The sequence runner is
     // broader: any live result with a real next owner begins another action.
-    if (!continuesLive) {
+    const sequenceContinuesLive = !result.restart && Boolean(result.nextOwnerId || result.possession === "loose");
+    if (!sequenceContinuesLive) {
       endedByStoppage = true;
       break;
     }
   }
 
-  if (result && !endedByStoppage) {
+  if (result && !endedByStoppage && !matchSession) {
     trace.push(
       traceEvent(
         "POSSESSION.MAX_ACTIONS",
@@ -7014,9 +13201,30 @@ function runConstructedPossession(seed) {
     trace,
     finalOwnerId: simulated.ownerId,
     finalBallState: simulated.ballState,
+    ...(matchSession ? { continuation: {
+      roster: simulatedRoster, simulated, result, motionContext, engagementHistory, congestionTracker,
+    } } : {}),
     actionsCount,
     finalPositions: simulatedRoster,
     decisionMetrics,
+    teamPhase: motionContext.teamPhase,
+    phaseTransitions: motionContext.teamPhase?.transitions ?? [],
+    shapeSnapshots: motionContext.shapeSnapshots,
+    shapeMetrics: {
+      before: initialShapeMetrics,
+      after: Object.fromEntries(teamIds.map((team) => [
+        team,
+        teamShapeMetrics(simulatedRoster.filter((entry) => entry.team === team), {
+          ballPoint: simulated.ballPoint,
+          ownerId: simulated.ownerId,
+          attackingDirection: state.attackingDirection[team],
+        }),
+      ])),
+      opening: motionContext.shapeSnapshots.find((snapshot) =>
+        Object.values(snapshot.teams || {}).some((value) => value.phase === "build-up"))?.teams
+        ?? motionContext.shapeSnapshots[motionContext.shapeSnapshots.length - 1]?.teams
+        ?? null,
+    },
     possessionMetrics: {
       decisions: decisionMetrics.length,
       passesSelected: decisionMetrics.filter(
@@ -7042,11 +13250,45 @@ function runConstructedPossession(seed) {
             0,
           ) / shotSamples.length
         : null,
+      meanShotDistanceMetres: shotSamples.length
+        ? shotSamples.reduce(
+            (sum, entry) => sum + entry.distanceToGoalMetres,
+            0,
+          ) / shotSamples.length
+        : null,
     },
   };
 }
 
+// Tactics owns a full-width workspace. The controls are authored once in
+// HTML and moved into their semantic columns before references are captured,
+// avoiding duplicate IDs or a second, drifting set of tactics inputs.
+function mountTacticsWorkspace() {
+  const teamHost = document.querySelector("#labTeamTacticsHost");
+  const shapeHost = document.querySelector("#labShapeTacticsHost");
+  const playerHost = document.querySelector("#labPlayerTacticsHost");
+  const shapePanel = document.querySelector("#labShapeTacticsPanel");
+  const slotEditor = document.querySelector("#labSlotEditor");
+  const markingPanel = document.querySelector("#labMarkingTacticsPanel");
+  const attackingPanel = document.querySelector("#labAttackingTacticsPanel");
+  const transitionPanel = document.querySelector("#labTransitionTacticsPanel");
+  if (teamHost && attackingPanel) teamHost.appendChild(attackingPanel);
+  if (teamHost && transitionPanel) teamHost.appendChild(transitionPanel);
+  if (teamHost && markingPanel) teamHost.appendChild(markingPanel);
+  if (shapeHost && shapePanel) shapeHost.appendChild(shapePanel);
+  if (playerHost && slotEditor) playerHost.appendChild(slotEditor);
+}
+mountTacticsWorkspace();
+
 const elements = {
+  matchTab: document.querySelector("#labMatchTab"),
+  tacticsTab: document.querySelector("#labTacticsTab"),
+  matchWorkspace: document.querySelector("#labMatchWorkspace"),
+  tacticsWorkspace: document.querySelector("#labTacticsWorkspace"),
+  teamTacticsTitle: document.querySelector("#labTeamTacticsTitle"),
+  teamTacticGroups: Array.from(document.querySelectorAll(
+    ".match-lab-marking-team, .match-lab-attacking-team, .match-lab-transition-team",
+  )),
   seed: document.querySelector("#labSeed"),
   databaseSelect: document.querySelector("#labDatabaseSelect"),
   searchInput: document.querySelector("#labSearchInput"),
@@ -7060,6 +13302,14 @@ const elements = {
   showTouchesCheckbox: document.querySelector("#labShowTouchesCheckbox"),
   showLabelsCheckbox: document.querySelector("#labShowLabelsCheckbox"),
   showVisionCheckbox: document.querySelector("#labShowVisionCheckbox"),
+  showCoordsCheckbox: document.querySelector("#labShowCoordsCheckbox"),
+  showStaminaCheckbox: document.querySelector("#labShowStaminaCheckbox"),
+  showTeamShapeCheckbox: document.querySelector("#labShowTeamShapeCheckbox"),
+  showTacticalRegionsCheckbox: document.querySelector("#labShowTacticalRegionsCheckbox"),
+  tacticalRegionsLayer: document.querySelector("#labTacticalRegionsLayer"),
+  tacticalRegionsHud: document.querySelector("#labTacticalRegionsHud"),
+  teamShapeLayer: document.querySelector("#labTeamShapeLayer"),
+  teamShapeHud: document.querySelector("#labTeamShapeHud"),
   visionLayer: document.querySelector("#labVisionLayer"),
   visionConeCurrent: document.querySelector("#labVisionConeCurrent"),
   visionConeFading: document.querySelector("#labVisionConeFading"),
@@ -7083,7 +13333,68 @@ const elements = {
   replayButton: document.querySelector("#labReplayButton"),
   rerollButton: document.querySelector("#labRerollButton"),
   stepButton: document.querySelector("#labStepButton"),
+  stepBackButton: document.querySelector("#labStepBackButton"),
   resetButton: document.querySelector("#labResetButton"),
+  saveScenarioButton: document.querySelector("#labSaveScenarioButton"),
+  // Match Setup Integration v1 (2026-09-04).
+  homeSquadSelect: document.querySelector("#labHomeSquadSelect"),
+  awaySquadSelect: document.querySelector("#labAwaySquadSelect"),
+  homeSquadStatus: document.querySelector("#labHomeSquadStatus"),
+  awaySquadStatus: document.querySelector("#labAwaySquadStatus"),
+  formatChoices: document.querySelector("#labFormatChoices"),
+  setupHomeTab: document.querySelector("#labSetupHomeTab"),
+  setupAwayTab: document.querySelector("#labSetupAwayTab"),
+  formationSelect: document.querySelector("#labFormationSelect"),
+  formationStyleSelect: document.querySelector("#labFormationStyleSelect"),
+  tacticsBoard: document.querySelector("#labTacticsBoard"),
+  slotEditorEmpty: document.querySelector("#labSlotEditorEmpty"),
+  slotEditorFields: document.querySelector("#labSlotEditorFields"),
+  slotPlayer: document.querySelector("#labSlotPlayer"),
+  slotPosition: document.querySelector("#labSlotPosition"),
+  slotRole: document.querySelector("#labSlotRole"),
+  slotRoleNote: document.querySelector("#labSlotRoleNote"),
+  slotDuty: document.querySelector("#labSlotDuty"),
+  slotShootingInstruction: document.querySelector("#labSlotShootingInstruction"),
+  slotShootingField: document.querySelector("#labSlotShootingField"),
+  slotTempoInstruction: document.querySelector("#labSlotTempoInstruction"),
+  slotTempoField: document.querySelector("#labSlotTempoField"),
+  goalkeeperInstructionFields: document.querySelector("#labGoalkeeperInstructionFields"),
+  goalkeeperDistribution: document.querySelector("#labGoalkeeperDistribution"),
+  goalkeeperSweeping: document.querySelector("#labGoalkeeperSweeping"),
+  resetPhasePosition: document.querySelector("#labResetPhasePosition"),
+  slotIncluded: document.querySelector("#labSlotIncluded"),
+  restartTypeSelect: document.querySelector("#labRestartTypeSelect"),
+  restartTeamSelect: document.querySelector("#labRestartTeamSelect"),
+  restartSideField: document.querySelector("#labRestartSideField"),
+  restartSideSelect: document.querySelector("#labRestartSideSelect"),
+  restartNote: document.querySelector("#labRestartNote"),
+  restartTakerSelect: document.querySelector("#labRestartTakerSelect"),
+  showPatternDiagnosticsCheckbox: document.querySelector("#labShowPatternDiagnosticsCheckbox"),
+  patternDiagnostics: document.querySelector("#labPatternDiagnostics"),
+  showRestartRolesCheckbox: document.querySelector("#labShowRestartRolesCheckbox"),
+  boardViewChoices: document.querySelector("#labBoardViewChoices"),
+  boardViewNote: document.querySelector("#labBoardViewNote"),
+  showRoleMapCheckbox: document.querySelector("#labShowRoleMap"),
+  roleMapNote: document.querySelector("#labRoleMapNote"),
+  applySetupButton: document.querySelector("#labApplySetupButton"),
+  applyTacticsButton: document.querySelector("#labApplyTacticsButton"),
+  matchMinute: document.querySelector("#labMatchMinute"),
+  liveCommentary: document.querySelector("#labLiveCommentary"),
+  homePossession: document.querySelector("#labHomePossession"),
+  awayPossession: document.querySelector("#labAwayPossession"),
+  homePossessionBar: document.querySelector("#labHomePossessionBar"),
+  awayPossessionBar: document.querySelector("#labAwayPossessionBar"),
+  homeTacticsRequest: document.querySelector("#labHomeTacticsRequest"),
+  awayTacticsRequest: document.querySelector("#labAwayTacticsRequest"),
+  tacticsRequestStatus: document.querySelector("#labTacticsRequestStatus"),
+  matchStatsToggle: document.querySelector("#labMatchStatsToggle"),
+  matchStatsPanel: document.querySelector("#labMatchStatsPanel"),
+  statsScope: document.querySelector("#labStatsScope"),
+  heatmapGrid: document.querySelector("#labHeatmapGrid"),
+  playerStatsBody: document.querySelector("#labPlayerStatsBody"),
+  tacticsStatus: document.querySelector("#labTacticsStatus"),
+  swapTeamsButton: document.querySelector("#labSwapTeamsButton"),
+  setupStatus: document.querySelector("#labSetupStatus"),
   speedSelect: document.querySelector("#labSpeedSelect"),
   speedValue: document.querySelector("#labSpeedValue"),
   attackingDirectionSelect: document.querySelector(
@@ -7091,6 +13402,29 @@ const elements = {
   ),
   soundCheckbox: document.querySelector("#labSoundCheckbox"),
   volumeInput: document.querySelector("#labVolumeInput"),
+  markingSchemeSelects: Array.from(
+    document.querySelectorAll(".match-lab-marking-scheme"),
+  ),
+  markingBars: Array.from(document.querySelectorAll(".match-lab-marking-bar")),
+  markingValues: Array.from(
+    document.querySelectorAll(".match-lab-marking-value"),
+  ),
+  markingStrictnessGroups: Array.from(
+    document.querySelectorAll(".match-lab-marking-strictness"),
+  ),
+  attackingStyleSelects: Array.from(
+    document.querySelectorAll(".match-lab-attacking-style"),
+  ),
+  attackingBars: Array.from(document.querySelectorAll(".match-lab-attacking-bar")),
+  attackingValues: Array.from(
+    document.querySelectorAll(".match-lab-attacking-value"),
+  ),
+  attackingStrictnessGroups: Array.from(
+    document.querySelectorAll(".match-lab-attacking-strictness"),
+  ),
+  teamShootingSelects: Array.from(document.querySelectorAll(".match-lab-team-shooting")),
+  teamTempoSelects: Array.from(document.querySelectorAll(".match-lab-team-tempo")),
+  teamInstructionControls: Array.from(document.querySelectorAll(".match-lab-team-instruction-control")),
   runCountInput: document.querySelector("#labRunCountInput"),
   runNButton: document.querySelector("#labRunNButton"),
   inspector: document.querySelector("#labInspector"),
@@ -7128,6 +13462,37 @@ const state = {
   // single pitch with two ends, so one team's direction always implies
   // the other's.
   attackingDirection: { home: "down", away: "up" },
+  // Per-team Marking setup (2026-08-24) -- feeds planDefensiveRepositioning()'s
+  // own scheme/tightness options directly (see that function's comment):
+  // "man" keeps a defender on their assigned opponent wherever the ball
+  // goes, "zonal" holds a strip of the pitch instead; tightness 1 (loose
+  // standoff) to 5 (hip-to-hip) sets how tight either scheme actually
+  // plays. Independent per team, same as attackingDirection above.
+  marking: {
+    home: normalizeTeamDefending(DEFAULT_TEAM_DEFENDING),
+    away: normalizeTeamDefending(DEFAULT_TEAM_DEFENDING),
+  },
+  // Per-team Attacking setup (2026-08-25, Attacking-on-the-Ball v2) --
+  // feeds generateFreePlayCandidates()'s own attackingSettings option
+  // directly (see that function's comment): a bias layered on top of
+  // already-legal candidates, never a filter. style is one of
+  // "possession"/"direct"/"long-ball"/"wing"; directness 1 (always take
+  // the next free man) to 5 (look furthest first) controls how hard an
+  // ambitious ball is discouraged while a real simple option exists.
+  // counterOnTurnover is deliberately NOT modeled: runConstructedPossession()
+  // only ever simulates ONE team's own possession chain end to end (it
+  // terminates the instant a turnover happens -- see its own `terminal`
+  // handling), so "the next 2 actions after a turnover" has no cheap
+  // signal to key off within this architecture. TODO: revisit if/when a
+  // caller ever simulates a full alternating-possession match loop.
+  attacking: {
+    home: normalizeTeamAttacking(DEFAULT_TEAM_ATTACKING),
+    away: normalizeTeamAttacking(DEFAULT_TEAM_ATTACKING),
+  },
+  transition: {
+    home: normalizeTeamTransition(DEFAULT_TEAM_TRANSITION),
+    away: normalizeTeamTransition(DEFAULT_TEAM_TRANSITION),
+  },
   lastMode: null,
   lastTrace: null,
   lastPlan: null,
@@ -7142,6 +13507,18 @@ const state = {
   // Vision cone (2026-08-19) -- off by default, see updateVisionCone()'s
   // own comment.
   showVisionCone: false,
+  // Ball Coordinates HUD v1 (2026-08-30) -- off by default, see
+  // updateBallCoordsLabel()'s own comment.
+  showBallCoords: false,
+  // Stamina Bars v1 (2026-08-31) -- off by default, see updateStaminaBar()'s
+  // own comment.
+  showStaminaBars: false,
+  // Team Shape & Phase Intelligence v1 -- optional, derived developer
+  // diagnostics. Never read by a resolver or planner.
+  showTeamShapeDiagnostics: false,
+  // Tactical Region Foundation v1 -- optional 5x6 classification lens.
+  // Derived from coordinates and attacking direction; never engine state.
+  showTacticalRegions: false,
   // Set only by the "one-on-one-decision" scenario's run(); rendered by
   // renderOneOnOneDiagnostic() into its own panel, never through the trace/
   // animation path (see that scenario's own comment on why).
@@ -7155,7 +13532,48 @@ const state = {
   // are) -- this is the complete record requirement 7 asked for, null in
   // Scenario Probe mode (which has no possession concept).
   lastRun: null,
+  // Match Setup Integration v1 (2026-09-04) -- the AUTHORED DRAFT, kept
+  // deliberately separate from the live pitch. Editing the tactics board
+  // changes only this; nothing reaches state.roster/state.ball until Apply
+  // Setup succeeds in full. That separation is what makes a failed apply
+  // leave the current pitch exactly as it was.
+  matchSetupDraft: null,
+  restartSetupDraft: null,
+  // squadKey -> { players, roster } for squads that resolved strictly.
+  // Cached because strict resolution is several API calls, and a squad's
+  // resolved identity does not change between presses.
+  resolvedSquads: new Map(),
+  // squadKey -> the reason a squad could not be used, so the selector can
+  // say WHY rather than silently falling back to a legacy lookup.
+  squadFailures: new Map(),
+  setupTeamTab: "home",
+  // Which authored layer the full tactics board is showing: formation,
+  // with-ball, without-ball or restart.
+  setupBoardView: "open-play",
+  // Classic WIB/WOB authors a response to one of twelve ball areas. This
+  // selection belongs only to the editor; live play derives it from the
+  // ball's actual continuous coordinate.
+  setupPhaseZone: 4,
+  selectedSetupSlotId: null,
+  showRoleMap: true,
+  // Set by Apply Setup when the authored start of play is a dead ball.
+  // Resolve & Play dispatches this required action before ordinary
+  // possession candidates can be generated.
+  pendingRestart: null,
 };
+
+function markingSettingsFor(team) {
+  const settings = normalizeTeamDefending(state.marking[team] || DEFAULT_TEAM_DEFENDING);
+  return { ...settings, tightness: settings.strictness };
+}
+
+function attackingSettingsFor(team) {
+  return state.attacking[team] || normalizeTeamAttacking(DEFAULT_TEAM_ATTACKING);
+}
+
+function transitionSettingsFor(team) {
+  return state.transition[team] || normalizeTeamTransition(DEFAULT_TEAM_TRANSITION);
+}
 
 function zoneFromPercent(x, y) {
   const column = Math.min(2, Math.max(0, Math.floor(x / (100 / 3))));
@@ -7182,9 +13600,12 @@ function scenarioIsReady() {
 }
 
 function currentModeIsReady() {
-  return state.mode === "freeplay"
-    ? Boolean(state.roster.find((entry) => entry.id === state.ball.ownerId))
-    : scenarioIsReady();
+  if (state.mode !== "freeplay") return scenarioIsReady();
+  const hasOwner = Boolean(state.roster.find((entry) => entry.id === state.ball.ownerId));
+  const restartExpected = Boolean(
+    state.ball?.deadBall || state.pendingRestart || state.restartSetupDraft,
+  );
+  return restartExpected ? pendingRestartIsReady() : hasOwner;
 }
 
 // Scenario Probe has no ball-ownership concept at all -- every scenario's
@@ -7364,6 +13785,10 @@ async function addPlayer(candidate) {
     x,
     y,
     zone: zoneFromPercent(x, y),
+    shootingInstruction: "inherit",
+    tempoInstruction: "inherit",
+    goalkeeperDistribution: "mixed",
+    goalkeeperSweeping: "balanced",
   };
   state.roster.push(entry);
   if (isFirstPlayer && !state.ball.ownerId)
@@ -7422,8 +13847,17 @@ function outfieldSlotsFor(perSide) {
     const shared = Math.random() < 0.5 ? "defender" : "midfielder";
     return ["attacker", "attacker", shared, shared];
   }
-  // [defenders, midfielders, attackers], PER TEAM.
-  const perTeam = { 5: [1, 2, 1], 7: [2, 2, 2], 9: [3, 3, 2], 11: [4, 4, 2] }[
+  // [defenders, midfielders, attackers], PER TEAM. 11v11 alternates between
+  // two real formations, one coin flip per match (same shape for both
+  // sides, never mismatched -- same "one flip for the whole match" pattern
+  // as 3v3's shared band above): 4-4-2 (flat back four, flat midfield
+  // four, front two) or 4-3-3 (back four, midfield three, front three).
+  // Both are real band counts, not just a cosmetic label -- a 4-3-3's
+  // extra "attacker" genuinely plays and is marked as one (Off-Ball v2's
+  // whole marking/off-ball-reaction scheme keys off classifyOutfieldBand,
+  // not where the dot happens to be drawn).
+  const elevenFormation = Math.random() < 0.5 ? [4, 4, 2] : [4, 3, 3];
+  const perTeam = { 5: [1, 2, 1], 7: [2, 2, 2], 9: [3, 3, 2], 11: elevenFormation }[
     perSide
   ];
   if (!perTeam) return null;
@@ -7447,22 +13881,25 @@ const OUTFIELD_BAND_DEPTH_RANGES = {
   random: [10, 80],
 };
 
-// Width distribution (2026-08-19) -- a reported bug: every outfielder's x
+// Width distribution (2026-08-19, centering revised 2026-08-24 for Quick
+// Setup's real formation shapes) -- a reported bug: every outfielder's x
 // was drawn fully independently (10 + random*80) regardless of how many
 // OTHER players shared their band, so multiple defenders/midfielders/
 // attackers on the same team had a real (birthday-paradox) chance of
 // clustering in the same zone by pure chance, leaving whole flanks empty
 // while a single small area got crowded -- exactly what was reported. Each
 // player within a band now gets a distinct lateral channel (left-back,
-// center-backs, right-back, etc, though not literally labeled as such) --
+// center-backs, right-back, etc, though not literally labeled as always) --
 // the pitch width divided evenly by how many teammates share this band,
 // with real jitter inside that channel so it still reads as organic
 // placement, not a rigid grid. A lone player in their band (count<=1, e.g.
-// 2v2's single "random" outfielder, or any band with just one per team)
-// keeps the ORIGINAL fully-free spread -- channeling a group of one is
-// meaningless.
+// 5v5's single defender/forward, 3v3's single attacker/shared) now centers
+// instead -- a real formation's lone centre-back or lone striker plays
+// central, not wherever a full-width roll happened to land; "channeling a
+// group of one is meaningless" no longer holds once a lone band member IS
+// the whole formation line.
 function lateralChannelX(channel) {
-  if (!channel || channel.count <= 1) return 10 + Math.random() * 80;
+  if (!channel || channel.count <= 1) return 50 + (Math.random() - 0.5) * 30;
   const channelWidth = 100 / channel.count;
   const center = channelWidth * (channel.index + 0.5);
   const jitter = (Math.random() - 0.5) * channelWidth * 0.6;
@@ -7546,6 +13983,13 @@ async function quickSetupMatch(perSide) {
       acc[band] = (acc[band] || 0) + 1;
       return acc;
     }, {});
+    // Which of 11v11's two coin-flipped formations outfieldSlotsFor() just
+    // picked, purely for the status line below -- read back from the
+    // resulting counts rather than threaded through as a separate return
+    // value, so outfieldSlotsFor()'s own [band] array return type (and its
+    // existing test contract) stays untouched.
+    const formationLabel =
+      perSide === 11 ? ((neededCounts.attacker || 0) === 6 ? "4-3-3" : "4-4-2") : null;
     const assignedKeys = new Set();
     const drawnByBand = {};
     for (const [band, count] of Object.entries(neededCounts)) {
@@ -7623,6 +14067,10 @@ async function quickSetupMatch(perSide) {
         x,
         y,
         zone: zoneFromPercent(x, y),
+        shootingInstruction: "inherit",
+        tempoInstruction: "inherit",
+        goalkeeperDistribution: "mixed",
+        goalkeeperSweeping: "balanced",
       };
       state.roster.push(entry);
       return entry;
@@ -7653,7 +14101,9 @@ async function quickSetupMatch(perSide) {
     resetTouchTrail();
     updateInspector();
     if (elements.quickSetupStatus)
-      elements.quickSetupStatus.textContent = `${perSide}v${perSide} ready.`;
+      elements.quickSetupStatus.textContent = formationLabel
+        ? `${perSide}v${perSide} ready -- ${formationLabel}.`
+        : `${perSide}v${perSide} ready.`;
   } catch (error) {
     if (elements.quickSetupStatus)
       elements.quickSetupStatus.textContent = `Quick setup failed: ${error.message}`;
@@ -7674,6 +14124,11 @@ document.querySelectorAll("[data-quick-setup]").forEach((button) => {
 // --- Ball ownership ---------------------------------------------------
 
 function giveBallTo(entry, { skipRender = false } = {}) {
+  // Deliberately handing a player the ball converts an authored dead ball
+  // into ordinary open play, at the user's own request. That is a real
+  // choice, unlike Resolve & Play silently doing it for them, so the
+  // pending-restart guard is released here rather than fought.
+  cancelPendingRestart("the ball was handed to a player");
   state.ball.ownerId = entry.id;
   state.ball.x = entry.x;
   state.ball.y = entry.y;
@@ -7776,6 +14231,28 @@ function renderPitch() {
       <span class="match-lab-marker-dot">${initials(playerName(entry.player))}</span>
       <span class="match-lab-marker-label">${describeLabel(entry)}</span>
     `;
+    // Ball Coordinates HUD v1 -- see updateBallCoordsLabel()'s own
+    // comment. Real createElement()/appendChild(), not folded into the
+    // innerHTML template above, for the same fake-DOM-queryability reason
+    // the ball marker's own coords span uses. Only ever shown for the
+    // CURRENT ball owner (updatePlayerCoordsLabel() hides every other
+    // player's) -- this exists to answer "did the BALL move, or did the
+    // PLAYER move to meet it," a real reported ambiguity the ball-only
+    // readout alone couldn't settle.
+    const playerCoordsLabel = document.createElement("span");
+    playerCoordsLabel.className = "match-lab-player-coords";
+    playerCoordsLabel.setAttribute("aria-hidden", "true");
+    marker.appendChild(playerCoordsLabel);
+    // Stamina Bars v1 -- see updateStaminaBar()'s own comment. A nested
+    // fill span (not a single element's own width) so CSS can transition
+    // the fill smoothly without fighting the bar's own fixed track width.
+    const staminaBar = document.createElement("span");
+    staminaBar.className = "match-lab-stamina-bar";
+    staminaBar.setAttribute("aria-hidden", "true");
+    const staminaFill = document.createElement("span");
+    staminaFill.className = "match-lab-stamina-bar-fill";
+    staminaBar.appendChild(staminaFill);
+    marker.appendChild(staminaBar);
     marker.addEventListener("pointerdown", (event) =>
       startDrag(
         event,
@@ -7786,34 +14263,31 @@ function renderPitch() {
           // -- Free Play only; Probe positions the ball off the scenario's
           // own primary-role entry instead (see below).
           if (!inProbe && entry.id === state.ball.ownerId) {
+            // Restart Execution v2 -- the restart taker owns the DEAD ball,
+            // so dragging them drags it off its legal spot. That is no
+            // longer the authored restart: it is an ordinary open-play
+            // position, and executing a corner from the middle of the pitch
+            // would be nonsense. Cancel explicitly rather than silently
+            // keeping a stale pendingRestart.
+            if (state.pendingRestart && state.restartSetupDraft
+              && yardDistance(state.restartSetupDraft.ball, entry) > 0.5) {
+              cancelPendingRestart("the ball was dragged off its restart spot");
+            }
             state.ball.x = entry.x;
             state.ball.y = entry.y;
             state.ball.zone = entry.zone;
             setMarkerPosition("ball", entry.x, entry.y, { animate: false });
-            setBallRestOffset(
-              restingBallOffsetPx(
-                entry,
-                state.attackingDirection[entry.team],
-                entry.role,
-              ),
-            );
           } else if (
             inProbe &&
             entry.role === scenarioPrimaryRoleKey(state.scenario)
           ) {
             setMarkerPosition("ball", entry.x, entry.y, { animate: false });
-            setBallRestOffset(
-              restingBallOffsetPx(
-                entry,
-                state.attackingDirection[entry.team],
-                entry.role,
-              ),
-            );
           }
         },
       ),
     );
     elements.pitch.appendChild(marker);
+    updateStaminaBar(entry.id, freshBurst01(entry.player).burst01);
   }
 
   const ballMarker = document.createElement("div");
@@ -7829,46 +14303,46 @@ function renderPitch() {
   const freePlayOwner = !inProbe
     ? state.roster.find((entry) => entry.id === state.ball.ownerId)
     : null;
-  // Ball independence, visually (2026-08-19) -- the marker's own logical
-  // x/y stays exactly on the controlling entry (concentric with their
-  // dot); restingBallOffsetPx() below is what actually pushes the ball to
-  // their outer edge, in real screen pixels, not percent (see that
-  // function's own comment).
+  // Ball Realism v1 (2026-08-31) -- the marker's own logical x/y is now
+  // the ONLY thing that ever positions it, no separate cosmetic pixel
+  // nudge on top (see renderPlaybackFrame()'s own matching comment for
+  // the full reported-bug rationale). primaryEntry is still the right
+  // fallback here specifically -- setup mode has no live ball track to
+  // read, only the roster's own authored positions.
   const primaryEntry = inProbe ? probeEntry : freePlayOwner;
   const ballPoint = primaryEntry || state.ball;
-  const restOffset = primaryEntry
-    ? restingBallOffsetPx(
-        primaryEntry,
-        state.attackingDirection[primaryEntry.team],
-        primaryEntry.role,
-      )
-    : { x: 0, y: 0 };
   ballMarker.dataset.held = String(
     Boolean(freePlayOwner && freePlayOwner.role === "keeper"),
   );
   ballMarker.style.setProperty("--marker-x", `${ballPoint.x}%`);
   ballMarker.style.setProperty("--marker-y", `${ballPoint.y}%`);
-  ballMarker.style.setProperty("--ball-rest-x", `${restOffset.x}px`);
-  ballMarker.style.setProperty("--ball-rest-y", `${restOffset.y}px`);
   ballMarker.hidden = !ballVisible;
   updateVisionCone(primaryEntry);
   ballMarker.innerHTML = `
     <span class="match-lab-marker-dot" aria-hidden="true"></span>
   `;
+  // Ball Coordinates HUD v1 -- appended via a real createElement()/
+  // appendChild() (never folded into the innerHTML template above like
+  // the dot span) so this node is a genuine, queryable DOM child under
+  // fake-DOM test harnesses too, not just a real browser's own HTML
+  // parser -- innerHTML string assignment is opaque to any stub that
+  // doesn't itself re-parse markup.
+  const coordsLabel = document.createElement("span");
+  coordsLabel.className = "match-lab-ball-coords";
+  coordsLabel.setAttribute("aria-hidden", "true");
+  ballMarker.appendChild(coordsLabel);
   if (!inProbe) {
     ballMarker.addEventListener("pointerdown", (event) =>
       startDrag(event, state.ball, null, () => {
-        // Manually dragging the ball away detaches it -- a loose ball, not
-        // still-owned-but-elsewhere.
-        if (state.ball.ownerId) {
-          state.ball.ownerId = null;
-          renderRoster();
-          renderActionTable();
-        }
+        handleAuthoredBallMove();
       }),
     );
   }
   elements.pitch.appendChild(ballMarker);
+  updateBallCoordsLabel(ballPoint);
+  updatePlayerCoordsLabel(primaryEntry?.id ?? null, primaryEntry ? { x: primaryEntry.x, y: primaryEntry.y } : null);
+  updateTacticalRegionOverlay(ballPoint, labelOwnerId);
+  updateTeamShapeOverlay(0);
   renderProbeShooterStatus();
 }
 
@@ -7909,6 +14383,29 @@ function markerNode(id) {
   return elements.pitch.querySelector(`[data-id="${id}"]`);
 }
 
+// The match engine keeps one stable world coordinate system regardless of
+// how the pitch is presented: x runs across the 75-yard width and y runs
+// along the 120-yard length. On wide desktop screens CSS rotates that world
+// counter-clockwise so the goals sit left/right and the pitch can use the
+// available screen width. Keep the conversion here at the interaction edge;
+// simulation, traces, saves and replays continue to store their original
+// coordinates unchanged.
+function matchPitchIsLandscape(rect) {
+  return Number(rect?.width) > Number(rect?.height);
+}
+
+function matchPitchDisplayPoint(point, landscape = false) {
+  const x = Number(point?.x) || 0;
+  const y = Number(point?.y) || 0;
+  return landscape ? { x: y, y: 100 - x } : { x, y };
+}
+
+function matchPitchWorldPoint(point, landscape = false) {
+  const x = Number(point?.x) || 0;
+  const y = Number(point?.y) || 0;
+  return landscape ? { x: 100 - y, y: x } : { x, y };
+}
+
 function setMarkerPosition(
   id,
   x,
@@ -7923,51 +14420,92 @@ function setMarkerPosition(
   node.style.setProperty("--marker-y", `${y}%`);
 }
 
-// Ball independence, visually (2026-08-19) -- a real browser round reported
-// the ball marker reading as "inside the player circle," most visible right
-// at a possession change (a tackle won at close range moved the ball only a
-// few PERCENT of pitch width/length, invisible next to a fixed 22px player
-// dot). --marker-x/y stays exactly on the controlling player -- concentric
-// with their own dot -- and this fixed PIXEL nudge (see styles.css's own
-// comment on --ball-rest-x/y) does 100% of the visual separation instead,
-// so it clears the same real 22px circle regardless of how large the pitch
-// happens to be rendered at any given viewport width.
-//
-// Direction (2026-08-19 fix) -- a first version borrowed
-// controlledBallPosition()'s own static-fallback direction (velocity-based
-// in motion, attackingDirection-based at rest), but that fallback is
-// deliberately axis-only for ITS purpose (a single dribble touch's forward
-// nudge, matchBallCore.js's own concern) -- reused here, it made the ball
-// move ONLY vertically on every possession change regardless of where the
-// two players actually stood, which read as mechanical/buggy (reported
-// directly). Computed fresh here instead: a real 2D vector from the
-// player's own position toward the CENTER of the goal they're attacking --
-// varies by where the player actually is (a wide player's vector angles
-// sharply inward, a central player's stays close to vertical), not just by
-// which team they're on.
-const RESTING_BALL_OFFSET_PX = 18;
-function restingBallOffsetPx(ownerPoint, attackingDirection, ownerRole) {
-  // Goalkeepers holding it, and any ball genuinely in the air (a header is
-  // contested at head height, directly on the player, not off to one side)
-  // are both real exceptions, not oversights -- see this function's own
-  // callers, which only ever invoke it for a ball at an outfield player's
-  // feet in the first place.
-  if (!ownerPoint || ownerRole === "keeper") return { x: 0, y: 0 };
-  const goalY = attackingDirection === "up" ? 0 : 100;
-  const dx = 50 - ownerPoint.x;
-  const dy = goalY - ownerPoint.y;
-  const length = Math.hypot(dx, dy) || 1;
-  return {
-    x: (dx / length) * RESTING_BALL_OFFSET_PX,
-    y: (dy / length) * RESTING_BALL_OFFSET_PX,
-  };
+// Ball Realism v1 (2026-08-31) -- restingBallOffsetPx()/setBallRestOffset()
+// (the synthetic, speed-scaled "--ball-rest-x/y" pixel nudge) were removed
+// here -- see renderPlaybackFrame()'s own comment for the full reported-bug
+// rationale ("the ball movement... should not be cosmetic"). The marker's
+// own --marker-x/y IS the ball's real position now, always, with nothing
+// composited on top of it.
+
+// Ball Coordinates HUD v1 (2026-08-30) -- a real, explicit request: precise
+// browser-round bug reports were shorthand ("the ball's over there,
+// roughly") when what's actually needed for exact debugging is the SAME
+// numbers this file's own resolvers/trace already work in. Shows the
+// ball's live logical position (--marker-x/y's own 0-100 percent-grid
+// value, the exact coordinate space every ballFrom/ballTo/contact.point
+// in the trace already uses) plus a real-yard conversion for a human
+// reading it off the pitch. Off by default (#labShowCoordsCheckbox);
+// updates every rendered frame during playback AND the static authored
+// setup, so it's visible whether or not a possession is actually running.
+let lastBallDisplayPoint = null;
+function ballCoordsLabelText(point) {
+  const yard = toYardPoint(point);
+  return `${point.x.toFixed(1)}, ${point.y.toFixed(1)} (${yard.x.toFixed(1)}yd, ${yard.y.toFixed(1)}yd)`;
+}
+function updateBallCoordsLabel(point = lastBallDisplayPoint) {
+  lastBallDisplayPoint = point ?? lastBallDisplayPoint;
+  const node = markerNode("ball");
+  const label = node?.querySelector(".match-lab-ball-coords");
+  if (!label) return;
+  label.dataset.visible = String(state.showBallCoords);
+  if (state.showBallCoords && lastBallDisplayPoint) {
+    label.textContent = ballCoordsLabelText(lastBallDisplayPoint);
+  }
 }
 
-function setBallRestOffset({ x, y }) {
-  const node = markerNode("ball");
-  if (!node) return;
-  node.style.setProperty("--ball-rest-x", `${x}px`);
-  node.style.setProperty("--ball-rest-y", `${y}px`);
+// A real reported ambiguity the ball-only readout above couldn't settle
+// on its own: "the ball is pushed away/collapses inward" screenshots
+// showed the ball's OWN coordinates barely changing between two frames
+// -- proof the discrepancy was the now-removed --ball-rest-x/y cosmetic
+// offset (see renderPlaybackFrame()'s own Ball Realism v1 comment), never
+// the ball's real position. Shown only for the CURRENT ball owner (every
+// other player's own copy stays hidden) -- hides the PREVIOUS owner's the
+// instant possession moves on, so a stale reading never lingers on the
+// wrong player.
+let lastCoordsOwnerId = null;
+let lastCoordsOwnerPoint = null;
+function updatePlayerCoordsLabel(ownerId = lastCoordsOwnerId, point = lastCoordsOwnerPoint) {
+  if (lastCoordsOwnerId && lastCoordsOwnerId !== ownerId) {
+    const previousLabel = markerNode(lastCoordsOwnerId)?.querySelector(".match-lab-player-coords");
+    if (previousLabel) previousLabel.dataset.visible = "false";
+  }
+  lastCoordsOwnerId = ownerId;
+  lastCoordsOwnerPoint = point ?? lastCoordsOwnerPoint;
+  if (!ownerId) return;
+  const label = markerNode(ownerId)?.querySelector(".match-lab-player-coords");
+  if (!label) return;
+  label.dataset.visible = String(state.showBallCoords);
+  if (state.showBallCoords && lastCoordsOwnerPoint) {
+    label.textContent = ballCoordsLabelText(lastCoordsOwnerPoint);
+  }
+}
+
+// Stamina Bars v1 (2026-08-31) -- off by default (#labShowStaminaCheckbox).
+// Unlike the coordinate HUD above (current owner only), this shows for
+// EVERY player at once -- a genuine fitness readout, not a one-owner
+// debugging aid. Reads whatever burst01 buildPlaybackPlan()'s own
+// initialBurst seed / the live trace's real drain-and-refill produced for
+// THAT exact player (matchLabPlayback.js's own playerBurstCursor) --
+// never fabricated for a player the current plan happens to say nothing
+// about (an unplaced roster slot, say), which renders as a full,
+// unlabeled bar rather than a fake reading. lastStaminaByPlayerId
+// remembers the last real value per player so toggling the switch back on
+// mid-playback (or before any possession has run at all) still shows a
+// real number immediately, not a blank bar until the next frame.
+const lastStaminaByPlayerId = {};
+function updateStaminaBar(id, burst01) {
+  if (typeof burst01 === "number") lastStaminaByPlayerId[id] = burst01;
+  const marker = markerNode(id);
+  const bar = marker?.querySelector(".match-lab-stamina-bar");
+  if (!marker || !bar) return;
+  marker.dataset.showStamina = String(state.showStaminaBars);
+  bar.dataset.visible = String(state.showStaminaBars);
+  if (!state.showStaminaBars) return;
+  const value = typeof burst01 === "number" ? burst01 : (lastStaminaByPlayerId[id] ?? 1);
+  const pct = Math.round(clamp(0, 1, value) * 100);
+  bar.dataset.low = String(pct < 35);
+  const fill = bar.querySelector(".match-lab-stamina-bar-fill");
+  if (fill) fill.style.setProperty("--stamina-pct", `${pct}%`);
 }
 
 // Vision cone (2026-08-19) -- a real browser round asked directly for a
@@ -8016,13 +14554,12 @@ function visionFadeDurationMs(player) {
 // A real SVG pie-slice path in the SAME 75x120-yard coordinate space the
 // touch/trail layers already draw into (see styles.css's own comment on
 // why -- undistorted angles, not stretched by the pitch's own non-square
-// aspect ratio). Direction is the same "toward the center of the goal
-// being attacked" convention restingBallOffsetPx() uses, computed fresh
-// here in real yard-space (not reused from that function directly -- an
-// ANGLE needs true yard proportions, not a percent-space unit vector,
-// which the pitch's non-square aspect ratio would otherwise distort),
-// plus an optional scanOffsetRadians (scanOffsetRad()'s own output) added
-// on top -- see that function's comment for what actually drives it.
+// aspect ratio). Direction is "toward the center of the goal being
+// attacked," computed fresh here in real yard-space (an ANGLE needs true
+// yard proportions, not a raw percent-space vector, which the pitch's
+// non-square aspect ratio would otherwise distort), plus an optional
+// scanOffsetRadians (scanOffsetRad()'s own output) added on top -- see
+// that function's comment for what actually drives it.
 function buildVisionConePath(
   ownerPoint,
   attackingDirection,
@@ -8245,8 +14782,11 @@ function applyCosmeticOffset(
   if (!node) return;
   const nudged = nudgeToward(fromPoint, towardPoint, fraction, capPercent);
   const rect = elements.pitch.getBoundingClientRect();
-  const dx = ((nudged.x - fromPoint.x) / 100) * rect.width;
-  const dy = ((nudged.y - fromPoint.y) / 100) * rect.height;
+  const landscape = matchPitchIsLandscape(rect);
+  const displayFrom = matchPitchDisplayPoint(fromPoint, landscape);
+  const displayNudged = matchPitchDisplayPoint(nudged, landscape);
+  const dx = ((displayNudged.x - displayFrom.x) / 100) * rect.width;
+  const dy = ((displayNudged.y - displayFrom.y) / 100) * rect.height;
   node.style.setProperty("--cosmetic-x", `${dx}px`);
   node.style.setProperty("--cosmetic-y", `${dy}px`);
   node.style.setProperty("--cosmetic-duration", `${duration}ms`);
@@ -8404,6 +14944,191 @@ if (elements.showVisionCheckbox) {
   });
 }
 
+if (elements.showCoordsCheckbox) {
+  elements.showCoordsCheckbox.addEventListener("change", () => {
+    state.showBallCoords = elements.showCoordsCheckbox.checked;
+    updateBallCoordsLabel();
+    updatePlayerCoordsLabel();
+  });
+}
+
+if (elements.showStaminaCheckbox) {
+  elements.showStaminaCheckbox.addEventListener("change", () => {
+    state.showStaminaBars = elements.showStaminaCheckbox.checked;
+    for (const entry of state.roster) {
+      updateStaminaBar(entry.id, lastStaminaByPlayerId[entry.id]);
+    }
+  });
+}
+
+function tacticalBandYRange(index, attackingDirection) {
+  const progressStart = DEPTH_BOUNDARIES_YARDS[index];
+  const progressEnd = DEPTH_BOUNDARIES_YARDS[index + 1];
+  return attackingDirection === "up"
+    ? { y: PITCH_LENGTH_YARDS - progressEnd, height: progressEnd - progressStart }
+    : { y: progressStart, height: progressEnd - progressStart };
+}
+
+// Playback deliberately clears ownerId while the ball is in flight. The
+// tactical lens still needs the direction of the side that last possessed it,
+// otherwise an away-team pass temporarily flips the grid to Home's direction.
+// Read that fact from the playback plan's authoritative owner track so seeking
+// and replay stay deterministic; never invent or write gameplay ownership.
+function lastKnownOwnerIdAt(timeMs) {
+  const ownerTrack = state.lastPlan?.tracks?.owner || [];
+  let ownerId = null;
+  for (const entry of ownerTrack) {
+    if (entry.timeMs > timeMs + 0.001) break;
+    if (entry.ownerId != null) ownerId = entry.ownerId;
+  }
+  return ownerId;
+}
+
+function updateTacticalRegionOverlay(
+  point = lastBallDisplayPoint ?? state.ball,
+  ownerId = currentLabelOwnerId,
+  timeMs = state.playbackTimeMs,
+) {
+  const layer = elements.tacticalRegionsLayer;
+  const hud = elements.tacticalRegionsHud;
+  if (!layer || !hud) return;
+  const visible = Boolean(state.showTacticalRegions && state.mode === "freeplay");
+  layer.dataset.visible = String(visible);
+  hud.hidden = !visible;
+  if (!visible) {
+    layer.innerHTML = "";
+    return;
+  }
+  const orientationOwnerId = ownerId ?? lastKnownOwnerIdAt(timeMs);
+  const owner = orientationOwnerId
+    ? state.roster.find((entry) => String(entry.id) === String(orientationOwnerId)) ?? null
+    : null;
+  const team = owner?.team ?? "home";
+  const attackingDirection = state.attackingDirection[team] ?? "down";
+  const svg = [];
+  for (let laneIndex = 0; laneIndex < VERTICAL_LANES.length; laneIndex += 1) {
+    const lane = VERTICAL_LANES[laneIndex];
+    const x = LANE_BOUNDARIES_YARDS[laneIndex];
+    const width = LANE_BOUNDARIES_YARDS[laneIndex + 1] - x;
+    for (let bandIndex = 0; bandIndex < TACTICAL_DEPTH_BANDS.length; bandIndex += 1) {
+      const depthBand = TACTICAL_DEPTH_BANDS[bandIndex];
+      const range = tacticalBandYRange(bandIndex, attackingDirection);
+      const id = tacticalRegionId(lane, depthBand);
+      svg.push(
+        `<rect class="ml-tactical-region-cell" data-region-id="${id}" `
+        + `data-lane-index="${laneIndex}" data-band-index="${bandIndex}" `
+        + `x="${x}" y="${range.y}" width="${width}" height="${range.height}">`
+        + `<title>${id}</title></rect>`,
+      );
+    }
+  }
+  layer.innerHTML = svg.join("");
+  const ballRegion = classifyTacticalRegion(point ?? state.ball, attackingDirection);
+  const snapshot = shapeSnapshotAt(state.playbackTimeMs);
+  const intention = orientationOwnerId
+    ? Object.values(snapshot?.teams || {}).flatMap((entry) => entry.assignments || [])
+      .find((assignment) => String(assignment.id) === String(orientationOwnerId))
+    : null;
+  const intentionText = intention?.intendedRegion
+    ? `\n${intention.teamJob}: ${intention.intendedRegion.lane} / ${intention.intendedRegion.depthBand} · ${intention.intendedRegion.id}`
+    : "";
+  hud.textContent = `${team} attacks ${attackingDirection} · ball: ${ballRegion.lane} / ${ballRegion.depthBand} · ${ballRegion.id}${intentionText}`;
+}
+
+if (elements.showTacticalRegionsCheckbox) {
+  elements.showTacticalRegionsCheckbox.addEventListener("change", () => {
+    state.showTacticalRegions = elements.showTacticalRegionsCheckbox.checked;
+    updateTacticalRegionOverlay();
+  });
+}
+
+function shapeSnapshotAt(timeMs) {
+  const snapshots = state.lastRun?.shapeSnapshots || [];
+  if (!snapshots.length) return null;
+  let selected = snapshots[0];
+  for (const snapshot of snapshots) {
+    if (snapshot.timeMs <= timeMs + 0.001) selected = snapshot;
+    else break;
+  }
+  return selected;
+}
+
+function shapeSvgPoint(point) {
+  return { x: (Number(point?.x) || 0) * 0.75, y: (Number(point?.y) || 0) * 1.2 };
+}
+
+function escapeShapeText(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char]);
+}
+
+function updateTeamShapeOverlay(timeMs = state.playbackTimeMs) {
+  if (!elements.teamShapeLayer || !elements.teamShapeHud) return;
+  const visible = Boolean(state.showTeamShapeDiagnostics && state.mode === "freeplay");
+  elements.teamShapeLayer.dataset.visible = String(visible);
+  elements.teamShapeHud.hidden = !visible;
+  if (!visible) {
+    elements.teamShapeLayer.innerHTML = "";
+    return;
+  }
+  const snapshot = shapeSnapshotAt(timeMs);
+  if (!snapshot) {
+    elements.teamShapeLayer.innerHTML = "";
+    elements.teamShapeHud.textContent = "Team shape: resolve a possession to inspect live targets";
+    return;
+  }
+  const svg = [];
+  const hud = [];
+  for (const [team, diagnostic] of Object.entries(snapshot.teams || {})) {
+    const metric = diagnostic.metrics || {};
+    const direction = state.attackingDirection[team];
+    const lineY = (heightYards) => direction === "up"
+      ? 120 - Number(heightYards)
+      : Number(heightYards);
+    for (const [name, value] of [
+      ["defence", metric.defensiveLineHeightYards],
+      ["midfield", metric.midfieldLineHeightYards],
+      ["forward", metric.forwardLineHeightYards],
+    ]) {
+      if (!Number.isFinite(value)) continue;
+      svg.push(`<line class="ml-shape-line ml-shape-${team}" x1="0" y1="${lineY(value).toFixed(2)}" x2="75" y2="${lineY(value).toFixed(2)}"><title>${escapeShapeText(`${team} ${name} line`)}</title></line>`);
+    }
+    if (metric.centroid) {
+      const centroid = shapeSvgPoint(metric.centroid);
+      svg.push(`<circle class="ml-shape-centroid ml-shape-${team}" cx="${centroid.x.toFixed(2)}" cy="${centroid.y.toFixed(2)}" r="1.15"><title>${escapeShapeText(`${team} centroid`)}</title></circle>`);
+    }
+    for (const assignment of diagnostic.assignments || []) {
+      const anchor = shapeSvgPoint(assignment.formationAnchor);
+      const shape = shapeSvgPoint(assignment.shapeTarget);
+      const intention = shapeSvgPoint(assignment.intentionTarget);
+      const title = escapeShapeText(
+        `${assignment.positionalSlot || "slot"} · ${assignment.tacticalRole || "role"} (${assignment.duty || "duty"}) · ${assignment.teamJob} · ${assignment.intendedRegion?.id || assignment.occupiedLane}`,
+      );
+      svg.push(`<g class="ml-shape-assignment ml-shape-${team}"><title>${title}</title><line class="ml-shape-anchor-link" x1="${anchor.x.toFixed(2)}" y1="${anchor.y.toFixed(2)}" x2="${shape.x.toFixed(2)}" y2="${shape.y.toFixed(2)}"/><circle class="ml-shape-anchor" cx="${anchor.x.toFixed(2)}" cy="${anchor.y.toFixed(2)}" r="0.55"/><line class="ml-shape-intention-link" x1="${shape.x.toFixed(2)}" y1="${shape.y.toFixed(2)}" x2="${intention.x.toFixed(2)}" y2="${intention.y.toFixed(2)}"/><rect class="ml-shape-target" x="${(shape.x - 0.65).toFixed(2)}" y="${(shape.y - 0.65).toFixed(2)}" width="1.3" height="1.3"/><circle class="ml-shape-intention" cx="${intention.x.toFixed(2)}" cy="${intention.y.toFixed(2)}" r="0.7"/></g>`);
+      const marker = markerNode(assignment.id);
+      if (marker) {
+        marker.dataset.teamPhase = assignment.teamPhase;
+        marker.dataset.teamJob = assignment.teamJob;
+        marker.dataset.occupiedLane = assignment.occupiedLane;
+        marker.dataset.occupiedDepthBand = assignment.occupiedDepthBand || "";
+        marker.dataset.tacticalRegion = assignment.intendedRegion?.id || "";
+        marker.title = `${assignment.tacticalRole || assignment.positionalSlot || "player"} (${assignment.duty || "n/a"}) · ${assignment.teamJob} · ${assignment.intendedRegion?.id || assignment.occupiedLane}`;
+      }
+    }
+    hud.push(`${team}: ${diagnostic.phase} · ${Number(metric.widthYards || 0).toFixed(1)}yd W × ${Number(metric.lengthYards || 0).toFixed(1)}yd L · ${metric.occupiedLanes || 0} lanes / ${metric.occupiedDepthBands || 0} bands · ${metric.halfSpacePlayers || 0} half-space · ${metric.runsIntoOpenRegions || 0} open / ${metric.runsIntoOccupiedRegions || 0} occupied runs · ${metric.restDefenceCount || 0} rest defence`);
+  }
+  elements.teamShapeLayer.innerHTML = svg.join("");
+  elements.teamShapeHud.textContent = hud.join("\n");
+}
+
+if (elements.showTeamShapeCheckbox) {
+  elements.showTeamShapeCheckbox.addEventListener("change", () => {
+    state.showTeamShapeDiagnostics = elements.showTeamShapeCheckbox.checked;
+    updateTeamShapeOverlay();
+  });
+}
+
 // requestAnimationFrame, not a CSS transition: CSS can't interpolate along
 // a curved path via left/top alone, and this stays in the exact same 0-100
 // percentage coordinate system every other marker already uses (no unit
@@ -8498,13 +15223,17 @@ function startDrag(event, entry, describeLabel, onMove) {
   marker.setPointerCapture(event.pointerId);
   const move = (moveEvent) => {
     const rect = elements.pitch.getBoundingClientRect();
-    const x = Math.min(
+    const displayX = Math.min(
       100,
       Math.max(0, ((moveEvent.clientX - rect.left) / rect.width) * 100),
     );
-    const y = Math.min(
+    const displayY = Math.min(
       100,
       Math.max(0, ((moveEvent.clientY - rect.top) / rect.height) * 100),
+    );
+    const { x, y } = matchPitchWorldPoint(
+      { x: displayX, y: displayY },
+      matchPitchIsLandscape(rect),
     );
     entry.x = x;
     entry.y = y;
@@ -8919,6 +15648,15 @@ function renderActionTable() {
   const candidates = generateFreePlayCandidates(
     groups,
     state.attackingDirection[groups.owner.team],
+    attackingSettingsFor(groups.owner.team),
+    // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the SAME deps
+    // the real decision uses, so this read-only panel can never silently
+    // drift from what the engine actually chooses. engagementHistory and
+    // congestionTracker have no meaning for a preview of the CURRENT board,
+    // so they stay null exactly as they always were here.
+    null,
+    null,
+    JOINT_CANDIDATE_DEPS,
   );
   const best = bestCandidateByType(candidates);
   const availableTypes = Object.keys(best);
@@ -8932,6 +15670,7 @@ function renderActionTable() {
   const UNAVAILABLE_REASON = {
     pass: "no onside teammate",
     cross: "no onside teammate close to a wide, advanced position",
+    shoot: "outside credible range (ordinary attempts to 32 m; specialists to 40 m), angle too narrow, or no exposed goal beyond it",
     dribble: "no opponent within duel range",
     carry: "an opponent is in duel range -- dribble instead",
   };
@@ -9068,23 +15807,90 @@ function attributionEntryMarkup(item = {}) {
   return `<li><strong>${attribute} ${rating}</strong> → ${quantity}: ${actual}${unit} <small>(rating-10 baseline ${baseline}${unit})</small></li>`;
 }
 
+// World Motion Contract v1 (2026-09-03) -- development telemetry, not
+// game UI. Every number here is read straight off the plan's own
+// moveDiagnostics (matchLabPlayback.js), which derives them from state
+// the engine already committed; nothing is recomputed or estimated here.
+// The point is that the five things the contract separates
+// (MATCH_ENGINE_ARCHITECTURE.md -- intention, target, gait, trajectory,
+// authoritative position) are individually inspectable for whoever is on
+// the ball and whoever is closest to them.
 function movementDiagnosticMarkup(item = {}) {
   const rounded = (value, digits = 1) =>
     Number.isFinite(value) ? Number(value.toFixed(digits)) : "unavailable";
+  const coordinate = (point) =>
+    point ? `(${rounded(point.x, 1)}, ${rounded(point.y, 1)})` : "unavailable";
   const reachability =
-    item.reachable === null
+    item.reachable === null || item.reachable === undefined
       ? ""
       : ` &middot; ${item.reachable ? "reachable" : "unreachable"}`;
   const contactReach = item.reachAllowanceYards > 0
     ? ` &middot; Contact reach: ${rounded(item.reachAllowanceYards)} yd`
     : "";
+  const intention = item.intention
+    ? ` &middot; Intention: ${item.intention}${item.intentionTarget ? ` &rarr; ${coordinate(item.intentionTarget)}` : ""}`
+    : "";
+  const gait = item.gait ? ` &middot; Requested gait: ${item.gait}` : "";
+  // The one line that tells you whether this move was physically honest:
+  // ground covered versus ground this player could actually have covered
+  // in the window it was scheduled into, from the speed they entered at.
+  const limit = item.withinPhysicalLimit === false
+    ? `<br><strong class="match-lab-move-overrun">Exceeds physical limit by ${rounded(item.overrunYards, 2)} yd` +
+      ` (reachable: ${rounded(item.reachableYards, 2)} yd)</strong>`
+    : "";
   return (
     `<li><strong>Move: ${item.action}</strong><small>` +
+    `${coordinate(item.fromPosition)} &rarr; ${coordinate(item.toPosition)} &middot; ` +
     `Distance: ${rounded(item.distanceYards)} yd &middot; Natural ETA: ${rounded(item.naturalEtaMs, 0)} ms &middot; ` +
     `Scheduled duration: ${rounded(item.scheduledDurationMs, 0)} ms &middot; ` +
+    `Start speed: ${rounded(item.startSpeedYardsPerSecond, 2)} yd/s &middot; ` +
+    `End speed: ${rounded(item.endSpeedYardsPerSecond, 2)} yd/s &middot; ` +
     `Average speed: ${rounded(item.averageSpeedYardsPerSecond, 2)} yd/s &middot; ` +
-    `Player top speed: ${rounded(item.topSpeedYardsPerSecond, 2)} yd/s${contactReach}${reachability}</small></li>`
+    `Player top speed: ${rounded(item.topSpeedYardsPerSecond, 2)} yd/s &middot; ` +
+    `Acceleration contribution: ${rounded(item.accelerationContributionYards, 2)} yd` +
+    `${gait}${intention}${contactReach}${reachability}${limit}</small></li>`
   );
+}
+
+// World Motion Contract v1 (2026-09-03) -- a multi-touch carry is ONE
+// continuous run that happens to contain several physical ball contacts;
+// listing each P.CARRY.TOUCH as its own top-level headline made an
+// ordinary 11-touch carry read as eleven separate major actions and
+// buried everything around it. Consecutive touches collapse into one
+// group row here.
+//
+// Purely presentational, and deliberately a PURE function over the trace
+// (no DOM, no state) so it is testable and so the grouping can never
+// affect anything else: every event keeps its own trace index, its own
+// attribution and Movement timing markup (nested one level down), and its
+// own place in the playback plan. Stepping, replay, diagnostics and every
+// test see exactly the same trace they did before.
+//
+// Returns a list of rows, each either
+//   { type: "event", step, index }
+//   { type: "group", code, items: [{ step, index }, ...] }
+// A lone touch is never grouped -- a group of one is just noise.
+function groupTraceRows(visible = []) {
+  const groupable = (candidate) => candidate?.code === "P.CARRY.TOUCH";
+  const rows = [];
+  let index = 0;
+  while (index < visible.length) {
+    if (!groupable(visible[index])) {
+      rows.push({ type: "event", step: visible[index], index });
+      index += 1;
+      continue;
+    }
+    const items = [];
+    const code = visible[index].code;
+    while (index < visible.length && groupable(visible[index])) {
+      items.push({ step: visible[index], index });
+      index += 1;
+    }
+    rows.push(items.length === 1
+      ? { type: "event", step: items[0].step, index: items[0].index }
+      : { type: "group", code, items });
+  }
+  return rows;
 }
 
 function renderTrace(upToIndex) {
@@ -9095,28 +15901,45 @@ function renderTrace(upToIndex) {
     state.lastMode === "freeplay"
       ? "action choice: Match Lab experimental sparse-roster model · action resolution: production engine · animation: visual interpolation between engine states"
       : "action resolution: production engine · animation: visual interpolation between engine states";
-  elements.traceList.innerHTML = visible
-    .map((step, index) => {
-      const attribution = (step.attribution || [])
-        .map(attributionEntryMarkup)
-        .join("");
-      let disclosure = attribution
-        ? `<details class="match-lab-trace-attribution"><summary>Attribute influence</summary><ul>${attribution}</ul></details>`
-        : "";
-      const interval = state.lastPlan?.intervals?.find(
-        (candidate) => candidate.eventIndex === index,
-      );
-      const movementDiagnostics = (interval?.moveDiagnostics || [])
-        .filter((item) => item.distanceYards > 0.01)
-        .map(movementDiagnosticMarkup)
-        .join("");
-      if (movementDiagnostics) {
-        disclosure += `<details class="match-lab-trace-attribution match-lab-move-diagnostics"><summary>Movement timing</summary><ul>${movementDiagnostics}</ul></details>`;
-      }
-      return `<li data-current="${index === visible.length - 1}"><span class="match-lab-trace-code">${step.code}</span> — ${step.label}${disclosure}</li>`;
-    })
-    .join("");
+  const entryMarkup = (step, index, isCurrent) => {
+    const attribution = (step.attribution || [])
+      .map(attributionEntryMarkup)
+      .join("");
+    let disclosure = attribution
+      ? `<details class="match-lab-trace-attribution"><summary>Attribute influence</summary><ul>${attribution}</ul></details>`
+      : "";
+    const interval = state.lastPlan?.intervals?.find(
+      (candidate) => candidate.eventIndex === index,
+    );
+    const movementDiagnostics = (interval?.moveDiagnostics || [])
+      .filter((item) => item.distanceYards > 0.01)
+      .map(movementDiagnosticMarkup)
+      .join("");
+    if (movementDiagnostics) {
+      disclosure += `<details class="match-lab-trace-attribution match-lab-move-diagnostics"><summary>Movement timing</summary><ul>${movementDiagnostics}</ul></details>`;
+    }
+    return `<li data-current="${isCurrent}"><span class="match-lab-trace-code">${step.code}</span> — ${step.label}${disclosure}</li>`;
+  };
+  const rows = groupTraceRows(visible).map((row) => {
+    if (row.type === "event") {
+      return entryMarkup(row.step, row.index, row.index === visible.length - 1);
+    }
+    const containsCurrent = row.items.some((item) => item.index === visible.length - 1);
+    const inner = row.items
+      .map((item) => entryMarkup(item.step, item.index, item.index === visible.length - 1))
+      .join("");
+    return (
+      `<li class="match-lab-trace-group" data-current="${containsCurrent}">` +
+      `<details${containsCurrent ? " open" : ""}>` +
+      `<summary><span class="match-lab-trace-code">${row.code}</span> — ` +
+      `${row.items.length} carry touches</summary>` +
+      `<ol class="match-lab-trace-sublist">${inner}</ol>` +
+      `</details></li>`
+    );
+  });
+  elements.traceList.innerHTML = rows.join("");
   elements.stepButton.hidden = trace.length <= 1;
+  elements.stepBackButton.hidden = trace.length <= 1;
 }
 
 // --- Animation v0: playback controller ----------------------------------
@@ -9511,6 +16334,26 @@ function applyStepAnimation(event, { animate }) {
 }
 
 let playbackClock = null;
+let highlightWindows = [];
+const highlightModeControl = document.querySelector("#labHighlightMode");
+const betweenSpeedControl = document.querySelector("#labBetweenSpeed");
+const highlightStatus = document.querySelector("#labHighlightStatus");
+const matchInterlude = document.querySelector("#labMatchInterlude");
+function refreshHighlights() {
+  if (!state.lastPlan) return;
+  const mode = highlightModeControl?.value || "full";
+  highlightWindows = buildHighlightWindows(state.lastTrace ?? [], state.lastPlan, mode);
+  const upcoming = matchSession?.peek();
+  if (activeMatchChunk && upcoming && mode !== "full" && mode !== "commentary") {
+    const lead = { comprehensive: 12000, extended: 9000, key: 7000 }[mode] ?? 7000;
+    const nextWindows = buildHighlightWindows(upcoming.output.trace, upcoming.plan, mode);
+    if (nextWindows[0]?.startMs === 0) {
+      highlightWindows.push({ startMs: Math.max(0, state.lastPlan.durationMs - lead), endMs: state.lastPlan.durationMs });
+      highlightWindows.sort((a, b) => a.startMs - b.startMs);
+    }
+  }
+}
+highlightModeControl?.addEventListener("change", refreshHighlights);
 let lastRenderedCueTime = -1;
 let lastRenderedTraceIndex = 0;
 
@@ -9526,13 +16369,15 @@ function updatePlayPauseButton() {
 }
 
 function stopPlayback() {
+  matchAutoPlay = false;
+  rendererGapMonitor.sample(performance.now(), false);
   const wasPlaying = isPlaying();
   playbackClock?.pause();
   if (wasPlaying) stopAllSound();
   updatePlayPauseButton();
 }
 
-function applyPlaybackCue(event) {
+function applyPlaybackCue(event, cue = null) {
   if (!event) return;
   clearStepVisualEffects();
   if (event.contact?.point) recordTouch(event.contact.point);
@@ -9555,7 +16400,10 @@ function applyPlaybackCue(event) {
       event.ballTo,
     );
   }
-  playEvent(event, buildSoundContext(event));
+  const hasDeferredTerminalAudio = Boolean(
+    cue?.audioMilestone && Number.isFinite(cue.audioTimeMs),
+  );
+  if (!hasDeferredTerminalAudio) playEvent(event, buildSoundContext(event));
   for (const id of [
     event.actorId,
     event.targetId,
@@ -9578,6 +16426,23 @@ function applyPlaybackCue(event) {
     elements.pitch.dataset.goalFlash = "true";
     triggerGoalNet(event);
   }
+  if (elements.resultBadge && !hasDeferredTerminalAudio) {
+    elements.resultBadge.textContent = event.badge || "";
+    elements.resultBadge.dataset.kind = (event.badge || "").toLowerCase();
+    elements.resultBadge.dataset.visible = String(Boolean(event.badge));
+  }
+}
+
+// Timeline playback samples the ball's real trajectory itself, so its
+// terminal audio must use that same clock. This deliberately bypasses
+// playEvent() only for a plan cue that declares an arrival milestone; the
+// ordinary step-animation path still uses its own animation callbacks.
+function applyDeferredPlaybackAudio(event, cue) {
+  if (!event || !cue?.audioMilestone) return;
+  const soundCtx = buildSoundContext(event);
+  for (const step of resolveCueSequence(event.code, soundCtx)) {
+    if (step.milestone === cue.audioMilestone) fireCueStep(step, soundCtx);
+  }
   if (elements.resultBadge) {
     elements.resultBadge.textContent = event.badge || "";
     elements.resultBadge.dataset.kind = (event.badge || "").toLowerCase();
@@ -9586,7 +16451,41 @@ function applyPlaybackCue(event) {
 }
 
 function renderPlaybackFrame(snapshot) {
+  if (activeMatchChunk && matchTelemetry) {
+    observeMatchFrame(matchTelemetry, {
+      timeMs: Math.min(activeMatchChunk.endMs, activeMatchChunk.startMs + snapshot.timeMs),
+      players: snapshot.players,
+      ownerId: snapshot.ownerId ?? null,
+      inPlay: snapshot.ball?.mode !== "dead",
+    });
+    renderMatchTelemetry();
+  }
+  if (activeMatchChunk && matchStatus) {
+    const playedMs = Math.min(activeMatchChunk.endMs, activeMatchChunk.startMs + snapshot.timeMs);
+    const minute = Math.floor(playedMs / 60000);
+    const second = Math.floor(playedMs / 1000) % 60;
+    const score = { ...matchScore };
+    for (const interval of state.lastPlan?.intervals ?? []) {
+      const event = state.lastTrace[interval.eventIndex];
+      if (activeMatchChunk.scoreCommitted || interval.endMs > snapshot.timeMs || (event?.outcome !== "goal" && event?.badge !== "GOAL")) continue;
+      const team = state.roster.find((entry) => entry.id === event.actorId)?.team;
+      if (team in score) score[team] += 1;
+    }
+    matchStatus.textContent = `${minute}:${String(second).padStart(2, "0")} | Home ${score.home} - ${score.away} Away | ${activeMatchChunk.secondHalf ? "Second" : "First"} half`;
+  }
+  const visible = isHighlightTime(highlightWindows, snapshot.timeMs);
+  const commentaryOnly = highlightModeControl?.value === "commentary";
+  if (highlightStatus) highlightStatus.textContent = commentaryOnly ? "Commentary only" : visible ? "Showing match action" : "Between highlights";
+  // Keep commentary/time current while quiet play is accelerated. Suppress
+  // the pitch and audio rather than playing every skipped cue in a burst.
+  elements.pitch.style.visibility = visible ? "visible" : "hidden";
+  if (matchInterlude) {
+    matchInterlude.hidden = visible;
+    matchInterlude.textContent = commentaryOnly ? "Follow the match in commentary" : "Between highlights";
+  }
+
   if (!state.lastPlan) return;
+  rendererGapMonitor.sample(performance.now(), Boolean(playbackClock?.getState?.().playing));
   if (snapshot.timeMs + 0.001 < state.playbackTimeMs) {
     clearStepEffects();
     resetTouchTrail();
@@ -9597,6 +16496,7 @@ function renderPlaybackFrame(snapshot) {
     if (!point) continue;
     setMarkerPosition(id, point.x, point.y, { animate: false, duration: 0 });
     playbackPositions[id] = point;
+    updateStaminaBar(id, typeof point.burst01 === "number" ? point.burst01 : undefined);
   }
   updateLabelVisibility(snapshot.ownerId ?? null);
   const possessionOwner = snapshot.ownerId
@@ -9605,6 +16505,7 @@ function renderPlaybackFrame(snapshot) {
   const possessionOwnerPoint = possessionOwner
     ? snapshot.players[possessionOwner.id]
     : null;
+  updatePlayerCoordsLabel(snapshot.ownerId ?? null, possessionOwnerPoint);
   updateVisionCone(
     possessionOwner && possessionOwnerPoint
       ? { ...possessionOwner, ...possessionOwnerPoint }
@@ -9644,41 +16545,32 @@ function renderPlaybackFrame(snapshot) {
     snapshot.timeMs,
   );
   if (snapshot.ball) {
-    const speed = Math.hypot(
-      snapshot.ball.velocity?.x || 0,
-      snapshot.ball.velocity?.y || 0,
-    );
-    const restingOwner = possessionOwner;
-    const ownerPoint = possessionOwnerPoint;
-    const atFeet = Boolean(
-      restingOwner &&
-      ownerPoint &&
-      (snapshot.ball.mode === "controlled" ||
-        snapshot.ball.mode === "controlled-ground") &&
-      speed < 0.0001,
-    );
-    // Ball independence, visually (2026-08-19) -- at rest with an outfield
-    // player, the marker's logical position stays exactly on them (never
-    // "swallowed" into their own dot visually -- restingBallOffsetPx()'s
-    // fixed-pixel nudge is what draws it at their outer edge instead, see
-    // that function's own comment). In genuine flight (a real pass/shot/
-    // cross/header trajectory) or held by a keeper, the ball keeps its own
-    // real track position, offset reset to zero -- a flying or held ball
-    // must never be pulled toward anyone.
-    const displayBall = atFeet ? ownerPoint : snapshot.ball;
-    setMarkerPosition("ball", displayBall.x, displayBall.y, {
+    // Ball Realism v1 (2026-08-31) -- a real, explicit demand: the ball's
+    // OWN authored position (buildBallTrajectory()/carryLegBallTrajectory()/
+    // simulateCarryTouches() -- the exact same numbers this file's own
+    // Ball Coordinates HUD reads and every ballFrom/ballTo/contact.point
+    // in the trace already commits to) is now what gets drawn, always, no
+    // exception. The previous design substituted the OWNER's own position
+    // plus a synthetic, speed-scaled pixel nudge ("restingBallOffsetPx()")
+    // whenever the ball's own mode read "controlled"/"controlled-ground" --
+    // a real, deliberate cosmetic override of genuinely-simulated data,
+    // and the direct cause of a real reported bug ("the ball looks
+    // teleported... should not be cosmetic"): a carry's own real ball
+    // track already leads and settles believably (carryLegBallTrajectory()'s
+    // own sin() ramp, capped to the leg's real distance), and a live touch
+    // already rolls independently under real friction
+    // (simulateCarryTouches()) -- neither of those needed a fake overlay,
+    // and the overlay's own synthetic speed/direction signal is exactly
+    // what produced the "snap" artifacts across several real bug reports.
+    // A genuinely stationary ball (a hold, an uncontested pause) already
+    // has ballFrom===ballTo===the owner's own position authored directly
+    // by the resolver -- rendering that verbatim looks IDENTICAL to "at
+    // their feet" with zero synthetic logic required.
+    setMarkerPosition("ball", snapshot.ball.x, snapshot.ball.y, {
       animate: false,
       duration: 0,
     });
-    setBallRestOffset(
-      atFeet
-        ? restingBallOffsetPx(
-            ownerPoint,
-            state.attackingDirection[restingOwner.team],
-            restingOwner.role,
-          )
-        : { x: 0, y: 0 },
-    );
+    updateBallCoordsLabel(snapshot.ball);
     const ballNode = markerNode("ball");
     if (ballNode) {
       ballNode.dataset.held = String(snapshot.ball.mode === "held");
@@ -9693,13 +16585,40 @@ function renderPlaybackFrame(snapshot) {
     }
   }
 
-  for (const cue of state.lastPlan.cues) {
+  // Visual cues and deferred terminal sounds share one playback-time cursor.
+  // Sorting matters when one frame crosses several boundaries (high playback
+  // speed or a renderer hitch): every cue still fires in football-time order.
+  const dueCues = state.lastPlan.cues.flatMap((cue) => [
+    { timeMs: cue.timeMs, kind: "visual", cue },
+    ...(Number.isFinite(cue.audioTimeMs)
+      ? [{ timeMs: cue.audioTimeMs, kind: "audio", cue }]
+      : []),
+  ]).sort((left, right) => (
+    left.timeMs - right.timeMs
+    || Number(left.kind === "audio") - Number(right.kind === "audio")
+    || left.cue.eventIndex - right.cue.eventIndex
+  ));
+  for (const scheduledCue of dueCues) {
     if (
-      cue.timeMs > lastRenderedCueTime + 0.001 &&
-      cue.timeMs <= snapshot.timeMs + 0.001
+      scheduledCue.timeMs > lastRenderedCueTime + 0.001 &&
+      scheduledCue.timeMs <= snapshot.timeMs + 0.001
     ) {
+      const cue = scheduledCue.cue;
       state.stepIndex = cue.eventIndex + 1;
-      applyPlaybackCue(state.lastTrace[cue.eventIndex]);
+      const event = state.lastTrace[cue.eventIndex];
+      if (scheduledCue.kind === "visual" && activeMatchChunk && matchTelemetry) {
+        observeMatchEvent(matchTelemetry, {
+          trace: state.lastTrace,
+          eventIndex: cue.eventIndex,
+          chunkIndex: activeMatchChunk.index ?? 0,
+          matchTimeMs: activeMatchChunk.startMs + scheduledCue.timeMs,
+        });
+        renderMatchTelemetry(true);
+      }
+      if (visible && isHighlightTime(highlightWindows, scheduledCue.timeMs)) {
+        if (scheduledCue.kind === "audio") applyDeferredPlaybackAudio(event, cue);
+        else applyPlaybackCue(event, cue);
+      }
     }
   }
   lastRenderedCueTime = snapshot.timeMs;
@@ -9709,6 +16628,8 @@ function renderPlaybackFrame(snapshot) {
     renderTrace(visibleIndex);
   }
   state.playbackTimeMs = snapshot.timeMs;
+  updateTeamShapeOverlay(snapshot.timeMs);
+  updateTacticalRegionOverlay(snapshot.ball, snapshot.ownerId, snapshot.timeMs);
 }
 
 function buildPlaybackPlan(runOutput) {
@@ -9737,6 +16658,14 @@ function buildPlaybackPlan(runOutput) {
   )
     ? runOutput.result.restart
     : undefined;
+  // Stamina Bars v1 (2026-08-31) -- the SAME real init formula
+  // runConstructedPossession() itself uses (BURST_BASE/BURST_RANGE over
+  // conditionMultiplier() at FIXED_MINUTE), computed once here from
+  // state.roster so every player's bar reads a real fresh value from
+  // frame 0, not just once their first action/job touches the battery.
+  const initialBurst = Object.fromEntries(
+    state.roster.map((entry) => [String(entry.id), Number.isFinite(entry.burst01) ? { burst01: entry.burst01, match01: entry.match01 } : freshBurst01(entry.player)]),
+  );
   return buildMatchLabPlaybackPlan({
     trace: runOutput.trace,
     initialPositions,
@@ -9750,10 +16679,245 @@ function buildPlaybackPlan(runOutput) {
     playerProfiles: Object.fromEntries(
       state.roster.map((entry) => [String(entry.id), entry.player]),
     ),
+    initialBurst,
   });
 }
 
-function installPlaybackPlan(runOutput) {
+function createMatchChunkSimulator(seed, { halfDurationMs = 45 * 60 * 1000, initialElapsedMs = 0 } = {}) {
+  const keys = ["roster", "ball", "pendingRestart", "restartSetupDraft", "attackingDirection", "attacking", "marking", "transition", "cornerPlans"];
+  const input = Object.fromEntries(keys.map((key) => [key, structuredClone(state[key])]));
+  const firstTakingTeam = input.pendingRestart?.takingTeam ?? input.roster.find((entry) => entry.id === input.ball.ownerId)?.team ?? "home";
+  let secondHalf = initialElapsedMs >= halfDurationMs;
+  if (secondHalf) {
+    for (const team of Object.keys(input.attackingDirection)) input.attackingDirection[team] = input.attackingDirection[team] === "up" ? "down" : "up";
+  }
+  return ({ index, continuation, elapsedMs, remainingMs = Infinity }) => {
+    const saved = Object.fromEntries(keys.map((key) => [key, state[key]]));
+    try {
+      Object.assign(state, input);
+      if (continuation && !secondHalf && elapsedMs >= halfDurationMs) {
+        secondHalf = true;
+        for (const team of Object.keys(input.attackingDirection)) input.attackingDirection[team] = input.attackingDirection[team] === "up" ? "down" : "up";
+        for (const entry of continuation.roster) {
+          if (entry.formationAnchor) entry.formationAnchor = { ...entry.formationAnchor, x: 100 - entry.formationAnchor.x, y: 100 - entry.formationAnchor.y };
+        }
+        continuation.result = { restart: "kickoff", restartTakingTeam: firstTakingTeam === "home" ? "away" : "home", ballEnd: continuation.simulated.ballPoint };
+        continuation.simulated.ownerId = null;
+        continuation.motionContext.marking = {};
+        continuation.motionContext.teamShapeJobs = {};
+      }
+      state.roster = continuation?.roster ?? input.roster;
+      state.ball = continuation ? { ...continuation.simulated.ballPoint, ownerId: continuation.simulated.ownerId } : input.ball;
+      if (continuation) { state.pendingRestart = null; state.restartSetupDraft = null; }
+      const initialPositions = Object.fromEntries(state.roster.map((entry) => [entry.id, pointOf(entry)]));
+      const initialBall = { ...state.ball };
+      const output = runConstructedPossession(seed + index, {
+        continuation, maxActions: 8, matchSession: true, stopAtStoppage: true,
+      });
+      let plan;
+      try { plan = buildPlaybackPlan(output); }
+      catch (error) {
+        error.matchTrace = output.trace;
+        error.matchChunkIndex = index;
+        throw error;
+      }
+      const untilBreak = secondHalf ? remainingMs : Math.min(remainingMs, halfDurationMs - elapsedMs);
+      if (plan.durationMs > untilBreak) {
+        const atBreak = sampleMatchLabPlaybackPlan(plan, untilBreak);
+        plan = { ...plan, durationMs: untilBreak, cues: plan.cues.filter((cue) => cue.timeMs <= untilBreak) };
+        for (const entry of output.continuation?.roster ?? []) {
+          if (atBreak.players[entry.id]) Object.assign(entry, atBreak.players[entry.id]);
+        }
+        if (output.continuation) {
+          output.continuation.simulated.ballPoint = atBreak.ball;
+          output.continuation.simulated.ownerId = atBreak.ownerId;
+        }
+      }
+      // Each chunk owns its diagnostics. Persistent jobs, ball state,
+      // engagement memory and player stamina continue into the next chunk.
+      if (output.continuation) {
+        output.continuation.motionContext = { ...output.continuation.motionContext, shapeSnapshots: [] };
+      }
+      return { output, plan, durationMs: plan.durationMs, continuation: output.continuation, initialPositions, initialBall, secondHalf };
+    } finally { Object.assign(state, saved); }
+  };
+}
+
+let matchSession = null;
+let matchAutoPlay = false;
+let activeMatchChunk = null;
+let matchScore = { home: 0, away: 0 };
+let matchTelemetry = null;
+let pendingTacticsTeam = null;
+let pausedMatch = null;
+let lastTelemetryRenderMs = -Infinity;
+const matchStatus = document.querySelector("#labMatchStatus");
+const startMatchButton = document.querySelector("#labStartMatch");
+const stopMatchButton = document.querySelector("#labStopMatch");
+function stopMatchSession() {
+  matchAutoPlay = false;
+  matchSession?.stop();
+  matchSession = null;
+  activeMatchChunk = null;
+  pendingTacticsTeam = null;
+  pausedMatch = null;
+  if (startMatchButton) startMatchButton.disabled = false;
+  if (stopMatchButton) stopMatchButton.disabled = true;
+  elements.pitch.style.visibility = "visible";
+  if (matchInterlude) matchInterlude.hidden = true;
+  if (elements.tacticsRequestStatus) elements.tacticsRequestStatus.textContent = "";
+}
+
+function commitActiveMatchScore() {
+  if (!activeMatchChunk || activeMatchChunk.scoreCommitted) return;
+  for (const interval of activeMatchChunk.plan.intervals) {
+    const event = activeMatchChunk.output.trace[interval.eventIndex];
+    if (interval.endMs > activeMatchChunk.plan.durationMs || (event.outcome !== "goal" && event.badge !== "GOAL")) continue;
+    const team = state.roster.find((entry) => entry.id === event.actorId)?.team;
+    if (team in matchScore) matchScore[team] += 1;
+  }
+  activeMatchChunk.scoreCommitted = true;
+}
+
+function setTacticsDraftTeam(team) {
+  state.setupTeamTab = team === "away" ? "away" : "home";
+  state.selectedSetupSlotId = null;
+}
+
+function openRequestedTactics() {
+  if (!pendingTacticsTeam || !activeMatchChunk?.output?.result?.restart) return false;
+  commitActiveMatchScore();
+  pausedMatch = {
+    elapsedMs: activeMatchChunk.endMs,
+    continuation: activeMatchChunk.continuation,
+    nextIndex: (activeMatchChunk.index ?? 0) + 1,
+  };
+  matchAutoPlay = false;
+  matchSession?.stop();
+  matchSession = null;
+  setTacticsDraftTeam(pendingTacticsTeam);
+  if (elements.tacticsRequestStatus) elements.tacticsRequestStatus.textContent = "Play is stopped. Confirm changes to resume.";
+  if (elements.tacticsStatus) elements.tacticsStatus.textContent = `${pendingTacticsTeam === "home" ? "Home" : "Away"} changes will take effect when play resumes.`;
+  showMainWorkspace("tactics");
+  renderMatchSetupPanel();
+  return true;
+}
+
+function requestTactics(team) {
+  setTacticsDraftTeam(team);
+  if (pausedMatch) {
+    pendingTacticsTeam = team;
+    showMainWorkspace("tactics");
+    renderMatchSetupPanel();
+    return;
+  }
+  if (!matchSession || !matchAutoPlay) {
+    showMainWorkspace("tactics");
+    renderMatchSetupPanel();
+    return;
+  }
+  pendingTacticsTeam = team;
+  if (elements.tacticsRequestStatus) elements.tacticsRequestStatus.textContent = `${team === "home" ? "Home" : "Away"} tactics will open at the next stoppage.`;
+}
+
+function escapeMatchText(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[character]));
+}
+
+function renderMatchTelemetry(force = false) {
+  if (!matchTelemetry) return;
+  if (!force && matchTelemetry.nowMs - lastTelemetryRenderMs < 250) return;
+  lastTelemetryRenderMs = matchTelemetry.nowMs;
+  const possession = lastTenMinutePossession(matchTelemetry);
+  const home = Math.round(possession.home);
+  const away = 100 - home;
+  if (elements.homePossession) elements.homePossession.textContent = `${home}%`;
+  if (elements.awayPossession) elements.awayPossession.textContent = `${away}%`;
+  if (elements.homePossessionBar) elements.homePossessionBar.style.width = `${home}%`;
+  if (elements.awayPossessionBar) elements.awayPossessionBar.style.width = `${away}%`;
+  elements.homePossessionBar?.parentElement?.setAttribute("aria-label", `Home ${home} percent, away ${away} percent`);
+  const line = matchTelemetry.commentary.at(-1);
+  if (elements.matchMinute) elements.matchMinute.textContent = `${Math.max(0, Math.ceil(matchTelemetry.nowMs / 60000))}'`;
+  if (elements.liveCommentary && line) {
+    elements.liveCommentary.textContent = matchTelemetry.nowMs - line.timeMs <= 15000 ? line.text : "Play continues.";
+  }
+  if (elements.matchStatsPanel?.hidden) return;
+  if (elements.playerStatsBody) {
+    elements.playerStatsBody.innerHTML = Object.values(matchTelemetry.players).map((player) => {
+      const accuracy = player.passesTotal ? Math.round(player.passesSuccessful / player.passesTotal * 100) : 0;
+      return `<tr data-team="${player.team}"><td>${escapeMatchText(player.name)}</td><td>${(player.distanceYards * 0.0009144).toFixed(2)} km</td><td>${player.passesSuccessful}/${player.passesTotal}</td><td>${accuracy}%</td><td>${player.keyPasses}</td><td>${player.shotsOnTarget}</td><td>${player.shotsMissed}</td></tr>`;
+    }).join("");
+  }
+  const heat = heatForScope(matchTelemetry, elements.statsScope?.value || "team:home");
+  const peak = Math.max(1, ...heat);
+  if (elements.heatmapGrid) elements.heatmapGrid.innerHTML = heat.map((value) => `<span style="--heat:${(value / peak * 0.82).toFixed(3)}" class="match-heat-cell"></span>`).join("");
+}
+
+function populateStatsScope() {
+  if (!elements.statsScope || !matchTelemetry) return;
+  elements.statsScope.innerHTML = `<option value="team:home">Home team</option><option value="team:away">Away team</option>`
+    + Object.values(matchTelemetry.players).map((player) => `<option value="player:${player.id}">${escapeMatchText(player.name)} (${player.team})</option>`).join("");
+}
+
+function playNextMatchChunk() {
+  if (!matchSession || !matchAutoPlay || isPlaying()) return;
+  if (activeMatchChunk) commitActiveMatchScore();
+  if (pendingTacticsTeam && activeMatchChunk && openRequestedTactics()) return;
+  // Keep one following chunk available so highlights include the build-up
+  // to a chance that begins across a simulation boundary.
+  if (matchSession.getState().buffered < 2 && !matchSession.getState().complete) return;
+  const next = matchSession.take();
+  if (!next) {
+    if (matchSession.getState().complete) {
+      if (matchStatus) matchStatus.textContent = `Full time | Home ${matchScore.home} - ${matchScore.away} Away`;
+      stopMatchSession();
+    }
+    return;
+  }
+  activeMatchChunk = next;
+  state.lastTrace = next.output.trace;
+  state.lastRun = next.output;
+  installPlaybackPlan(next.output, next.plan);
+  playbackClock.play();
+}
+startMatchButton?.addEventListener("click", () => {
+  if (state.mode !== "freeplay" || !currentModeIsReady()) {
+    if (matchStatus) matchStatus.textContent = "Apply a match setup with both teams before starting.";
+    return;
+  }
+  if (!["home", "away"].every((team) => state.roster.some((entry) => entry.team === team && entry.role === "keeper"))) {
+    if (matchStatus) matchStatus.textContent = "Both teams need a goalkeeper for a full match.";
+    return;
+  }
+  stopMatchSession();
+  stopPlayback();
+  unlockAndPreload();
+  matchScore = { home: 0, away: 0 };
+  matchTelemetry = createMatchTelemetry(state.roster);
+  for (const entry of state.roster) {
+    const stats = matchTelemetry.players[String(entry.id)];
+    if (stats) stats.name = playerName(entry.player);
+  }
+  populateStatsScope();
+  if (elements.liveCommentary) elements.liveCommentary.textContent = "The teams are ready. Play begins.";
+  renderMatchTelemetry(true);
+  matchAutoPlay = true;
+  startMatchButton.disabled = true;
+  if (stopMatchButton) stopMatchButton.disabled = false;
+  matchSession = createMatchSession({
+    simulate: createMatchChunkSimulator(state.seed),
+    onReady: () => { refreshHighlights(); playNextMatchChunk(); },
+    onStatus: ({ error }) => {
+      if (error) { if (matchStatus) matchStatus.textContent = `Match stopped: ${error.message}`; stopMatchSession(); }
+    },
+  });
+  matchSession.start();
+});
+stopMatchButton?.addEventListener("click", () => { stopMatchSession(); stopPlayback(); });
+
+function installPlaybackPlan(runOutput, preparedPlan = null) {
   // Build the NEW plan before touching anything about the current one
   // (2026-08-21 fix) -- this used to destroy playbackClock FIRST, so a
   // buildPlaybackPlan() failure (an occasional real one, see
@@ -9765,15 +16929,22 @@ function installPlaybackPlan(runOutput) {
   // exactly one, rerollButton's, also fixed the same day) degrades to
   // "Reroll silently did nothing new," not "the pitch stops animating
   // at all."
-  const nextPlan = buildPlaybackPlan(runOutput);
+  const nextPlan = preparedPlan ?? buildPlaybackPlan(runOutput);
   playbackClock?.destroy();
   state.lastPlan = nextPlan;
+  refreshHighlights();
+  rendererGapMonitor.reset();
+  renderFluidityDiagnostics();
   state.playbackTimeMs = 0;
   lastRenderedCueTime = -1;
   lastRenderedTraceIndex = 0;
   playbackClock = createMatchLabPlaybackClock(state.lastPlan, {
+    advanceTime: (time, elapsed, rate) => advanceHighlightTime(time, elapsed, state.lastPlan.durationMs, highlightWindows, rate, Number(betweenSpeedControl?.value) || 20),
     onFrame: renderPlaybackFrame,
-    onStateChange: updatePlayPauseButton,
+    onStateChange: ({ playing, timeMs }) => {
+      updatePlayPauseButton();
+      if (!playing && timeMs >= state.lastPlan.durationMs - 0.001 && matchAutoPlay) setTimeout(playNextMatchChunk, 0);
+    },
   });
   playbackClock.setRate(state.speed);
   renderPlaybackFrame({
@@ -9789,6 +16960,7 @@ function installPlaybackPlan(runOutput) {
 }
 
 function startPlayback() {
+  if (matchSession) { matchAutoPlay = true; if (playbackClock?.getState().timeMs >= (state.lastPlan?.durationMs ?? Infinity)) { playNextMatchChunk(); return; } }
   if (!playbackClock || !state.lastTrace?.length) return;
   playbackClock.play();
   updatePlayPauseButton();
@@ -9837,12 +17009,89 @@ function buildLastRun(seed, runOutput) {
     actionsCount: runOutput.actionsCount ?? null,
     decisionMetrics: runOutput.decisionMetrics ?? [],
     possessionMetrics: runOutput.possessionMetrics ?? null,
+    teamPhase: runOutput.teamPhase ?? null,
+    phaseTransitions: runOutput.phaseTransitions ?? [],
+    shapeSnapshots: runOutput.shapeSnapshots ?? [],
+    shapeMetrics: runOutput.shapeMetrics ?? null,
     trace: runOutput.trace,
     // The possession's own simulated positions at rest (Pass 1) -- the
     // authored setup above never changes; this is where each player and
     // the ball actually ended up once resolution finished.
     finalPositions: runOutput.finalPositions ?? null,
+    // Saved Scenario Replay Harness -- a self-contained, JSON-serializable
+    // snapshot of exactly what THIS run started from (full embedded player
+    // attribute objects, database, attacking directions, tactical
+    // settings, and the seed), captured here (not from live state.roster
+    // at Save time) so a later drag/reroll can never retroactively change
+    // what a saved scenario says it started from. See
+    // src/lib/replayHarness.js's own header for why the seed plus this
+    // authored setup alone reproduces the whole possession byte-for-byte,
+    // and tools/test-replay-harness.mjs for how to replay it in Node.
+    scenario: captureScenario({
+      state, seed,
+      // Provenance only -- what the setup panel authored, when it was used.
+      // A restart is recorded for the record, NOT as replayable input; see
+      // captureScenario()'s own note on why a dead ball cannot be a
+      // scenario at this schema version.
+      matchSetup: state.matchSetupDraft
+        ? {
+            format: state.matchSetupDraft.format,
+            home: {
+              squadKey: state.matchSetupDraft.home.squadKey,
+              formation: state.matchSetupDraft.home.formation,
+              style: state.matchSetupDraft.home.style,
+            },
+            away: {
+              squadKey: state.matchSetupDraft.away.squadKey,
+              formation: state.matchSetupDraft.away.formation,
+              style: state.matchSetupDraft.away.style,
+            },
+          }
+        : null,
+      // Schema 2 -- genuine replay input for a dead-ball scenario: which
+      // restart, who takes it, where the ball is, and the concrete
+      // restart-role assignment every participant was given.
+      restart: state.restartSetupDraft
+        ? {
+            ...state.restartSetupDraft,
+            takerId: state.pendingRestart?.takerId ?? state.ball.ownerId ?? null,
+            roleAssignments: state.roster
+              .filter((entry) => entry.restartRole)
+              .map((entry) => ({ id: entry.id, restartRole: entry.restartRole })),
+          }
+        : null,
+    }),
   };
+}
+
+/** Serializes state.lastRun's own captured scenario to a downloadable JSON
+ * file -- the browser-side half of the Saved Scenario Replay Harness (see
+ * src/lib/replayHarness.js). Manual (a "Save Scenario" button) rather than
+ * automatic on every run: Free Play is used for many ordinary, unremarkable
+ * possessions between reported failures, and downloading a file on every
+ * single one of them would be noise, not a feature. */
+function downloadCurrentScenario(reason) {
+  if (!state.lastRun?.scenario) return;
+  // capturedAt is stamped HERE, at the actual moment of saving to disk --
+  // not inside captureScenario()/buildLastRun(), which stay pure functions
+  // of state/seed (see captureScenario()'s own comment on why: match-lab.js's
+  // buildLastRun() must keep producing byte-identical records for a
+  // byte-identical run, which a baked-in wall-clock default would break).
+  const capturedAt = new Date().toISOString();
+  const scenario = {
+    ...state.lastRun.scenario,
+    capturedAt,
+    ...(reason !== undefined ? { reason } : {}),
+  };
+  const blob = new Blob([JSON.stringify(scenario, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `match-lab-scenario-${scenario.seed}-${capturedAt.replace(/[:.]/g, "-")}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function showPlaybackError(error) {
@@ -9857,6 +17106,17 @@ function showPlaybackError(error) {
 }
 
 elements.playButton.addEventListener("click", () => {
+  stopMatchSession();
+  // A dead ball can run only when its nominated taker and required action
+  // are intact. runConstructedPossession() dispatches that action before
+  // the ordinary candidate loop.
+  if (state.pendingRestart && !state.ball.ownerId) {
+    showPlaybackError(new Error(
+      `This ${state.pendingRestart.type} has no nominated taker, so there is nobody `
+      + "to put the ball back into play. Re-apply the setup, or choose a taker.",
+    ));
+    return;
+  }
   if (!currentModeIsReady()) return;
   unlockAndPreload();
   stopPlayback();
@@ -9913,6 +17173,7 @@ elements.replayButton.addEventListener("click", () => {
 // from; it no longer touches them at all, so they're always already
 // correct).
 elements.rerollButton.addEventListener("click", () => {
+  stopMatchSession();
   if (!currentModeIsReady()) return;
   unlockAndPreload();
   stopPlayback();
@@ -9966,6 +17227,22 @@ elements.stepButton.addEventListener("click", () => {
   playbackClock.step();
 });
 
+// Step Back v1 (2026-08-31) -- a real, explicit request: rewinding to
+// re-watch an incident required hitting Replay and sitting through the
+// whole trace again. Mirrors the Step button above exactly, just walking
+// backward to the PREVIOUS semantic boundary (previousSemanticBoundary(),
+// matchLabPlayback.js) instead of the next one -- renderPlaybackFrame()'s
+// own existing "timeMs moved backward" detection (its own comment, just
+// above) already resets the touch trail/cue timing/trace panel correctly
+// for any backward seek, so no special-cased reset is needed here the
+// way the forward button's own "wrap past the end" branch needs one.
+elements.stepBackButton.addEventListener("click", () => {
+  if (!state.lastTrace) return;
+  stopPlayback();
+  if (!playbackClock) return;
+  playbackClock.stepBack();
+});
+
 // Three fixed speed steps for now, addressed by the range input's index
 // (0/1/2) rather than its value directly -- keeps the bar's native step
 // snapping while the actual playback rate stays whatever's in this array.
@@ -9983,7 +17260,150 @@ updateSpeedValue();
 elements.attackingDirectionSelect.value = state.attackingDirection.home;
 elements.attackingDirectionSelect.addEventListener("change", () => {
   const home = elements.attackingDirectionSelect.value === "up" ? "up" : "down";
-  state.attackingDirection = { home, away: home === "up" ? "down" : "up" };
+  const draft = setupDraft();
+  draft.home.attackingDirection = home;
+  draft.away.attackingDirection = home === "up" ? "down" : "up";
+  reassignSetupTeam("home");
+  reassignSetupTeam("away");
+  renderMatchSetupPanel();
+});
+
+// Marking setup (2026-08-24) -- each team's own scheme select plus a
+// five-bar strictness control read straight out of/write straight into
+// state.marking[team]; markingSettingsFor() (read by both
+// planDefensiveRepositioning() call sites) is the only consumer, so
+// nothing else needs to know this UI exists.
+function updateMarkingStrictnessDisplay(team) {
+  const level = setupDraft()[team].marking.strictness;
+  elements.markingBars
+    .filter((bar) => bar.dataset.team === team)
+    .forEach((bar) => {
+      bar.classList.toggle("is-filled", Number(bar.dataset.level) <= level);
+    });
+  const valueLabel = elements.markingValues.find((el) => el.dataset.team === team);
+  if (valueLabel) valueLabel.textContent = String(level);
+  const group = elements.markingStrictnessGroups.find((el) => el.dataset.team === team);
+  if (group) group.setAttribute("aria-valuenow", String(level));
+}
+function setMarkingStrictness(team, level) {
+  setupDraft()[team].marking.strictness = clamp(1, 5, Math.round(level));
+  updateMarkingStrictnessDisplay(team);
+}
+elements.markingSchemeSelects.forEach((select) => {
+  const team = select.dataset.team;
+  select.value = state.marking[team].scheme;
+  select.addEventListener("change", () => {
+    setupDraft()[team].marking.scheme = select.value === "zonal" ? "zonal" : "man";
+  });
+});
+elements.markingBars.forEach((bar) => {
+  bar.addEventListener("click", () => {
+    setMarkingStrictness(bar.dataset.team, Number(bar.dataset.level));
+  });
+});
+elements.markingStrictnessGroups.forEach((group) => {
+  const team = group.dataset.team;
+  group.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setMarkingStrictness(team, setupDraft()[team].marking.strictness + 1);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      event.preventDefault();
+      setMarkingStrictness(team, setupDraft()[team].marking.strictness - 1);
+    }
+  });
+});
+
+// Attacking setup (2026-08-25) -- each team's own style select plus a
+// five-bar directness control, cloned straight off the Marking wiring
+// above, read straight out of/write straight into state.attacking[team];
+// attackingSettingsFor() (read by both generateFreePlayCandidates() call
+// sites) is the only consumer, so nothing else needs to know this UI
+// exists.
+function updateAttackingDirectnessDisplay(team) {
+  const level = setupDraft()[team].attacking.directness;
+  elements.attackingBars
+    .filter((bar) => bar.dataset.team === team)
+    .forEach((bar) => {
+      bar.classList.toggle("is-filled", Number(bar.dataset.level) <= level);
+    });
+  const valueLabel = elements.attackingValues.find((el) => el.dataset.team === team);
+  if (valueLabel) valueLabel.textContent = String(level);
+  const group = elements.attackingStrictnessGroups.find((el) => el.dataset.team === team);
+  if (group) group.setAttribute("aria-valuenow", String(level));
+}
+function setAttackingDirectness(team, level) {
+  setupDraft()[team].attacking.directness = clamp(1, 5, Math.round(level));
+  updateAttackingDirectnessDisplay(team);
+}
+const ATTACKING_STYLES = new Set(["possession", "direct", "long-ball", "wing"]);
+elements.attackingStyleSelects.forEach((select) => {
+  const team = select.dataset.team;
+  select.value = state.attacking[team].style;
+  select.addEventListener("change", () => {
+    setupDraft()[team].attacking.style = ATTACKING_STYLES.has(select.value) ? select.value : "possession";
+  });
+});
+elements.attackingBars.forEach((bar) => {
+  bar.addEventListener("click", () => {
+    setAttackingDirectness(bar.dataset.team, Number(bar.dataset.level));
+  });
+});
+elements.attackingStrictnessGroups.forEach((group) => {
+  const team = group.dataset.team;
+  group.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setAttackingDirectness(team, setupDraft()[team].attacking.directness + 1);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      event.preventDefault();
+      setAttackingDirectness(team, setupDraft()[team].attacking.directness - 1);
+    }
+  });
+});
+elements.teamShootingSelects.forEach((select) => {
+  const team = select.dataset.team;
+  select.value = state.attacking[team].shooting;
+  select.addEventListener("change", () => {
+    setupDraft()[team].attacking.shooting = ["discourage", "balanced", "encourage"].includes(select.value)
+      ? select.value : "balanced";
+    renderSlotEditor();
+  });
+});
+elements.teamTempoSelects.forEach((select) => {
+  const team = select.dataset.team;
+  select.value = state.attacking[team].tempo;
+  select.addEventListener("change", () => {
+    setupDraft()[team].attacking.tempo = ["slow", "balanced", "quick"].includes(select.value)
+      ? select.value : "balanced";
+    renderSlotEditor();
+  });
+});
+
+function setTeamInstruction(team, section, field, value) {
+  if (!setupDraft()[team]?.[section] || !field) return false;
+  setupDraft()[team][section][field] = value;
+  if (section === "attacking") {
+    setupDraft()[team].attacking = normalizeTeamAttacking(setupDraft()[team].attacking);
+  } else if (section === "transition") {
+    setupDraft()[team].transition = normalizeTeamTransition(setupDraft()[team].transition);
+  } else if (section === "marking") {
+    setupDraft()[team].marking = normalizeTeamDefending(setupDraft()[team].marking);
+  }
+  return true;
+}
+
+elements.teamInstructionControls.forEach((control) => {
+  control.addEventListener("change", () => {
+    const { team, section, field } = control.dataset;
+    setTeamInstruction(
+      team,
+      section,
+      field,
+      control.type === "checkbox" ? control.checked : control.value,
+    );
+    renderTacticsBoard();
+  });
 });
 
 function updateSoundToggle() {
@@ -10008,6 +17428,8 @@ updateSoundToggle();
 // back to anymore, since nothing mutates it). To clear the pitch
 // entirely, remove players individually (the existing per-row ✕ button).
 elements.resetButton.addEventListener("click", () => {
+  stopMatchSession();
+  elements.pitch.style.visibility = "visible";
   stopPlayback();
   renderPitch();
   clearStepEffects();
@@ -10016,6 +17438,15 @@ elements.resetButton.addEventListener("click", () => {
   renderRoleRequirements();
   renderActionTable();
   clearResults();
+});
+
+// Saved Scenario Replay Harness -- downloads the LAST run's own captured
+// scenario (state.lastRun.scenario, built by buildLastRun() at the moment
+// that run happened -- never re-captured from whatever the live roster is
+// doing now) as a JSON file. See src/lib/replayHarness.js's own header and
+// tools/test-replay-harness.mjs for how to replay it in Node.
+elements.saveScenarioButton?.addEventListener("click", () => {
+  downloadCurrentScenario();
 });
 
 elements.runNButton.addEventListener("click", () => {
@@ -10151,6 +17582,7 @@ function clearResults() {
   state.lastOneOnOneDiagnostic = null;
   elements.trace.hidden = true;
   elements.stepButton.hidden = true;
+  elements.stepBackButton.hidden = true;
   elements.distribution.hidden = true;
   renderOneOnOneDiagnostic();
   // stopPlayback() above already calls this, but BEFORE lastTrace is
@@ -10179,11 +17611,1800 @@ loadDatabases().then(runSearch);
 // controlled RNG streams, the same way matchEngineCore.js's resolvers
 // already are in tools/test-one-on-one-execution.mjs, instead of only
 // being verifiable by hand-inspection in a real browser.
+
+// ---------------------------------------------------------------------------
+// Match Setup Integration v1 (2026-09-04)
+// ---------------------------------------------------------------------------
+//
+// The Match and Tactics workspaces author one DRAFT: squads, format, shape, per-slot
+// instructions and the start of play. Nothing here writes to state.roster,
+// state.ball or the pitch -- only applySetup() does, and only once every
+// part of the draft has resolved and validated. A failure leaves the
+// current pitch untouched, which is the whole reason the draft exists.
+//
+// Everything below consumes the pure setup modules. No squad declaration,
+// no formation template and no restart geometry is re-implemented here.
+
+// The neutral default shape. Deliberately NOT presented as historically
+// authentic: the squad catalogue carries no per-squad tactical metadata
+// yet, so claiming a 2004/05 side "really played" a given formation would
+// be an invention. The user picks whatever they want on top of this.
+const DEFAULT_SETUP_FORMATION = "4-4-2";
+const DEFAULT_SETUP_STYLE = "Balanced";
+const DEFAULT_SETUP_FORMAT = "11v11";
+
+function setupDraft() {
+  if (!state.matchSetupDraft) {
+    state.matchSetupDraft = createMatchSetup({
+      format: DEFAULT_SETUP_FORMAT,
+      home: { formation: DEFAULT_SETUP_FORMATION, style: DEFAULT_SETUP_STYLE, attackingDirection: state.attackingDirection.home },
+      away: { formation: DEFAULT_SETUP_FORMATION, style: DEFAULT_SETUP_STYLE },
+    });
+    state.matchSetupDraft.home.squadKey = null;
+    state.matchSetupDraft.away.squadKey = null;
+  }
+  return state.matchSetupDraft;
+}
+
+function activeSetupTeam() {
+  return setupDraft()[state.setupTeamTab];
+}
+
+function setupPlayerFor(teamSetup, slot) {
+  if (!slot?.playerId) return null;
+  const resolved = state.resolvedSquads.get(teamSetup.squadKey);
+  return resolved?.players.find((player) => candidateKey(player) === slot.playerId) ?? null;
+}
+
+/** Marker name: surname where there is one, else the whole name. */
+function setupMarkerLabel(player) {
+  if (!player) return "—";
+  const name = playerName(player).trim();
+  const parts = name.split(/\s+/).filter(Boolean);
+  return parts.length > 1 ? parts.at(-1) : name;
+}
+
+/** Prefer the database shirt number; keep a stable XI-order fallback. */
+function setupShirtNumber(player, slotIndex) {
+  if (!player) return "—";
+  const listRating = Array.isArray(player.ratings)
+    ? player.ratings.find((item) => /squad[ _-]?number|shirt[ _-]?number/i.test(String(item?.label ?? "")))?.value
+    : null;
+  const candidates = [
+    player.squad_number,
+    player.squadNumber,
+    player.profile?.squad_number,
+    player.profile?.squadNumber,
+    !Array.isArray(player.ratings) ? player.ratings?.squad_number : null,
+    listRating,
+  ];
+  const stored = candidates.map(Number).find((value) => Number.isInteger(value) && value >= 1 && value <= 99);
+  return String(stored ?? slotIndex + 1);
+}
+
+// ---------------------------------------------------------------------------
+// Squad resolution -- strict, cached, atomic
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves one catalogue squad for Match Lab.
+ *
+ * STRICT on purpose. The catalogue marks these squads verified, but that
+ * flag records a past verification run, not a guarantee about this
+ * database right now -- and the legacy fallback exists for Titan Fight's
+ * own historical behaviour, not for a setup screen. A squad that cannot be
+ * sourced wholly from its own declared database and club is shown as
+ * unavailable WITH THE REASON, never quietly filled with a lookalike from
+ * a neighbouring edition.
+ */
+async function resolveSetupSquad(squadKey) {
+  if (!squadKey) return { ok: false, reason: "no squad selected" };
+  if (state.resolvedSquads.has(squadKey)) {
+    return { ok: true, ...state.resolvedSquads.get(squadKey) };
+  }
+  if (state.squadFailures.has(squadKey)) {
+    return { ok: false, reason: state.squadFailures.get(squadKey) };
+  }
+  const squad = findHistoricalSquad(squadKey);
+  if (!squad) return { ok: false, reason: `unknown squad "${squadKey}"` };
+  let resolution;
+  try {
+    resolution = await resolveHistoricalSquad(squad, { searchPlayers, strict: true });
+  } catch (error) {
+    // Not cached as a failure: a network problem is not a bad declaration,
+    // and the next press should try again.
+    return { ok: false, reason: `could not reach the player database (${error.message})`, transient: true };
+  }
+  if (!resolution.valid) {
+    const reason = resolution.errors[0] ?? "strict resolution failed";
+    state.squadFailures.set(squadKey, reason);
+    return { ok: false, reason };
+  }
+  // Enrich with the same metrics the manual search path uses, so a preset
+  // player and a hand-placed one carry identical attribute data.
+  let players = resolution.players;
+  try {
+    const metrics = await getPlayerMetrics(players);
+    const byIdentity = new Map((metrics.items ?? []).map((item) => [
+      `${item.database_slug}:${item.source_person_id}`, item,
+    ]));
+    players = players.map((player) => {
+      const metric = byIdentity.get(candidateKey(player));
+      return metric ? { ...player, ...metric } : player;
+    });
+  } catch {
+    // Falls back to CA-baseline attribute resolution, exactly as addPlayer() does.
+  }
+  const entry = { players, squad };
+  state.resolvedSquads.set(squadKey, entry);
+  return { ok: true, ...entry };
+}
+
+// ---------------------------------------------------------------------------
+// Draft edits
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-runs deterministic lineup assignment for one team, retaining whatever
+ * role/duty/shooting instructions still apply to the slot that keeps the same
+ * positional slot. Changing formation rearranges players; it does not
+ * silently discard instructions the new shape can still honour.
+ */
+function reassignSetupTeam(team) {
+  const draft = setupDraft();
+  const teamSetup = draft[team];
+  // Keyed by positional slot AND its occurrence, so a shape with two DCs
+  // carries the first DC's instructions to the first DC and the second's to
+  // the second -- a plain positionalSlot map silently kept only the last one.
+  const seenSlot = new Map();
+  const previousBySlot = new Map(teamSetup.slots.map((slot) => {
+    const occurrence = seenSlot.get(slot.positionalSlot) ?? 0;
+    seenSlot.set(slot.positionalSlot, occurrence + 1);
+    return [`${slot.positionalSlot}#${occurrence}`, slot];
+  }));
+  const rebuilt = createTeamSetup({
+    team,
+    squadKey: teamSetup.squadKey,
+    formation: teamSetup.formation,
+    style: teamSetup.style,
+    format: draft.format,
+    attackingDirection: teamSetup.attackingDirection,
+    attacking: teamSetup.attacking,
+    transition: teamSetup.transition,
+    marking: teamSetup.marking,
+    cornerPlan: teamSetup.cornerPlan,
+  });
+  rebuilt.squadKey = teamSetup.squadKey;
+  const seenRebuilt = new Map();
+  for (const slot of rebuilt.slots) {
+    const occurrence = seenRebuilt.get(slot.positionalSlot) ?? 0;
+    seenRebuilt.set(slot.positionalSlot, occurrence + 1);
+    const carried = previousBySlot.get(`${slot.positionalSlot}#${occurrence}`);
+    if (!carried) continue;
+    if (tacticalRolesForPosition(slot.positionalSlot).includes(carried.tacticalRole)) {
+      slot.tacticalRole = carried.tacticalRole;
+    }
+    slot.duty = carried.duty;
+    slot.shootingInstruction = carried.shootingInstruction ?? "inherit";
+    slot.tempoInstruction = carried.tempoInstruction ?? "inherit";
+    slot.goalkeeperDistribution = carried.goalkeeperDistribution ?? "mixed";
+    slot.goalkeeperSweeping = carried.goalkeeperSweeping ?? "balanced";
+    slot.withBallPosition = carried.withBallPosition ? { ...carried.withBallPosition } : null;
+    slot.withoutBallPosition = carried.withoutBallPosition ? { ...carried.withoutBallPosition } : null;
+    slot.withBallPositions = Object.fromEntries(Object.entries(carried.withBallPositions ?? {})
+      .map(([zone, point]) => [zone, { ...point }]));
+    slot.withoutBallPositions = Object.fromEntries(Object.entries(carried.withoutBallPositions ?? {})
+      .map(([zone, point]) => [zone, { ...point }]));
+    slot.included = carried.included;
+  }
+  const resolved = state.resolvedSquads.get(teamSetup.squadKey);
+  if (resolved) {
+    const preferredSlotByPlayer = new Map((resolved.players ?? []).flatMap((player, index) => {
+      const slotKey = resolved.squad?.lineupSlots?.[index];
+      return slotKey ? [[candidateKey(player), slotKey]] : [];
+    }));
+    const result = assignLineup(resolved.players, rebuilt.slots.map((slot) => ({
+      ...slot, effectiveRole: slot.positionalSlot, id: slot.slotId,
+    })), { preferredSlotByPlayer });
+    result.assignments.forEach((assignment, index) => {
+      rebuilt.slots[index].playerId = assignment.player ? candidateKey(assignment.player) : null;
+    });
+    rebuilt.lineupWarnings = result.unplaced.map((entry) =>
+      `${playerName(entry.player)}: ${entry.reason}`);
+  } else {
+    rebuilt.lineupWarnings = [];
+  }
+  draft[team] = rebuilt;
+  return rebuilt;
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+function renderSquadSelectors() {
+  const squads = listHistoricalSquads();
+  for (const [team, select, status] of [
+    ["home", elements.homeSquadSelect, elements.homeSquadStatus],
+    ["away", elements.awaySquadSelect, elements.awaySquadStatus],
+  ]) {
+    if (!select) continue;
+    const current = setupDraft()[team].squadKey ?? "";
+    select.replaceChildren();
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "— none —";
+    select.appendChild(none);
+    for (const squad of squads) {
+      const option = document.createElement("option");
+      option.value = squad.key;
+      const failure = state.squadFailures.get(squad.key);
+      option.textContent = failure ? `${squad.name} (unavailable)` : squad.name;
+      option.disabled = Boolean(failure);
+      select.appendChild(option);
+    }
+    select.value = current;
+    if (status) {
+      const failure = current ? state.squadFailures.get(current) : null;
+      const resolved = current ? state.resolvedSquads.get(current) : null;
+      status.textContent = failure
+        ? `Unavailable: ${failure}`
+        : resolved
+          ? `${resolved.players.length} players resolved from ${resolved.squad.database}`
+          : "";
+      status.dataset.state = failure ? "error" : resolved ? "ok" : "";
+    }
+  }
+}
+
+function renderFormatChoices() {
+  if (!elements.formatChoices) return;
+  elements.formatChoices.replaceChildren();
+  for (const format of MATCH_FORMAT_NAMES) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.format = format;
+    button.textContent = format;
+    button.classList.toggle("is-selected", format === setupDraft().format);
+    elements.formatChoices.appendChild(button);
+  }
+}
+
+function renderFormationControls() {
+  const teamSetup = activeSetupTeam();
+  if (elements.attackingDirectionSelect) {
+    elements.attackingDirectionSelect.value = setupDraft().home.attackingDirection;
+  }
+  if (elements.formationSelect) {
+    if (!(elements.formationSelect.options?.length)) {
+      for (const name of FORMATION_NAMES) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        elements.formationSelect.appendChild(option);
+      }
+    }
+    elements.formationSelect.value = teamSetup.formation;
+  }
+  if (elements.formationStyleSelect) elements.formationStyleSelect.value = teamSetup.style;
+  for (const [tab, team] of [[elements.setupHomeTab, "home"], [elements.setupAwayTab, "away"]]) {
+    if (!tab) continue;
+    const active = state.setupTeamTab === team;
+    tab.setAttribute("aria-selected", String(active));
+    tab.classList.toggle("is-selected", active);
+  }
+}
+
+/**
+ * The restart positions the board should draw, materialised through the
+ * EXACT same path Apply Setup uses (buildRestartDraft ->
+ * placeRestartParticipants). There is deliberately no second, UI-only
+ * layout implementation: a preview that disagreed with what Apply Setup
+ * produced would be worse than no preview.
+ */
+function restartPreviewPositions() {
+  const draft = setupDraft();
+  if (!draft.home.squadKey || !draft.away.squadKey) return null;
+  const prepared = {};
+  for (const team of ["home", "away"]) {
+    prepared[team] = {
+      entries: draft[team].slots.filter((slot) => slot.included).map((slot) => ({
+        id: `${team}-${slot.slotId}`,
+        slotId: slot.slotId,
+        role: roleBand(slot.positionalSlot) === "GK" ? "keeper" : "player",
+        team,
+        player: setupPlayerFor(draft[team], slot),
+        positionalSlot: slot.positionalSlot,
+        x: slot.x,
+        y: slot.y,
+      })).filter((entry) => entry.player),
+    };
+  }
+  if (!prepared.home.entries.length || !prepared.away.entries.length) return null;
+  const restart = buildRestartDraft();
+  const takerOverrides = {};
+  const chosen = elements.restartTakerSelect?.value;
+  if (chosen) takerOverrides[restart.takingTeam] = chosen;
+  const { placements, roles, takerId } = placeRestartParticipants(restart, prepared, { takerOverrides });
+  return { restart, placements, roles, takerId, prepared };
+}
+
+/**
+ * Formation editors use the manager's conventional viewpoint: their own
+ * goal is at the bottom and their team attacks toward the top. Runtime
+ * coordinates remain in the shared match frame. A team attacking down in
+ * that frame is therefore rotated 180 degrees for display. The transform is
+ * its own inverse, so it also converts a dragged board point back into the
+ * authoritative match frame.
+ */
+export function tacticsBoardPoint(point, attackingDirection = "up") {
+  const source = {
+    x: clamp(0, 100, Number(point?.x) || 0),
+    y: clamp(0, 100, Number(point?.y) || 0),
+    ...(point?.zone == null ? {} : { zone: point.zone }),
+  };
+  return attackingDirection === "down"
+    ? { ...source, x: 100 - source.x, y: 100 - source.y }
+    : source;
+}
+
+export function tacticsBoardZone(zone, attackingDirection = "up") {
+  const normalized = clamp(0, 11, Math.round(Number(zone) || 0));
+  return attackingDirection === "down" ? 11 - normalized : normalized;
+}
+
+/**
+ * Applies one base-formation drag without touching the live match. Dropping
+ * on another shirt exchanges the two selected players; dropping on grass
+ * moves this slot's formation anchor. Roles and duties stay with their
+ * tactical positions, exactly as they do when players are changed in a XI.
+ */
+export function applyTacticsFormationDrop(teamSetup, draggedSlotId, worldPoint, swapSlotId = null) {
+  const dragged = teamSetup?.slots?.find((slot) => slot.slotId === draggedSlotId) ?? null;
+  if (!dragged) return { changed: false, kind: "missing" };
+  const swap = swapSlotId
+    ? teamSetup.slots.find((slot) => slot.slotId === swapSlotId && slot !== dragged) ?? null
+    : null;
+  if (swap) {
+    [dragged.playerId, swap.playerId] = [swap.playerId, dragged.playerId];
+    return { changed: true, kind: "swap", draggedSlotId, swapSlotId };
+  }
+  if (!worldPoint || !Number.isFinite(worldPoint.x) || !Number.isFinite(worldPoint.y)) {
+    return { changed: false, kind: "invalid" };
+  }
+  dragged.x = clamp(2, 98, worldPoint.x);
+  dragged.y = clamp(2, 98, worldPoint.y);
+  return { changed: true, kind: "move", draggedSlotId, point: { x: dragged.x, y: dragged.y } };
+}
+
+function currentSetupPhaseSelection(slot) {
+  const inPossession = state.setupBoardView === "with-ball";
+  if (!inPossession && state.setupBoardView !== "without-ball") {
+    return {
+      point: { x: slot?.x ?? 50, y: slot?.y ?? 50 },
+      manual: false,
+      source: "formation",
+    };
+  }
+  const [x, y] = ZONE_CENTERS[state.setupPhaseZone] ?? ZONE_CENTERS[4];
+  return phaseAnchorSelectionFor(slot, {
+    inPossession,
+    phase: inPossession ? "progression" : "defensive-block",
+    ballPoint: { x, y },
+  });
+}
+
+function renderRoleOccupancyLayer(teamSetup) {
+  if (elements.showRoleMapCheckbox) elements.showRoleMapCheckbox.checked = state.showRoleMap;
+  if (!state.showRoleMap) {
+    if (elements.roleMapNote) elements.roleMapNote.textContent = "Role map hidden.";
+    return;
+  }
+  const slot = teamSetup.slots.find((item) => item.slotId === state.selectedSetupSlotId) ?? null;
+  if (!slot) {
+    if (elements.roleMapNote) {
+      elements.roleMapNote.textContent = "Select a player to display the role's likely operating area.";
+    }
+    return;
+  }
+  if (state.setupBoardView === "restart") {
+    if (elements.roleMapNote) {
+      elements.roleMapNote.textContent = "Role maps describe open play and are hidden in the restart view.";
+    }
+    return;
+  }
+  const map = buildRoleOccupancyMap({
+    slot,
+    attackingDirection: teamSetup.attackingDirection,
+    view: state.setupBoardView,
+    focusZone: state.setupBoardView === "with-ball" || state.setupBoardView === "without-ball"
+      ? state.setupPhaseZone : null,
+  });
+  const layer = document.createElement("div");
+  layer.className = "match-lab-role-map-grid";
+  layer.dataset.position = slot.positionalSlot;
+  layer.dataset.role = slot.tacticalRole;
+  layer.setAttribute("aria-hidden", "true");
+  layer.style.setProperty("--role-map-columns", String(map.columns));
+  layer.style.setProperty("--role-map-rows", String(map.rows));
+  for (const cell of map.cells) {
+    if (!cell.level) continue;
+    const displayPoint = tacticsBoardPoint(cell, teamSetup.attackingDirection);
+    const displayColumn = clamp(0, map.columns - 1, Math.floor(displayPoint.x / 100 * map.columns));
+    const displayRow = clamp(0, map.rows - 1, Math.floor(displayPoint.y / 100 * map.rows));
+    const pixel = document.createElement("span");
+    pixel.className = "match-lab-role-map-cell";
+    pixel.dataset.level = String(cell.level);
+    pixel.style.gridColumn = String(displayColumn + 1);
+    pixel.style.gridRow = String(displayRow + 1);
+    layer.appendChild(pixel);
+  }
+  elements.tacticsBoard.appendChild(layer);
+  if (elements.roleMapNote) {
+    const viewLabel = state.setupBoardView === "with-ball" ? "with ball"
+      : state.setupBoardView === "without-ball" ? "without ball" : "across open play";
+    const positionLabel = map.manual
+      ? `${slot.positionalSlot} · Manual for ball area ${tacticsBoardZone(state.setupPhaseZone, teamSetup.attackingDirection) + 1}. `
+      : `${slot.positionalSlot} · ${tacticalRoleLabel(slot.tacticalRole)} · ${slot.duty}. `;
+    elements.roleMapNote.textContent = positionLabel
+      + `Likely allocation ${viewLabel}; brighter pixels are more likely. The ${map.columns} × ${map.rows} grid uses `
+      + `${map.cellWidthYards.toFixed(0)} × ${map.cellLengthYards.toFixed(0)} yd pixels `
+      + `(${(map.cellWidthYards * 0.9144).toFixed(1)} × ${(map.cellLengthYards * 0.9144).toFixed(1)} m).`;
+  }
+}
+
+function renderTacticsBoard() {
+  if (!elements.tacticsBoard) return;
+  const teamSetup = activeSetupTeam();
+  elements.tacticsBoard.replaceChildren();
+  elements.tacticsBoard.dataset.team = teamSetup.team;
+  elements.tacticsBoard.dataset.view = state.setupBoardView;
+  renderRoleOccupancyLayer(teamSetup);
+  const markings = document.createElement("div");
+  markings.className = "match-lab-tactics-markings";
+  markings.innerHTML = `
+    <span class="match-lab-tactics-halfway"></span>
+    <span class="match-lab-tactics-centre-circle"></span>
+    <span class="match-lab-tactics-spot match-lab-tactics-centre-spot"></span>
+    <span class="match-lab-tactics-box match-lab-tactics-box-top"></span>
+    <span class="match-lab-tactics-box match-lab-tactics-box-bottom"></span>
+    <span class="match-lab-tactics-six-yard match-lab-tactics-six-yard-top"></span>
+    <span class="match-lab-tactics-six-yard match-lab-tactics-six-yard-bottom"></span>
+    <span class="match-lab-tactics-spot match-lab-tactics-penalty-spot-top"></span>
+    <span class="match-lab-tactics-spot match-lab-tactics-penalty-spot-bottom"></span>
+    <span class="match-lab-tactics-penalty-arc match-lab-tactics-penalty-arc-top"></span>
+    <span class="match-lab-tactics-penalty-arc match-lab-tactics-penalty-arc-bottom"></span>
+    <span class="match-lab-tactics-goal match-lab-tactics-goal-top"></span>
+    <span class="match-lab-tactics-goal match-lab-tactics-goal-bottom"></span>
+    <span class="match-lab-tactics-corner-arc match-lab-tactics-corner-top-left"></span>
+    <span class="match-lab-tactics-corner-arc match-lab-tactics-corner-top-right"></span>
+    <span class="match-lab-tactics-corner-arc match-lab-tactics-corner-bottom-left"></span>
+    <span class="match-lab-tactics-corner-arc match-lab-tactics-corner-bottom-right"></span>`;
+  elements.tacticsBoard.appendChild(markings);
+  const preview = state.setupBoardView === "restart" ? restartPreviewPositions() : null;
+  const phaseKey = state.setupBoardView === "with-ball" ? "withBallPosition"
+    : state.setupBoardView === "without-ball" ? "withoutBallPosition" : null;
+  const phaseMapKey = state.setupBoardView === "with-ball" ? "withBallPositions"
+    : state.setupBoardView === "without-ball" ? "withoutBallPositions" : null;
+  for (const option of elements.boardViewChoices?.children ?? []) {
+    option.classList?.toggle("is-selected", option.dataset.boardView === state.setupBoardView);
+  }
+  if (elements.boardViewNote) {
+    const displayedZone = tacticsBoardZone(state.setupPhaseZone, teamSetup.attackingDirection);
+    elements.boardViewNote.textContent = state.setupBoardView === "restart"
+      ? (preview
+        ? "Shown with this team attacking upward. Solid markers are the restart positions Apply Setup will use; faint markers are the open-play anchors players release toward once the ball is live."
+        : "Choose both squads to preview the restart shape.")
+      : phaseMapKey
+        ? `Ball area ${displayedZone + 1} of 12, with this team attacking upward. Select another area, then drag players to author the ${state.setupBoardView === "with-ball" ? "with-ball" : "without-ball"} shape. Untouched players inherit the formation.`
+        : "The base formation, shown with this team attacking upward. Drag a player onto open grass to reposition them, or onto another shirt to swap the two players.";
+  }
+  // Ghost markers show the reference formation beneath a restart or an
+  // optional phase override.
+  if (preview || phaseKey) {
+    for (const slot of teamSetup.slots) {
+      const ghost = document.createElement("span");
+      ghost.className = "match-lab-tactics-ghost";
+      const ghostPoint = tacticsBoardPoint(slot, teamSetup.attackingDirection);
+      ghost.style.left = `${ghostPoint.x}%`;
+      ghost.style.top = `${ghostPoint.y}%`;
+      ghost.textContent = slot.positionalSlot;
+      elements.tacticsBoard.appendChild(ghost);
+    }
+  }
+  if (phaseMapKey) {
+    const zoneGrid = document.createElement("div");
+    zoneGrid.className = "match-lab-phase-zone-grid";
+    for (let displayZone = 0; displayZone < 12; displayZone += 1) {
+      const worldZone = tacticsBoardZone(displayZone, teamSetup.attackingDirection);
+      const zoneButton = document.createElement("button");
+      zoneButton.type = "button";
+      zoneButton.dataset.phaseZone = String(worldZone);
+      zoneButton.dataset.selected = String(worldZone === state.setupPhaseZone);
+      zoneButton.setAttribute("aria-label", `Edit ball area ${displayZone + 1}`);
+      zoneButton.title = `Ball area ${displayZone + 1}`;
+      zoneGrid.appendChild(zoneButton);
+    }
+    elements.tacticsBoard.appendChild(zoneGrid);
+  }
+  for (const [slotIndex, slot] of teamSetup.slots.entries()) {
+    const marker = document.createElement("button");
+    marker.type = "button";
+    marker.className = "match-lab-tactics-marker";
+    marker.dataset.slotId = slot.slotId;
+    marker.dataset.team = teamSetup.team;
+    marker.dataset.position = slot.positionalSlot;
+    marker.dataset.included = String(slot.included);
+    marker.dataset.selected = String(slot.slotId === state.selectedSetupSlotId);
+    // The setup model owns match-frame coordinates. The tactics board uses
+    // the selected team's consistent attacking-up manager view.
+    const entryId = `${teamSetup.team}-${slot.slotId}`;
+    const previewSpot = preview?.placements.get(entryId);
+    const phaseSpot = phaseMapKey
+      ? slot[phaseMapKey]?.[String(state.setupPhaseZone)] ?? slot[phaseKey]
+      : null;
+    const point = tacticsBoardPoint(
+      previewSpot ?? phaseSpot ?? { x: slot.x, y: slot.y },
+      teamSetup.attackingDirection,
+    );
+    if (phaseKey) marker.dataset.phaseOverride = String(Boolean(phaseSpot));
+    marker.style.left = `${point.x}%`;
+    marker.style.top = `${point.y}%`;
+    const restartRole = preview?.roles.get(entryId) ?? null;
+    if (restartRole) marker.dataset.restartRole = restartRole;
+    if (preview && entryId === preview.takerId) marker.dataset.taker = "true";
+    const player = setupPlayerFor(teamSetup, slot);
+    const phaseSelection = currentSetupPhaseSelection(slot);
+    const displayedDuty = phaseSelection.manual ? "manual" : slot.duty;
+    marker.dataset.duty = displayedDuty;
+
+    const shirt = document.createElement("span");
+    shirt.className = "match-lab-tactics-shirt";
+    const numberLabel = document.createElement("span");
+    numberLabel.className = "match-lab-tactics-number";
+    numberLabel.textContent = setupShirtNumber(player, slotIndex);
+    const details = document.createElement("span");
+    details.className = "match-lab-tactics-details";
+    const slotLabel = document.createElement("span");
+    slotLabel.className = "match-lab-tactics-slot";
+    slotLabel.textContent = slot.positionalSlot;
+    const tacticalRole = document.createElement("span");
+    tacticalRole.className = "match-lab-tactics-role-name";
+    tacticalRole.textContent = phaseSelection.manual
+      ? "Manual"
+      : tacticalRoleLabel(slot.tacticalRole);
+    details.appendChild(slotLabel);
+    details.appendChild(tacticalRole);
+
+    const dutyIndicator = document.createElement("span");
+    dutyIndicator.className = "match-lab-duty-indicator";
+    dutyIndicator.setAttribute(
+      "aria-label",
+      displayedDuty === "manual" ? "Duty: Manual" : `Duty: ${displayedDuty}`,
+    );
+    for (const duty of ["attack", "support", "defend"]) {
+      const dot = document.createElement("span");
+      dot.className = "match-lab-duty-dot";
+      dot.dataset.duty = duty;
+      dot.dataset.active = String(displayedDuty === duty);
+      dot.title = duty[0].toUpperCase() + duty.slice(1);
+      dot.setAttribute("aria-hidden", "true");
+      dutyIndicator.appendChild(dot);
+    }
+    shirt.appendChild(numberLabel);
+    shirt.appendChild(details);
+    shirt.appendChild(dutyIndicator);
+
+    const nameLabel = document.createElement("span");
+    nameLabel.className = "match-lab-tactics-name";
+    nameLabel.textContent = setupMarkerLabel(player);
+    marker.appendChild(shirt);
+    marker.appendChild(nameLabel);
+    // "Show restart roles" -- development labelling so wall members, the
+    // taker and target runners can be inspected directly.
+    if (restartRole && elements.showRestartRolesCheckbox?.checked) {
+      const roleLabel = document.createElement("span");
+      roleLabel.className = "match-lab-tactics-role";
+      roleLabel.textContent = restartRole;
+      marker.appendChild(roleLabel);
+    }
+    const positioningLabel = phaseSelection.manual
+      ? "Manual"
+      : `${tacticalRoleLabel(slot.tacticalRole)} (${slot.duty})`;
+    marker.title = player
+      ? `${playerName(player)} — ${slot.positionalSlot}, ${positioningLabel}`
+        + (slot.band === "GK"
+          ? `, distribution: ${slot.goalkeeperDistribution}, sweeping: ${slot.goalkeeperSweeping}`
+          : `, shooting: ${slot.shootingInstruction}, tempo: ${slot.tempoInstruction}`)
+      : `${slot.positionalSlot} — no player assigned`;
+    elements.tacticsBoard.appendChild(marker);
+  }
+}
+
+function renderSlotEditor() {
+  const teamSetup = activeSetupTeam();
+  const slot = teamSetup.slots.find((item) => item.slotId === state.selectedSetupSlotId) ?? null;
+  if (elements.slotEditorEmpty) elements.slotEditorEmpty.hidden = Boolean(slot);
+  if (elements.slotEditorFields) elements.slotEditorFields.hidden = !slot;
+  if (!slot) return;
+  const player = setupPlayerFor(teamSetup, slot);
+  if (elements.slotPlayer) {
+    elements.slotPlayer.textContent = player
+      ? `${playerName(player)} · ${player.position_text ?? "position unknown"}`
+      : "No player assigned to this slot.";
+  }
+  if (elements.slotPosition) elements.slotPosition.value = slot.positionalSlot;
+  const phaseSelection = currentSetupPhaseSelection(slot);
+  const manualPosition = phaseSelection.manual;
+  if (elements.slotRole) {
+    const editorMode = manualPosition ? "manual" : "role";
+    if (elements.slotRole.dataset.position !== slot.positionalSlot
+      || elements.slotRole.dataset.editorMode !== editorMode) {
+      elements.slotRole.replaceChildren();
+      const roles = manualPosition ? ["manual"] : tacticalRolesForPosition(slot.positionalSlot);
+      for (const role of roles) {
+        const option = document.createElement("option");
+        option.value = role;
+        option.textContent = role === "manual" ? "Manual" : tacticalRoleLabel(role);
+        elements.slotRole.appendChild(option);
+      }
+      elements.slotRole.dataset.position = slot.positionalSlot;
+      elements.slotRole.dataset.editorMode = editorMode;
+    }
+    elements.slotRole.value = manualPosition ? "manual" : slot.tacticalRole;
+    elements.slotRole.disabled = manualPosition;
+    elements.slotRole.dataset.manual = String(manualPosition);
+  }
+  if (elements.slotRoleNote) {
+    elements.slotRoleNote.dataset.state = manualPosition ? "manual" : "";
+    elements.slotRoleNote.textContent = manualPosition
+      ? "This ball-area position is Manual. Reset it to restore tactical role and duty for this view."
+      : "The choices follow this exact positional slot.";
+  }
+  if (elements.slotDuty) {
+    const editorMode = manualPosition ? "manual" : "role";
+    if (elements.slotDuty.dataset.editorMode !== editorMode) {
+      elements.slotDuty.replaceChildren();
+      const duties = manualPosition ? [["manual", "Manual"]]
+        : [["attack", "Attack"], ["support", "Support"], ["defend", "Defend"]];
+      for (const [value, label] of duties) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        elements.slotDuty.appendChild(option);
+      }
+      elements.slotDuty.dataset.editorMode = editorMode;
+    }
+    elements.slotDuty.value = manualPosition ? "manual" : slot.duty;
+    elements.slotDuty.disabled = manualPosition;
+    elements.slotDuty.dataset.manual = String(manualPosition);
+  }
+  const goalkeeper = slot.band === "GK";
+  if (elements.slotShootingField) elements.slotShootingField.hidden = goalkeeper;
+  if (elements.slotTempoField) elements.slotTempoField.hidden = goalkeeper;
+  if (elements.goalkeeperInstructionFields) elements.goalkeeperInstructionFields.hidden = !goalkeeper;
+  if (elements.slotShootingInstruction) {
+    const inherited = elements.slotShootingInstruction.querySelector('option[value="inherit"]');
+    if (inherited) inherited.textContent = `Use team (${teamSetup.attacking.shooting === "encourage" ? "Shoot more" : teamSetup.attacking.shooting === "discourage" ? "Shoot less" : "Balanced"})`;
+    elements.slotShootingInstruction.value = slot.shootingInstruction ?? "inherit";
+  }
+  if (elements.slotTempoInstruction) {
+    const inherited = elements.slotTempoInstruction.querySelector('option[value="inherit"]');
+    if (inherited) inherited.textContent = `Use team (${teamSetup.attacking.tempo})`;
+    elements.slotTempoInstruction.value = slot.tempoInstruction ?? "inherit";
+  }
+  if (elements.goalkeeperDistribution) elements.goalkeeperDistribution.value = slot.goalkeeperDistribution ?? "mixed";
+  if (elements.goalkeeperSweeping) elements.goalkeeperSweeping.value = slot.goalkeeperSweeping ?? "balanced";
+  const phaseKey = state.setupBoardView === "with-ball" ? "withBallPosition"
+    : state.setupBoardView === "without-ball" ? "withoutBallPosition" : null;
+  const phaseMapKey = state.setupBoardView === "with-ball" ? "withBallPositions"
+    : state.setupBoardView === "without-ball" ? "withoutBallPositions" : null;
+  if (elements.resetPhasePosition) {
+    const displayedZone = tacticsBoardZone(state.setupPhaseZone, teamSetup.attackingDirection);
+    elements.resetPhasePosition.hidden = !phaseMapKey || !manualPosition;
+    elements.resetPhasePosition.textContent = phaseKey === "withBallPosition"
+      ? `Reset with-ball position for area ${displayedZone + 1}`
+      : `Reset without-ball position for area ${displayedZone + 1}`;
+  }
+  if (elements.slotIncluded) elements.slotIncluded.checked = slot.included;
+}
+
+function renderTakerSelector() {
+  const select = elements.restartTakerSelect;
+  if (!select) return;
+  const draft = setupDraft();
+  const team = elements.restartTeamSelect?.value || "home";
+  const teamSetup = draft[team];
+  const previous = select.value;
+  select.replaceChildren();
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "Auto (best suited)";
+  select.appendChild(auto);
+  for (const slot of teamSetup.slots) {
+    if (!slot.included) continue;
+    const player = setupPlayerFor(teamSetup, slot);
+    if (!player) continue;
+    const option = document.createElement("option");
+    option.value = `${team}-${slot.slotId}`;
+    option.textContent = `${slot.positionalSlot} · ${playerName(player)}`;
+    select.appendChild(option);
+  }
+  // A previously chosen taker survives an unrelated re-render; one that no
+  // longer exists falls back to Auto rather than silently pointing at
+  // nobody.
+  select.value = [...(select.options ?? [])].some((option) => option.value === previous)
+    ? previous
+    : "";
+}
+
+function renderRestartControls() {
+  renderTakerSelector();
+  const choice = elements.restartTypeSelect?.value || "kickoff";
+  // Side only means anything where the restart genuinely has one. A free
+  // kick's location comes from its band instead, and a kick-off is always
+  // the centre mark.
+  const sided = ["corner", "goal-kick", "throw-in"].includes(choice);
+  if (elements.restartSideField) elements.restartSideField.hidden = !sided;
+  if (elements.restartNote) {
+    elements.restartNote.textContent = choice.startsWith("free-kick")
+      ? "Attacking and defending free kicks are the same restart type in different location bands, not separate mechanics."
+      : sided
+        ? "Left and right mirror the whole layout, including the goalkeeper."
+        : "A kick-off is always taken from the centre mark, with both teams in their own half.";
+  }
+}
+
+function renderSetupStatus(message, level = "") {
+  for (const status of [elements.setupStatus, elements.tacticsStatus]) {
+    if (!status) continue;
+    status.textContent = message ?? "";
+    status.dataset.level = level;
+  }
+}
+
+function renderTeamTacticsControls() {
+  const draft = setupDraft();
+  const activeTeam = state.setupTeamTab;
+  if (elements.teamTacticsTitle) {
+    elements.teamTacticsTitle.textContent = `${activeTeam === "away" ? "Away" : "Home"} team tactics`;
+  }
+  for (const group of elements.teamTacticGroups) {
+    const active = group.dataset.team === activeTeam;
+    group.hidden = !active;
+    group.setAttribute("aria-hidden", String(!active));
+  }
+  for (const select of elements.markingSchemeSelects) {
+    select.value = draft[select.dataset.team].marking.scheme;
+  }
+  for (const select of elements.attackingStyleSelects) {
+    select.value = draft[select.dataset.team].attacking.style;
+  }
+  for (const select of elements.teamShootingSelects) {
+    select.value = draft[select.dataset.team].attacking.shooting;
+  }
+  for (const select of elements.teamTempoSelects) {
+    select.value = draft[select.dataset.team].attacking.tempo;
+  }
+  for (const control of elements.teamInstructionControls) {
+    const value = draft[control.dataset.team]?.[control.dataset.section]?.[control.dataset.field];
+    if (control.type === "checkbox") control.checked = value === true;
+    else if (value != null) control.value = String(value);
+  }
+  for (const team of ["home", "away"]) {
+    updateMarkingStrictnessDisplay(team);
+    updateAttackingDirectnessDisplay(team);
+  }
+}
+
+function renderMatchSetupPanel() {
+  renderSquadSelectors();
+  renderFormatChoices();
+  renderFormationControls();
+  renderTeamTacticsControls();
+  renderTacticsBoard();
+  renderSlotEditor();
+  renderRestartControls();
+}
+
+// ---------------------------------------------------------------------------
+// Restart preview
+// ---------------------------------------------------------------------------
+
+function buildRestartDraft() {
+  const draft = setupDraft();
+  // `||`, not `??`: a select that has not been populated yet reports an
+  // empty string rather than null, and an empty restart type is not a
+  // restart. Falling back to a real default keeps the draft buildable.
+  const choice = elements.restartTypeSelect?.value || "kickoff";
+  const takingTeam = elements.restartTeamSelect?.value || "home";
+  const side = elements.restartSideSelect?.value || "right";
+  const type = choice.startsWith("free-kick") ? "free-kick" : choice;
+  const freeKickBand = choice === "free-kick-attacking"
+    ? "attacking"
+    : choice === "free-kick-defending" ? "defending" : null;
+  const attackingDirectionByTeam = {
+    home: draft.home.attackingDirection,
+    away: draft.away.attackingDirection,
+  };
+  return createRestartSetup({
+    type, takingTeam, attackingDirectionByTeam, side, freeKickBand,
+    // The taker is nominated during apply, once the lineup is known.
+    takerId: "pending",
+  });
+}
+
+/**
+ * Turns a restart specification into concrete roster placements.
+ *
+ * Deterministic and one-player-per-role: the real goalkeeper takes any
+ * goal-anchored role, the nominated taker takes the required taker role,
+ * and every other restart role is filled from the remaining players by
+ * football suitability. Anyone left over stands at their normal,
+ * already-oriented formation anchor.
+ */
+/**
+ * Where a player who is NOT named in the restart layout may legally stand.
+ *
+ * Formation anchors are authored for open play. This maps one onto a legal
+ * position for the restart in question, preserving the shape's own relative
+ * geometry rather than scattering anyone:
+ *   kick-off  -- the whole team is compressed into its own half, which is
+ *                what Law 8 requires and what a real kick-off shape looks
+ *                like.
+ *   otherwise -- a defending player inside the restart's own opponent ring
+ *                is pushed radially out to its edge; nobody else moves.
+ */
+function legalRestartAnchor(entry, restart, team) {
+  const anchor = { x: entry.x, y: entry.y };
+  if (restart.type === "kickoff") {
+    const attacking = team === restart.takingTeam ? restart.attackingDirection
+      : restart.attackingDirection === "up" ? "down" : "up";
+    // Own goal is the end this team is NOT attacking.
+    const ownGoalY = attacking === "up" ? 100 : 0;
+    const point = { x: anchor.x, y: ownGoalY === 0 ? anchor.y * 0.5 : 50 + anchor.y * 0.5 };
+    if (team !== restart.takingTeam && yardDistance(point, restart.ball) < 10.5) {
+      point.y = ownGoalY === 0 ? 40 : 60;
+    }
+    return point;
+  }
+  const minimum = restart.opponentDistanceYards ?? 0;
+  if (!minimum || team === restart.takingTeam) return anchor;
+  const distance = yardDistance(restart.ball, anchor);
+  if (distance >= minimum) return anchor;
+  // Push straight out from the ball to just past the ring's edge. Distance
+  // is measured in yards but the offset lives in percent space; scaling the
+  // whole offset vector by the ratio works because yardDistance() is linear
+  // along a fixed direction. A player standing exactly on the ball has no
+  // direction to push along, so they go straight up the pitch instead.
+  let dx = anchor.x - restart.ball.x;
+  let dy = anchor.y - restart.ball.y;
+  if (!dx && !dy) { dx = 0; dy = 1; }
+  const scale = (minimum + 0.5) / Math.max(distance, 0.001);
+  return {
+    x: clamp(0, 100, restart.ball.x + dx * scale),
+    y: clamp(0, 100, restart.ball.y + dy * scale),
+  };
+}
+
+/**
+ * Places a corner from the taking and defending teams' corner plans.
+ *
+ * Resolution order is forced by the football: the attack is set up first,
+ * because the defence marks it. `cornerPlans[team]` is that team's standing
+ * plan (createTeamSetup()'s own cornerPlan); `restart.cornerOverride` is the
+ * partial, this-corner-only change on top of it.
+ */
+function placeCornerParticipants(restart, teams, { takerOverrides = {}, cornerPlans = {} } = {}) {
+  const placements = new Map();
+  const roles = new Map();
+  const takingTeam = restart.takingTeam;
+  const defendingTeam = restart.defendingTeam
+    ?? Object.keys(teams).find((team) => team !== takingTeam);
+  const goalY = attackingGoalYForDirection(restart.attackingDirection);
+  const side = restart.side ?? "right";
+  const override = restart.cornerOverride ?? null;
+
+  const planFor = (team) => resolveCornerPlan(
+    cornerPlans[team] ?? createTeamCornerPlan(),
+    team === takingTeam ? { attack: override?.attack } : { defend: override?.defend },
+  );
+
+  const attackPlan = planFor(takingTeam);
+  const attack = resolveCornerAttack({
+    entries: teams[takingTeam]?.entries ?? [],
+    spec: { ...attackPlan.attack, takerId: takerOverrides[takingTeam] ?? attackPlan.attack.takerId },
+    goalY, side, ball: restart.ball,
+  });
+  // The defensive resolver scores the attackers it is marking, so it needs
+  // the player records, not just the coordinates.
+  const attackerById = new Map((teams[takingTeam]?.entries ?? []).map((entry) => [String(entry.id), entry]));
+  for (const spot of attack.placements) spot.player = attackerById.get(String(spot.id))?.player ?? null;
+
+  const defence = defendingTeam
+    ? resolveCornerDefence({
+        entries: teams[defendingTeam]?.entries ?? [],
+        spec: planFor(defendingTeam).defend,
+        attack, goalY, side,
+      })
+    : { placements: [], unmarkedCount: 0 };
+
+  for (const spot of [...attack.placements, ...defence.placements]) {
+    placements.set(spot.id, { x: spot.x, y: spot.y });
+    roles.set(spot.id, spot.role);
+  }
+  // The goalkeeper's corner position is goalkeeping, not a role the manager
+  // assigns, so it keeps the existing goal-anchored spot from the restart
+  // layout -- which already shades him slightly toward the corner the ball is
+  // coming from. Re-deriving it in the role resolver would have quietly lost
+  // that shading.
+  const anchoredKeeper = (restart.layout?.defending ?? []).find((spot) => spot.anchoredToGoal);
+  const defendingKeeper = (teams[defendingTeam]?.entries ?? []).find((entry) => entry.role === "keeper");
+  if (anchoredKeeper && defendingKeeper) {
+    placements.set(defendingKeeper.id, { x: anchoredKeeper.x, y: anchoredKeeper.y });
+    roles.set(defendingKeeper.id, anchoredKeeper.restartRole ?? "keeper");
+  }
+  return {
+    placements, roles, wallIds: [],
+    takerId: attack.takerId ?? null,
+    corner: {
+      swing: attack.swing,
+      delivery: attack.delivery,
+      unmarkedCount: defence.unmarkedCount,
+      markDistanceYards: defence.markDistanceYards ?? null,
+    },
+  };
+}
+
+function placeRestartParticipants(restart, teams, { takerOverrides = {}, cornerPlans = {} } = {}) {
+  const placements = new Map();
+  const roles = new Map();
+  const takerIds = {};
+  const wallIds = [];
+  // A corner is not a fixed seven-role template any more. It is a manager
+  // instruction with per-role counts, resolved against the squad, and the
+  // defending side is resolved against the attack that was actually set up
+  // -- markers have to know who they are marking. Everything else keeps the
+  // existing layout path unchanged.
+  if (restart.type === "corner") {
+    return placeCornerParticipants(restart, teams, { takerOverrides, cornerPlans });
+  }
+  for (const [team, prepared] of Object.entries(teams)) {
+    const isTaking = team === restart.takingTeam;
+    let layout = isTaking ? restart.layout.taking : restart.layout.defending;
+
+    // Restart Execution v2 -- a free kick's defending layout carries ONE
+    // abstract "wall" marker, which cannot show whether the near post is
+    // actually covered. Expand it into a real, geometric wall of two to
+    // five bodies at the required ten yards, perpendicular to the ball-goal
+    // line. The goalkeeper is never one of them: they stay separately
+    // anchored to the goal (see the layout's own anchoredToGoal role).
+    if (!isTaking && restart.type === "free-kick") {
+      const wallGoalY = attackingGoalYForDirection(restart.attackingDirection);
+      const size = wallSizeFor({
+        distanceYards: yardDistance(restart.ball, { x: 50, y: wallGoalY }),
+        angleTightness: Math.abs(restart.ball.x - 50) / 50,
+      });
+      const spots = wallPositions({ ball: restart.ball, attackingGoalY: wallGoalY, size });
+      layout = layout.flatMap((spot) => (spot.wall
+        ? spots.map((point, index) => ({
+            ...spot,
+            restartRole: `wall-${index + 1}`,
+            wall: true,
+            x: point.x,
+            y: point.y,
+          }))
+        : [spot]));
+    }
+
+    // Roles are assigned by FOOTBALL SUITABILITY, not by walking the entry
+    // list. Consuming entries in formation order is what made Lizarazu take
+    // France's kick-off and put centre-halves on near-post runs.
+    const takerId = isTaking
+      ? (takerOverrides[team]
+        ?? selectRestartTaker({
+          type: restart.type,
+          variant: restart.variant,
+          participants: prepared.entries,
+          preferredId: takerOverrides[team] ?? null,
+        })?.id ?? null)
+      : null;
+    const assignment = assignRestartRoles({
+      layout,
+      participants: prepared.entries.filter((entry) =>
+        !entry.restartWallExcluded || !layout.some((spot) => spot.wall)),
+      takerId,
+    });
+    for (const [id, spot] of assignment.assignments) {
+      placements.set(id, { x: spot.x, y: spot.y });
+      roles.set(id, spot.restartRole);
+      if (spot.wall) wallIds.push(id);
+      if (spot.required && isTaking) takerIds[team] = id;
+    }
+    // Everyone not named in the layout keeps their formation anchor -- but
+    // an anchor is only legal for OPEN PLAY. A kick-off puts every player
+    // in their own half (Law 8), and a ringed restart keeps opponents ten
+    // yards off the ball, so an untouched 4-4-2 anchor would put forwards
+    // across halfway at kick-off and defenders inside the ring at a corner.
+    for (const entry of assignment.unassigned) {
+      placements.set(entry.id, legalRestartAnchor(entry, restart, team));
+      roles.set(entry.id, null);
+    }
+  }
+  return { placements, roles, wallIds, takerId: takerIds[restart.takingTeam] ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Apply
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the complete prospective roster, validates everything, and only
+ * then replaces the live state. Atomic by construction: every failure
+ * returns before a single field of state.roster/state.ball is touched.
+ */
+async function applySetup() {
+  stopMatchSession();
+  const draft = setupDraft();
+  renderSetupStatus("Resolving squads…");
+  const prepared = {};
+  for (const team of ["home", "away"]) {
+    const teamSetup = draft[team];
+    if (!teamSetup.squadKey) {
+      renderSetupStatus(`Choose a ${team} squad before applying.`, "error");
+      return false;
+    }
+    const resolution = await resolveSetupSquad(teamSetup.squadKey);
+    if (!resolution.ok) {
+      renderSquadSelectors();
+      renderSetupStatus(`${team === "home" ? "Home" : "Away"} squad unavailable — ${resolution.reason}`, "error");
+      return false;
+    }
+    reassignSetupTeam(team);
+    const rebuilt = draft[team];
+    const entries = [];
+    for (const slot of rebuilt.slots) {
+      if (!slot.included) continue;
+      const player = setupPlayerFor(rebuilt, slot);
+      if (!player) continue;
+      entries.push({
+        id: `${team}-${slot.slotId}`,
+        role: roleBand(slot.positionalSlot) === "GK" ? "keeper" : "player",
+        team,
+        player,
+        x: slot.x,
+        y: slot.y,
+        zone: zoneFromPercent(slot.x, slot.y),
+        positionalSlot: slot.positionalSlot,
+        tacticalRole: slot.tacticalRole,
+        duty: slot.duty,
+        shootingInstruction: slot.shootingInstruction,
+        tempoInstruction: slot.tempoInstruction,
+        goalkeeperDistribution: slot.goalkeeperDistribution,
+        goalkeeperSweeping: slot.goalkeeperSweeping,
+        withBallAnchor: slot.withBallPosition ? { ...slot.withBallPosition } : null,
+        withoutBallAnchor: slot.withoutBallPosition ? { ...slot.withoutBallPosition } : null,
+        withBallAnchors: Object.fromEntries(Object.entries(slot.withBallPositions ?? {})
+          .map(([zone, point]) => [zone, { ...point }])),
+        withoutBallAnchors: Object.fromEntries(Object.entries(slot.withoutBallPositions ?? {})
+          .map(([zone, point]) => [zone, { ...point }])),
+        // Restart Execution v2 -- the ORIENTED open-play anchor, kept
+        // alongside whatever temporary restart position this entry ends up
+        // with. Once the ball is live the release phase heads back toward
+        // this rather than teleporting onto it, and it is what stops the
+        // ball circulating forever inside a compressed restart shape.
+        formationAnchor: { x: slot.x, y: slot.y },
+        restartRole: null,
+      });
+    }
+    const keepers = entries.filter((entry) => entry.role === "keeper");
+    if (keepers.length !== 1) {
+      renderSetupStatus(`${team} has ${keepers.length} goalkeepers — exactly one is required.`, "error");
+      return false;
+    }
+    prepared[team] = { entries };
+  }
+
+  const validation = validateMatchSetup(draft);
+  if (!validation.valid) {
+    renderSetupStatus(`Setup invalid — ${validation.errors[0]}`, "error");
+    return false;
+  }
+
+  // Restart: build it, place participants, and prove the result is legal
+  // BEFORE anything is committed.
+  const restart = buildRestartDraft();
+  const takerOverrides = {};
+  const chosenTaker = elements.restartTakerSelect?.value;
+  if (chosenTaker) takerOverrides[restart.takingTeam] = chosenTaker;
+  // Each team's standing corner plan travels with its setup, so a corner
+  // built here is the tactic the manager set rather than a fixed template.
+  const cornerPlans = Object.fromEntries(["home", "away"]
+    .map((team) => [team, draft[team]?.cornerPlan ?? null])
+    .filter(([, plan]) => plan));
+  const { placements, roles, wallIds, takerId, corner } = placeRestartParticipants(
+    restart, prepared, { takerOverrides, cornerPlans },
+  );
+  // Carried onto the live state so the delivery and swing the plan produced
+  // are available to whatever executes the restart, and so a captured
+  // scenario can replay the same corner.
+  state.cornerPlans = cornerPlans;
+  state.lastCorner = corner ?? null;
+  if (!takerId) {
+    renderSetupStatus("Could not nominate a restart taker from the authored XI.", "error");
+    return false;
+  }
+  const nominated = { ...restart, takerId };
+  const restartCheck = validateGeneratedRestartSetup(nominated);
+  if (!restartCheck.valid) {
+    renderSetupStatus(`Restart layout illegal — ${restartCheck.errors[0]}`, "error");
+    return false;
+  }
+
+  // Everything above succeeded; only now is the live state replaced.
+  const roster = [...prepared.home.entries, ...prepared.away.entries].map((entry) => {
+    const placed = placements.get(entry.id) ?? { x: entry.x, y: entry.y };
+    return {
+      ...entry,
+      x: placed.x, y: placed.y, zone: zoneFromPercent(placed.x, placed.y),
+      restartRole: roles.get(entry.id) ?? null,
+    };
+  });
+  // Validate the concrete players Apply Setup will actually commit, not
+  // only restartSetup.js's abstract role template. This catches illegal
+  // fallback anchors and assigned opponents inside the required distance.
+  const concreteRestartCheck = validateRestartSetup(nominated, {
+    taking: roster
+      .filter((entry) => entry.team === nominated.takingTeam)
+      .map((entry) => ({ ...entry, required: entry.id === takerId })),
+    defending: roster.filter((entry) => entry.team === nominated.defendingTeam),
+  });
+  if (!concreteRestartCheck.valid) {
+    renderSetupStatus(`Concrete restart layout illegal: ${concreteRestartCheck.errors[0]}`, "error");
+    return false;
+  }
+  state.roster = roster;
+  // Restart Execution v2 -- the taker OWNS the dead ball. "Owns" here means
+  // "is the player standing over it", not "open play has started": the ball
+  // still carries an explicit dead phase and state.pendingRestart stays
+  // authoritative, so Resolve & Play dispatches the restart rather than the
+  // open-play chooser. Without an owner the ball had nobody to be kicked BY.
+  state.ball = {
+    x: nominated.ball.x,
+    y: nominated.ball.y,
+    zone: zoneFromPercent(nominated.ball.x, nominated.ball.y),
+    ownerId: takerId,
+    phase: "dead",
+    deadBall: true,
+  };
+  state.attackingDirection = {
+    home: draft.home.attackingDirection,
+    away: draft.away.attackingDirection,
+  };
+  state.marking = {
+    home: normalizeTeamDefending(draft.home.marking),
+    away: normalizeTeamDefending(draft.away.marking),
+  };
+  state.attacking = {
+    home: normalizeTeamAttacking(draft.home.attacking),
+    away: normalizeTeamAttacking(draft.away.attacking),
+  };
+  state.transition = {
+    home: normalizeTeamTransition(draft.home.transition),
+    away: normalizeTeamTransition(draft.away.transition),
+  };
+  state.restartSetupDraft = nominated;
+  // Ownership means standing over the dead ball; the required action is
+  // still the only route into open play.
+  state.pendingRestart = {
+    type: nominated.type,
+    requiredFirstAction: nominated.requiredFirstAction,
+    takerId,
+    takingTeam: nominated.takingTeam,
+  };
+  stopPlayback();
+  renderPitch();
+  renderRoster();
+  renderActionTable();
+  const warnings = [...(draft.home.lineupWarnings ?? []), ...(draft.away.lineupWarnings ?? [])];
+  renderSetupStatus(
+    `Applied. ${nominated.type} to ${nominated.takingTeam}; Resolve & Play will execute ${nominated.requiredFirstAction}.`
+    + (warnings.length ? ` ${warnings.length} out-of-position note(s).` : ""),
+    warnings.length ? "warn" : "ok",
+  );
+  renderMatchSetupPanel();
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+
+elements.homeSquadSelect?.addEventListener("change", async (event) => {
+  setupDraft().home.squadKey = event.target.value || null;
+  state.selectedSetupSlotId = null;
+  if (event.target.value) {
+    renderSetupStatus("Resolving home squad…");
+    const resolution = await resolveSetupSquad(event.target.value);
+    renderSetupStatus(resolution.ok ? "" : `Home squad unavailable — ${resolution.reason}`, resolution.ok ? "" : "error");
+    if (resolution.ok) reassignSetupTeam("home");
+  }
+  renderMatchSetupPanel();
+});
+
+elements.awaySquadSelect?.addEventListener("change", async (event) => {
+  setupDraft().away.squadKey = event.target.value || null;
+  state.selectedSetupSlotId = null;
+  if (event.target.value) {
+    renderSetupStatus("Resolving away squad…");
+    const resolution = await resolveSetupSquad(event.target.value);
+    renderSetupStatus(resolution.ok ? "" : `Away squad unavailable — ${resolution.reason}`, resolution.ok ? "" : "error");
+    if (resolution.ok) reassignSetupTeam("away");
+  }
+  renderMatchSetupPanel();
+});
+
+elements.formatChoices?.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-format]");
+  if (!button) return;
+  const draft = setupDraft();
+  draft.format = button.dataset.format;
+  // A format button rearranges the SHAPE deterministically. It never rolls
+  // a random side -- Random XI is its own explicit control.
+  state.selectedSetupSlotId = null;
+  reassignSetupTeam("home");
+  reassignSetupTeam("away");
+  renderMatchSetupPanel();
+});
+
+for (const [tab, team] of [[elements.setupHomeTab, "home"], [elements.setupAwayTab, "away"]]) {
+  tab?.addEventListener("click", () => {
+    // Each team keeps its own formation, style and per-slot instructions;
+    // switching tabs only changes which one is on screen.
+    state.setupTeamTab = team;
+    state.selectedSetupSlotId = null;
+    renderMatchSetupPanel();
+  });
+}
+
+elements.formationSelect?.addEventListener("change", (event) => {
+  activeSetupTeam().formation = event.target.value;
+  state.selectedSetupSlotId = null;
+  reassignSetupTeam(state.setupTeamTab);
+  renderMatchSetupPanel();
+});
+
+elements.formationStyleSelect?.addEventListener("change", (event) => {
+  activeSetupTeam().style = event.target.value;
+  state.selectedSetupSlotId = null;
+  reassignSetupTeam(state.setupTeamTab);
+  renderMatchSetupPanel();
+});
+
+elements.tacticsBoard?.addEventListener("click", (event) => {
+  if (suppressTacticsBoardClick) {
+    suppressTacticsBoardClick = false;
+    event.preventDefault();
+    return;
+  }
+  const zone = event.target.closest("[data-phase-zone]");
+  if (zone) {
+    state.setupPhaseZone = clamp(0, 11, Number(zone.dataset.phaseZone) || 0);
+    renderTacticsBoard();
+    renderSlotEditor();
+    return;
+  }
+  const marker = event.target.closest("[data-slot-id]");
+  if (!marker) return;
+  state.selectedSetupSlotId = marker.dataset.slotId;
+  renderTacticsBoard();
+  renderSlotEditor();
+});
+
+let tacticsBoardDrag = null;
+let suppressTacticsBoardClick = false;
+elements.tacticsBoard?.addEventListener("pointerdown", (event) => {
+  const marker = event.target.closest("[data-slot-id]");
+  if (!marker) return;
+  state.selectedSetupSlotId = marker.dataset.slotId;
+  const phaseMapKey = state.setupBoardView === "with-ball" ? "withBallPositions"
+    : state.setupBoardView === "without-ball" ? "withoutBallPositions" : null;
+  const formationDrag = state.setupBoardView === "open-play";
+  if (!phaseMapKey && !formationDrag) return;
+  event.preventDefault();
+  marker.setPointerCapture?.(event.pointerId);
+  const slot = activeSetupTeam().slots.find((item) => item.slotId === state.selectedSetupSlotId);
+  tacticsBoardDrag = {
+    marker, pointerId: event.pointerId, phaseMapKey, formationDrag,
+    phaseZone: String(state.setupPhaseZone),
+    startClientX: event.clientX, startClientY: event.clientY,
+    currentClientX: event.clientX, currentClientY: event.clientY,
+    pendingWorldPoint: null, moved: false,
+    originalPhasePoint: phaseMapKey
+      ? (slot?.[phaseMapKey]?.[String(state.setupPhaseZone)] ? { ...slot[phaseMapKey][String(state.setupPhaseZone)] } : null)
+      : null,
+    manualStarted: slot ? currentSetupPhaseSelection(slot).manual : false,
+  };
+  renderSlotEditor();
+});
+
+elements.tacticsBoard?.addEventListener("pointermove", (event) => {
+  if (!tacticsBoardDrag || event.pointerId !== tacticsBoardDrag.pointerId) return;
+  const rect = elements.tacticsBoard.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const point = {
+    x: clamp(2, 98, (event.clientX - rect.left) / rect.width * 100),
+    y: clamp(2, 98, (event.clientY - rect.top) / rect.height * 100),
+  };
+  tacticsBoardDrag.currentClientX = event.clientX;
+  tacticsBoardDrag.currentClientY = event.clientY;
+  tacticsBoardDrag.moved ||= Math.hypot(
+    event.clientX - tacticsBoardDrag.startClientX,
+    event.clientY - tacticsBoardDrag.startClientY,
+  ) >= 4;
+  const slot = activeSetupTeam().slots.find((item) => item.slotId === state.selectedSetupSlotId);
+  if (!slot) return;
+  const worldPoint = tacticsBoardPoint(point, activeSetupTeam().attackingDirection);
+  tacticsBoardDrag.pendingWorldPoint = worldPoint;
+  if (tacticsBoardDrag.phaseMapKey) {
+    slot[tacticsBoardDrag.phaseMapKey] ||= {};
+    slot[tacticsBoardDrag.phaseMapKey][tacticsBoardDrag.phaseZone] = worldPoint;
+  }
+  tacticsBoardDrag.marker.style.left = `${point.x}%`;
+  tacticsBoardDrag.marker.style.top = `${point.y}%`;
+  if (tacticsBoardDrag.phaseMapKey && !tacticsBoardDrag.manualStarted) {
+    tacticsBoardDrag.manualStarted = true;
+    renderSlotEditor();
+  }
+});
+
+function formationSwapTarget(drag) {
+  if (!drag?.formationDrag) return null;
+  let nearest = null;
+  for (const marker of elements.tacticsBoard.querySelectorAll("[data-slot-id]")) {
+    if (marker === drag.marker) continue;
+    const bounds = marker.getBoundingClientRect();
+    const centerX = bounds.left + bounds.width / 2;
+    const centerY = bounds.top + bounds.height / 2;
+    const distance = Math.hypot(drag.currentClientX - centerX, drag.currentClientY - centerY);
+    const hitRadius = Math.max(24, Math.min(42, Math.hypot(bounds.width, bounds.height) * 0.55));
+    if (distance <= hitRadius && (!nearest || distance < nearest.distance)) {
+      nearest = { slotId: marker.dataset.slotId, distance };
+    }
+  }
+  return nearest?.slotId ?? null;
+}
+
+const finishTacticsBoardDrag = (event, cancelled = false) => {
+  if (!tacticsBoardDrag || event.pointerId !== tacticsBoardDrag.pointerId) return;
+  const drag = tacticsBoardDrag;
+  drag.marker.releasePointerCapture?.(event.pointerId);
+  if (cancelled && drag.phaseMapKey) {
+    const slot = activeSetupTeam().slots.find((item) => item.slotId === drag.marker.dataset.slotId);
+    if (slot) {
+      slot[drag.phaseMapKey] ||= {};
+      if (drag.originalPhasePoint) slot[drag.phaseMapKey][drag.phaseZone] = drag.originalPhasePoint;
+      else delete slot[drag.phaseMapKey][drag.phaseZone];
+    }
+  } else if (drag.formationDrag && drag.moved && drag.pendingWorldPoint) {
+    const result = applyTacticsFormationDrop(
+      activeSetupTeam(),
+      drag.marker.dataset.slotId,
+      drag.pendingWorldPoint,
+      formationSwapTarget(drag),
+    );
+    suppressTacticsBoardClick = result.changed;
+    if (elements.tacticsStatus && result.changed) {
+      elements.tacticsStatus.textContent = result.kind === "swap"
+        ? "Players swapped in the tactical draft. Confirm to apply."
+        : "Formation position moved in the tactical draft. Confirm to apply.";
+    }
+  }
+  tacticsBoardDrag = null;
+  renderTacticsBoard();
+  renderSlotEditor();
+};
+elements.tacticsBoard?.addEventListener("pointerup", finishTacticsBoardDrag);
+elements.tacticsBoard?.addEventListener("pointercancel", (event) => finishTacticsBoardDrag(event, true));
+
+const applySlotInstruction = (patch) => {
+  if (!state.selectedSetupSlotId) return;
+  const draft = setupDraft();
+  draft[state.setupTeamTab] = setSlotInstruction(
+    draft[state.setupTeamTab], state.selectedSetupSlotId, patch,
+  );
+  draft[state.setupTeamTab].squadKey = activeSetupTeam().squadKey;
+  renderTacticsBoard();
+  renderSlotEditor();
+};
+elements.slotRole?.addEventListener("change", (event) => {
+  const slot = activeSetupTeam().slots.find((item) => item.slotId === state.selectedSetupSlotId);
+  if (!slot || currentSetupPhaseSelection(slot).manual) return renderSlotEditor();
+  applySlotInstruction({ tacticalRole: event.target.value });
+});
+elements.slotDuty?.addEventListener("change", (event) => {
+  const slot = activeSetupTeam().slots.find((item) => item.slotId === state.selectedSetupSlotId);
+  if (!slot || currentSetupPhaseSelection(slot).manual) return renderSlotEditor();
+  applySlotInstruction({ duty: event.target.value });
+});
+elements.slotShootingInstruction?.addEventListener("change", (event) => {
+  const shootingInstruction = SHOOTING_INSTRUCTIONS.includes(event.target.value)
+    ? event.target.value
+    : "inherit";
+  applySlotInstruction({ shootingInstruction });
+});
+elements.slotTempoInstruction?.addEventListener("change", (event) => {
+  const tempoInstruction = TEMPO_INSTRUCTIONS.includes(event.target.value)
+    ? event.target.value : "inherit";
+  applySlotInstruction({ tempoInstruction });
+});
+elements.goalkeeperDistribution?.addEventListener("change", (event) => {
+  const goalkeeperDistribution = GOALKEEPER_DISTRIBUTIONS.includes(event.target.value)
+    ? event.target.value : "mixed";
+  applySlotInstruction({ goalkeeperDistribution });
+});
+elements.goalkeeperSweeping?.addEventListener("change", (event) => {
+  const goalkeeperSweeping = GOALKEEPER_SWEEPING.includes(event.target.value)
+    ? event.target.value : "balanced";
+  applySlotInstruction({ goalkeeperSweeping });
+});
+elements.resetPhasePosition?.addEventListener("click", () => {
+  const phaseKey = state.setupBoardView === "with-ball" ? "withBallPosition"
+    : state.setupBoardView === "without-ball" ? "withoutBallPosition" : null;
+  const phaseMapKey = state.setupBoardView === "with-ball" ? "withBallPositions"
+    : state.setupBoardView === "without-ball" ? "withoutBallPositions" : null;
+  if (!phaseMapKey) return;
+  const slot = activeSetupTeam().slots.find((item) => item.slotId === state.selectedSetupSlotId);
+  const positions = { ...(slot?.[phaseMapKey] ?? {}) };
+  const zoned = positions[String(state.setupPhaseZone)];
+  if (zoned) {
+    delete positions[String(state.setupPhaseZone)];
+    applySlotInstruction({ [phaseMapKey]: positions });
+  } else if (phaseKey && slot?.[phaseKey]) {
+    applySlotInstruction({ [phaseKey]: null });
+  }
+});
+elements.slotIncluded?.addEventListener("change", (event) => applySlotInstruction({ included: event.target.checked }));
+
+elements.boardViewChoices?.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-board-view]");
+  if (!button) return;
+  state.setupBoardView = button.dataset.boardView;
+  for (const option of elements.boardViewChoices.children) {
+    option.classList?.toggle("is-selected", option === button);
+  }
+  renderTacticsBoard();
+  renderSlotEditor();
+});
+elements.showRoleMapCheckbox?.addEventListener("change", (event) => {
+  state.showRoleMap = Boolean(event.target.checked);
+  renderTacticsBoard();
+});
+/**
+ * Development diagnostics for the action-pattern layer.
+ *
+ * Strictly read-only: it renders whatever the last evaluation recorded and
+ * touches no simulation state, no roster coordinate and no RNG. The panel
+ * is optional and off by default.
+ */
+function renderPatternDiagnostics() {
+  const host = elements.patternDiagnostics;
+  if (!host) return;
+  const visible = Boolean(elements.showPatternDiagnosticsCheckbox?.checked);
+  host.hidden = !visible;
+  if (!visible) return;
+  const diagnostics = lastActionPatternDiagnostics();
+  host.replaceChildren();
+  if (!diagnostics) {
+    const empty = document.createElement("p");
+    empty.className = "match-lab-setup-note";
+    empty.textContent = "No pattern evaluation yet — run a possession.";
+    host.appendChild(empty);
+    return;
+  }
+  const list = document.createElement("ul");
+  list.className = "match-lab-pattern-list";
+  for (const proposal of diagnostics.proposals ?? []) {
+    const item = document.createElement("li");
+    item.dataset.state = "matched";
+    const slots = Object.entries(proposal.participants ?? {})
+      .map(([slot, id]) => `${slot}=${id}`).join(", ");
+    item.textContent = `${proposal.patternId} → ${proposal.job} (${proposal.actorId})`
+      + (slots ? `  [${slots}]` : "");
+    list.appendChild(item);
+  }
+  for (const rejection of diagnostics.rejections ?? []) {
+    const item = document.createElement("li");
+    item.dataset.state = "rejected";
+    item.textContent = `${rejection.patternId} ✕ ${rejection.stage}: ${rejection.reason}`;
+    list.appendChild(item);
+  }
+  // Dynamic Ball Claim v2 -- the loose-ball race, in the same read-only
+  // panel. The abandonment reasons are the point: "why did nobody chase
+  // that" used to be unanswerable, because nothing recorded it.
+  // Joint pass/run candidates: passer, runner, intended point and region,
+  // delivery, the three arrival times that decide it, and the reason a
+  // rejected idea was rejected.
+  for (const candidate of lastJointCandidateDiagnostics().slice(0, 6)) {
+    const item = document.createElement("li");
+    item.dataset.state = candidate.viable ? "matched" : "rejected";
+    const aim = `(${candidate.intendedPoint.x.toFixed(1)}, ${candidate.intendedPoint.y.toFixed(1)})`;
+    const etas = `ball ${Math.round(candidate.ballEtaMs)}ms / runner ${Math.round(candidate.runnerEtaMs)}ms`
+      + `${Number.isFinite(candidate.defenderEtaMs) ? ` / def ${Math.round(candidate.defenderEtaMs)}ms` : ""}`;
+    const terms = Object.entries(candidate.utilityBreakdown)
+      .filter(([, value]) => value !== 0)
+      .map(([name, value]) => `${name} ${value >= 0 ? "+" : ""}${value.toFixed(2)}`)
+      .join(" ");
+    item.textContent = `${candidate.passerId} → ${candidate.runnerId} `
+      + `${candidate.meetingPointKind} ${aim} ${candidate.region?.id ?? ""} `
+      + `· ${candidate.passType} ${candidate.passDistanceYards.toFixed(0)}yd `
+      + `· ${etas} · margin ${Math.round(candidate.arrivalMarginMs)}ms `
+      + `· lane ${candidate.laneObstruction.toFixed(2)}`
+      + `${candidate.offside?.isOffside ? " · OFFSIDE" : ""}`
+      + `${candidate.viable ? ` · u ${candidate.utility.toFixed(2)} [${terms}]` : ` ✕ ${candidate.rejection}`}`;
+    list.appendChild(item);
+  }
+  const claim = lastBallClaimDiagnostics();
+  if (claim) {
+    const winner = claim.claimant ?? claim.pickup?.entry ?? null;
+    const heading = document.createElement("li");
+    heading.dataset.state = winner ? "matched" : "rejected";
+    heading.textContent = winner
+      ? `loose ball → ${winner.id} ${claim.claimant ? `intercepts at ${Math.round(claim.interceptMs)}ms` : "collects it once it stops"}`
+      : "loose ball → nobody reaches it";
+    list.appendChild(heading);
+    for (const entry of claim.abandoned ?? []) {
+      const item = document.createElement("li");
+      item.dataset.state = "rejected";
+      item.textContent = `  ${entry.id} ✕ abandons: ${entry.reason}`
+        + (entry.shortfallMs > 0 ? ` (short by ${Math.round(entry.shortfallMs)}ms)` : "");
+      list.appendChild(item);
+    }
+  }
+  host.appendChild(list);
+}
+
+function renderFluidityDiagnostics() {
+  const host = document.querySelector("#labFluidityDiagnostics");
+  const visible = Boolean(document.querySelector("#labShowFluidityDiagnostics")?.checked);
+  if (!host) return;
+  host.hidden = !visible;
+  if (!visible) return;
+  host.textContent = state.lastPlan ? JSON.stringify({
+      ...measurePlaybackFluidity(state.lastPlan, { rendererFrameGaps: rendererGapMonitor.snapshot() }),
+      moves: state.lastPlan.intervals.flatMap(interval => interval.moveDiagnostics.map(move => ({
+        eventIndex: interval.eventIndex, code: interval.code, ...move,
+      }))),
+    rebounds: (state.lastTrace || []).filter(event => event.metrics?.rebound).map(event => event.metrics.rebound),
+  }, null, 2) : "Resolve a possession, then reopen this disclosure to inspect its timeline.";
+}
+document.querySelector("#labShowFluidityDiagnostics")?.addEventListener("change", renderFluidityDiagnostics);
+
+elements.showPatternDiagnosticsCheckbox?.addEventListener("change", renderPatternDiagnostics);
+elements.showRestartRolesCheckbox?.addEventListener("change", renderTacticsBoard);
+elements.restartTakerSelect?.addEventListener("change", renderTacticsBoard);
+elements.restartTypeSelect?.addEventListener("change", renderRestartControls);
+elements.restartTeamSelect?.addEventListener("change", () => {
+  renderRestartControls();
+  renderTacticsBoard();
+});
+elements.restartSideSelect?.addEventListener("change", () => {
+  renderRestartControls();
+  renderTacticsBoard();
+});
+
+elements.swapTeamsButton?.addEventListener("click", () => {
+  const draft = setupDraft();
+  const home = draft.home;
+  const away = draft.away;
+  // Swapping means each squad keeps its own shape and instructions but
+  // changes ends, so both teams' slot coordinates are rebuilt for their
+  // new attacking direction rather than mirrored by hand.
+  const homeDirection = away.attackingDirection;
+  draft.home = { ...away, team: "home", attackingDirection: homeDirection };
+  draft.away = { ...home, team: "away", attackingDirection: home.attackingDirection === homeDirection
+    ? (homeDirection === "up" ? "down" : "up")
+    : home.attackingDirection };
+  state.selectedSetupSlotId = null;
+  reassignSetupTeam("home");
+  reassignSetupTeam("away");
+  renderMatchSetupPanel();
+  renderSetupStatus("Teams swapped in the draft. Press Apply Setup to put it on the pitch.");
+});
+
+async function applyFromButton(button) {
+  button.disabled = true;
+  try {
+    await applySetup();
+  } catch (error) {
+    renderSetupStatus(`Apply failed — ${error.message}. The pitch is unchanged.`, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+export function tacticalDraftSlotForEntry(teamDraft, entry) {
+  if (!teamDraft?.slots?.length || !entry) return null;
+  const ownId = String(entry.id).startsWith(`${entry.team}-`)
+    ? String(entry.id).slice(entry.team.length + 1)
+    : null;
+  const playerId = candidateKey(entry.player);
+  // Follow the player assignment first. A formation-board shirt swap keeps
+  // the live roster IDs stable, but assigns each player the other slot's
+  // anchor, role and instructions when the draft is confirmed.
+  return teamDraft.slots.find((item) => item.playerId === playerId)
+    ?? teamDraft.slots.find((item) => item.slotId === ownId)
+    ?? null;
+}
+
+function applyTacticalDraftToMatch() {
+  const draft = setupDraft();
+  state.marking = {
+    home: normalizeTeamDefending(draft.home.marking),
+    away: normalizeTeamDefending(draft.away.marking),
+  };
+  state.attacking = {
+    home: normalizeTeamAttacking(draft.home.attacking),
+    away: normalizeTeamAttacking(draft.away.attacking),
+  };
+  state.transition = {
+    home: normalizeTeamTransition(draft.home.transition),
+    away: normalizeTeamTransition(draft.away.transition),
+  };
+  state.cornerPlans = Object.fromEntries(["home", "away"]
+    .map((team) => [team, draft[team]?.cornerPlan ?? null])
+    .filter(([, plan]) => plan));
+  const updateRoster = (roster = []) => {
+    for (const entry of roster) {
+      const teamDraft = draft[entry.team];
+      if (!teamDraft) continue;
+      const slot = tacticalDraftSlotForEntry(teamDraft, entry);
+      if (!slot) continue;
+      Object.assign(entry, {
+        positionalSlot: slot.positionalSlot,
+        tacticalRole: slot.tacticalRole,
+        duty: slot.duty,
+        shootingInstruction: slot.shootingInstruction,
+        tempoInstruction: slot.tempoInstruction,
+        goalkeeperDistribution: slot.goalkeeperDistribution,
+        goalkeeperSweeping: slot.goalkeeperSweeping,
+        withBallAnchor: slot.withBallPosition ? { ...slot.withBallPosition } : null,
+        withoutBallAnchor: slot.withoutBallPosition ? { ...slot.withoutBallPosition } : null,
+        withBallAnchors: Object.fromEntries(Object.entries(slot.withBallPositions ?? {}).map(([zone, point]) => [zone, { ...point }])),
+        withoutBallAnchors: Object.fromEntries(Object.entries(slot.withoutBallPositions ?? {}).map(([zone, point]) => [zone, { ...point }])),
+        formationAnchor: { x: slot.x, y: slot.y },
+      });
+    }
+  };
+  updateRoster(state.roster);
+  updateRoster(pausedMatch?.continuation?.roster);
+}
+
+function resumeMatchAfterTactics() {
+  if (!pausedMatch) return;
+  const resume = pausedMatch;
+  pausedMatch = null;
+  pendingTacticsTeam = null;
+  activeMatchChunk = null;
+  matchAutoPlay = true;
+  showMainWorkspace("match");
+  if (startMatchButton) startMatchButton.disabled = true;
+  if (stopMatchButton) stopMatchButton.disabled = false;
+  if (elements.tacticsRequestStatus) elements.tacticsRequestStatus.textContent = "Tactical changes confirmed. Play resumes from the stoppage.";
+  matchSession = createMatchSession({
+    simulate: createMatchChunkSimulator(state.seed, { initialElapsedMs: resume.elapsedMs }),
+    initialElapsedMs: resume.elapsedMs,
+    initialIndex: resume.nextIndex,
+    initialContinuation: resume.continuation,
+    onReady: () => { refreshHighlights(); playNextMatchChunk(); },
+    onStatus: ({ error }) => {
+      if (error) { if (matchStatus) matchStatus.textContent = `Match stopped: ${error.message}`; stopMatchSession(); }
+    },
+  });
+  matchSession.start();
+}
+
+elements.applySetupButton?.addEventListener("click", () => applyFromButton(elements.applySetupButton));
+elements.applyTacticsButton?.addEventListener("click", async () => {
+  if (!pausedMatch) {
+    await applyFromButton(elements.applyTacticsButton);
+    return;
+  }
+  elements.applyTacticsButton.disabled = true;
+  try {
+    applyTacticalDraftToMatch();
+    if (elements.tacticsStatus) elements.tacticsStatus.textContent = "Changes confirmed.";
+    resumeMatchAfterTactics();
+  } finally {
+    elements.applyTacticsButton.disabled = false;
+  }
+});
+
+function showMainWorkspace(workspace) {
+  const tactics = workspace === "tactics";
+  if (elements.matchWorkspace) elements.matchWorkspace.hidden = tactics;
+  if (elements.tacticsWorkspace) elements.tacticsWorkspace.hidden = !tactics;
+  elements.matchTab?.setAttribute("aria-selected", String(!tactics));
+  elements.tacticsTab?.setAttribute("aria-selected", String(tactics));
+  elements.matchTab?.classList.toggle("is-selected", !tactics);
+  elements.tacticsTab?.classList.toggle("is-selected", tactics);
+  if (tactics) renderMatchSetupPanel();
+}
+elements.matchTab?.addEventListener("click", () => {
+  if (pausedMatch) {
+    if (elements.tacticsStatus) elements.tacticsStatus.textContent = "Confirm tactical changes before returning to the live match.";
+    return;
+  }
+  showMainWorkspace("match");
+});
+elements.tacticsTab?.addEventListener("click", () => {
+  if (matchSession && matchAutoPlay) requestTactics(state.setupTeamTab || "home");
+  else showMainWorkspace("tactics");
+});
+elements.homeTacticsRequest?.addEventListener("click", () => requestTactics("home"));
+elements.awayTacticsRequest?.addEventListener("click", () => requestTactics("away"));
+elements.matchStatsToggle?.addEventListener("click", () => {
+  const expanded = elements.matchStatsToggle.getAttribute("aria-expanded") !== "true";
+  elements.matchStatsToggle.setAttribute("aria-expanded", String(expanded));
+  if (elements.matchStatsPanel) elements.matchStatsPanel.hidden = !expanded;
+  renderMatchTelemetry(true);
+});
+elements.statsScope?.addEventListener("change", () => renderMatchTelemetry(true));
+
+renderMatchSetupPanel();
+showMainWorkspace("match");
+
+
 export {
+  createMatchChunkSimulator,
   state,
   runConstructedPossession,
   resolvePass,
   resolveDribble,
+  resolveCarry,
+  resolveHold,
+  updateBallCoordsLabel,
+  updateStaminaBar,
+  freshBurst01,
+  drainOnBallAction,
+  burstEffortCost,
+  burstRecoveryTick,
+  burstJobIntensity,
+  applyBurstOffBallJob,
+  downloadCurrentScenario,
+  groupTraceRows,
+  movementDiagnosticMarkup,
+  // Match Setup Integration v1 (2026-09-04) -- exported so
+  // tools/test-match-setup.mjs can drive the real integration (draft edits,
+  // deterministic reassignment, atomic apply) instead of a reimplementation.
+  setupDraft,
+  reassignSetupTeam,
+  renderTeamTacticsControls,
+  renderTacticsBoard,
+  renderSlotEditor,
+  applySetup,
+  elements,
+  cancelPendingRestart,
+  handleAuthoredBallMove,
+  selectRestartTaker,
+  restartPreviewPositions,
+  buildRestartDraft,
+  placeRestartParticipants,
+  resolveSetupSquad,
+  DEFAULT_SETUP_FORMATION,
+  maybeAssignTurnoverStaminaJobs,
+  BURST_BASE,
+  BURST_RANGE,
+  keeperWalkTarget,
+  GK_HOLD_MS,
+  GK_HOLD_MAX_MS,
+  flightLandingVelocity,
+  // Dynamic Ball Claim v2 (2026-09-04) -- exported so tools/test-ball-claim.mjs
+  // can assert on the real race the engine actually ran, rather than
+  // re-deriving it.
+  lastBallClaimDiagnostics,
+  lastJointCandidateDiagnostics,
+  recordJointCandidates,
   resolveCross,
   resolveShoot,
   resolveReboundScramble,
@@ -10200,6 +19421,7 @@ export {
   playbackPointFor,
   applyStepAnimation,
   renderPitch,
+  renderPlaybackFrame,
   seedPlaybackPositions,
   markerNode,
   engagingOpponent,
@@ -10217,7 +19439,6 @@ export {
   attributionEntryMarkup,
   outfieldSlotsFor,
   classifyOutfieldBand,
-  restingBallOffsetPx,
   lateralChannelX,
   labelVisibleFor,
   visionConeRadiusYards,
@@ -10234,9 +19455,15 @@ export {
   relevantHoverAttributes,
   positionGroupFor,
   resolvePassAccuracy,
+  resolveThroughBallAccuracy,
   passFlightDurationMs,
   shotPlacementQuality,
   shotPlacementSpread,
+  resolveShotDescriptor,
+  simulateShotKeeperEnvelope,
+  shotBlockingDefender,
+  shotHeightAtProgress,
+  SHOT_MOUTH_HALF_WIDTH_YARDS,
   freePlayOneOnOneContext,
   resolveFreePlayOneOnOne,
   executeOneOnOneAction,
@@ -10252,4 +19479,16 @@ export {
   sampleContinuousTrajectory,
   earliestReachableInterception,
   CONTACT_REACTION_DELAY_MS,
+  // Passing v3 (2026-08-26) -- re-exported so tools/test-possession-runner.mjs
+  // and tools/test-contact-continuity.mjs can exercise these directly rather
+  // than reverse-engineering them from trace output alone.
+  shouldLeadIntendedPoint,
+  leadIntendedPoint,
+  reboundConversionChance,
+  attackingSettingsFor,
+  setTeamInstruction,
+  setupShirtNumber,
+  matchPitchIsLandscape,
+  matchPitchDisplayPoint,
+  matchPitchWorldPoint,
 };

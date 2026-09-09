@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "wing-oriented opening",
+  "seed": 41003,
+  "formation": "3-4-3",
+  "formationStyle": "Attacking",
+  "attackingDirection": "down",
+  "openingStyle": "wing",
+  "restart": { "type": "kickoff", "variant": "short" },
+  "expectedRestartPlan": { "resolver": "pass", "forcedPassType": null, "targetPreference": "wide" },
+  "expectedJobs": ["wide-outlet-left", "wide-outlet-right", "first-support", "second-support", "rest-defence"]
+}

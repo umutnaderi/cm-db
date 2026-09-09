@@ -154,10 +154,29 @@ export function buildBallTrajectory({
   if (!from || !to) return [];
   const duration = Math.max(1, Number(durationMs) || 400);
   const baseMode = movementMode(movement, ballResult, keeperAction);
-  // A tackle/reception declaration with identical endpoints is not a ball
-  // rolling loose into the player's body. Until an outcome transfers or
-  // releases ownership it remains controlled at the player's feet.
+  // A tackle/touch/dribble declaration with identical endpoints is not a
+  // ball rolling loose into the player's body -- someone already has it,
+  // stationary at their own feet. A RECEPTION is deliberately excluded
+  // (2026-08-28, a real reported bug): its own ballFrom===ballTo window is
+  // the ball sitting where a pass genuinely left it, resting, BEFORE the
+  // receiver has actually arrived -- buildMatchLabPlaybackPlan()'s own
+  // contactArrivalTiming() keeps the receiver's marker still approaching
+  // for real time here, and this override was forcing "controlled-ground"
+  // (the renderer's own atFeet check) the instant this event began, which
+  // snapped the ball straight to the still-arriving receiver's OWN live
+  // position -- a visible teleport, well before their real first touch.
+  // "rolling" (this movement's own base mode already) correctly leaves it
+  // sitting at its own real, independent resting point until the contact
+  // pin actually lands them on it. "scramble" (2026-08-28, same reported
+  // bug) is the identical shape for a loose-ball recovery/rebound
+  // contest: LOOSE.RECOVERED and REBOUND.WON/LOST both declare a
+  // stationary ballFrom===ballTo window (the ball has already settled)
+  // while the real contestants are still physically racing to reach it
+  // -- this override was forcing "controlled-ground" the instant such an
+  // event began, snapping the ball to whichever contestant's OWN live
+  // position, before either of them had actually arrived.
   const mode = sameXY(from, to) && baseMode === "rolling"
+    && movement !== "reception" && movement !== "scramble"
     ? "controlled-ground"
     : baseMode;
   const peak = peakHeightFor(movement, mode, heightCue);
@@ -223,10 +242,19 @@ export function createBallState({
 export function transitionBallState({
   previous = null, endpoint, ownerId = null, ownerRole = null,
   restart = null, trajectory = [], lastTouchId = null, lastTouch = null,
+  // A keeper owning the ball defaults to "held" (in the hands), but a
+  // keeper who has released it to their own feet is still the owner while
+  // no longer holding it -- heldOverride lets a caller that KNOWS which of
+  // those two states this really is (resolveKeeperReleaseToFeet()) say so
+  // explicitly, rather than this always re-deriving "keeper owns it" as
+  // "keeper is holding it," which they're only sometimes the same fact.
+  heldOverride,
 } = {}) {
   const lastSample = trajectory.at(-1) || null;
   const incomingVelocity = cloneVelocity(lastSample?.velocity ?? previous?.velocity);
-  const held = ownerId && ownerRole === "keeper";
+  const keptAtFeet = previous?.ownerId === ownerId && previous?.phase === "controlled-ground";
+  const held = heldOverride !== undefined ? Boolean(heldOverride)
+    : Boolean(ownerId && ownerRole === "keeper" && !keptAtFeet);
   const controlled = Boolean(ownerId);
   const touch = cloneLastTouch(lastTouch);
   const resolvedLastTouchId = touch?.playerId ?? lastTouchId ?? previous?.lastTouchId ?? null;

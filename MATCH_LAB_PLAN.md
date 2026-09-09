@@ -1,5 +1,12 @@
 # Match Lab — Playground Page Plan
 
+> **This file is the implementation history**, in order, with the reported
+> bug or request behind each change. For *architecture* — what the layers
+> are, who owns world state, the intention-versus-movement contract, and
+> the roadmap — see **[`MATCH_ENGINE_ARCHITECTURE.md`](MATCH_ENGINE_ARCHITECTURE.md)**,
+> which is the architectural source of truth. New architectural decisions
+> belong there, not in another long section here.
+
 Status: Phase 1 (shared match-engine core extraction) done. Phase 2
 (`match-lab.html`/`.js`) not started.
 
@@ -66,8 +73,9 @@ for what was kept, changed, or rejected and why.
   based, not freely draggable. Free-dragging players with both the raw
   `x%/y%` position *and* the resulting bucketed engine zone shown side by
   side (e.g. "Visual position: x 88%, y 18% → Engine zone: 2") is better
-  UX than click-a-cell and is still honest about the fact the engine only
-  reasons in 12 zones today (no Action Geometry yet). Reuse the pitch's
+  UX than click-a-cell and is still honest about the legacy 12-zone lookups
+  still present today. Continuous coordinates now own physics, and the 5x6
+  tactical-region lens is a separate derived layer. Reuse the pitch's
   decorative CSS (box/circle/halfway-line) as visual chrome; build the
   drag+bucket interaction fresh.
 - **Extract resolver functions into a shared module — but this has a real,
@@ -6920,3 +6928,790 @@ focused timeline regression authors a delivery, contact, and post-contact
 reshape and verifies the actor is exactly at the ball at contact time, then
 reaches the new tactical position only afterward. Playback build `-05` and
 the browser entry cache keys were bumped with the fix.
+
+## Team Shape & Phase Intelligence v1 — 2026-09-04
+
+Four supplied kickoff references were inspected frame-by-frame. The
+current Match Lab recording showed the failure mode clearly: locally
+reasonable reactions collapsed into the centre, disconnected the lines,
+and repeatedly rebuilt shape from isolated player decisions. Juventus and
+Barcelona supplied the short-build primitives (layoff, passer release,
+split centre-backs, width, staggered outlets and a shifting block); Brazil
+supplied the direct/wing alternative (wide progression, aerial/second-ball
+support and rest defence).
+
+Implemented as engine systems, not a clip script:
+
+- `teamPhase.js` persists restart, release, build-up, progression,
+  final-third, both transitions and defensive block from authoritative
+  facts with entry/exit hysteresis.
+- `teamShape.js` translates formation anchors through phase, role and duty,
+  then reserves complementary possession/defending jobs for the whole team
+  in one deterministic pass.
+- `reactOffBall()` and `reactOffBallContinuous()` now consume coordinated
+  targets. Long windows refresh the team plan in sub-500ms windows and
+  carry exit velocity into each new target through `worldMotion.js`.
+- Restart release is a three-stage 2.4-second live phase. It begins after
+  the physical first touch, moves the taker once they are no longer the
+  owner, and authors every committed displacement (including sub-0.3-yard
+  moves) so the next event cannot jump from an unrecorded position.
+- Kickoff style affects the first real restart plan: possession stays
+  short, direct/long-ball seeks a lofted target with second-ball support,
+  and wing play releases a wide outlet.
+- The optional diagnostics layer exposes phase, role/duty, team job,
+  formation anchor, shape target, intention target, line heights, width,
+  length, occupied lanes, support options, rest defence and clustering.
+
+Acceptance coverage includes three saved deterministic kickoff fixtures
+(`possession-short-build-up`, `direct-second-ball`, and
+`wing-oriented-opening`), pure phase/role/job/shape telemetry tests, and a
+real Match Lab kickoff that proves restart -> restart-release -> build-up,
+split centre-backs, both widths, pivot, staggered support, two-player rest
+defence, one presser plus cover, multi-window kinetics, determinism and
+strict playback continuity.
+
+Not absorbed into this system: loose-ball claimant selection, the
+unreachable through-ball claimant repair, automatic restarts/session clock,
+3D presentation, animation libraries, or global probability retuning.
+Those remain separate boundaries. Action pattern/schema is the next stage;
+Dynamic Ball Claim follows it and must produce authoritative ownership before
+phase/shape reacts to that fact.
+
+## Tactical Region Foundation v1 — 2026-09-04
+
+Implemented a tactical classification layer without changing the continuous
+world or the legacy 12-zone execution path.
+
+- New DOM-free `src/lib/pitchRegions.js` owns five physical lanes and six
+  attacking-direction-relative bands, expressed against the canonical
+  75x120-yard pitch. It exposes dominant classification, stable prefixed ids,
+  mirroring, semantic flags, optional normalized soft boundary weights, and a
+  real-yard hysteresis helper. Every function is deterministic and read-only.
+- `teamShape.js` imports and re-exports the centralized `VERTICAL_LANES` and
+  `laneForX()` bindings. Its exact target planning remains unchanged; after
+  separation it now annotates current/shape/intended regions and reports lane,
+  depth, wide-channel, half-space, job-to-region, and open/occupied-run
+  diagnostics without mutating the roster.
+- Match Lab can optionally draw a subtle 5x6 overlay relative to the current
+  possession side's attacking direction. The HUD reports the ball lane, band,
+  stable id, and the current owner's intended region where one exists. This is
+  presentation-only and is visually/structurally separate from the old 3x4
+  numeric zone model.
+- The legacy `zoneFromPercent()`/`ZONE_CENTERS` path, movement targets,
+  trajectories, contact/interception rules, and RNG streams were not changed.
+  Tactical region values contain no numeric `zone` field and use the
+  `tactical:` prefix, preventing accidental entry into legacy zone arithmetic.
+
+Measured acceptance: `tools/test-pitch-regions.mjs` passes 25/25 checks across
+all five lanes, all six bands from both directions, end-for-end mirroring,
+pitch-consistent left/right, boundary hysteresis, normalized deterministic
+soft weights, coordinate immutability, precise/no-mutation Team Shape
+integration, the optional UI contract, and the unchanged legacy `0..11`
+mapping. The complete package run is 21/23 commands green. The two failures
+are unchanged from the pre-implementation baseline: `test:draft` expects an
+exact CSS whitespace substring, and `test:replay-harness`'s saved
+`repeated-carry-burst-drain` fixture reaches the existing 50-action cap while
+its determinism assertion still passes. Every Team Shape & Phase, motion,
+spatial, Match Setup, and tactical-region suite is green.
+
+### Only forward plan, in dependency order
+
+No additional stages are implied by this plan.
+
+| Stage | Dependency | Module boundary | Problem it solves | Required tests | Explicitly outside |
+| --- | --- | --- | --- | --- | --- |
+| 1. Action pattern/schema | Tactical-region vocabulary and authoritative coordinates | A new pure pattern-schema/fixture module; consumers may propose intentions but never positions | Turns frame-derived football references into parameterized, renderer-independent candidate descriptions | Schema validation, direction mirroring, region references, invalid fixture rejection, and no coordinate writes | Runtime clip scripting, outcome tuning, claimant selection |
+| 2. Dynamic Claim | Stage 1 vocabulary plus current ball/player world state | A new claim/race module before phase/shape ownership facts | Selects who genuinely pursues and reaches a loose or otherwise unclaimed ball, including unreachable through-ball cases | Multi-candidate reach order, nobody-reaches, ownership transfer, direction symmetry, determinism, physical limits | Team-shape target generation, pass-choice scoring, session looping |
+| 3. Joint passer/runner | Dynamic Claim's reach/pitch-control result | Spatial candidate generation; produces paired passer/runner intentions for existing resolvers/motion | Chooses the pass and the run that makes it possible together instead of as independent local acts | Arrival-time ordering, runner legality/offside, interception competition, paired determinism, fallback when no pair is viable | New pass physics, scripted combinations, broad probability tuning |
+| 4. Motion-derived stamina | Stable authoritative trajectories and paired intentions | Fitness cost reads actual speed, acceleration, distance, and elapsed time from motion output | Replaces label/job-name drain with effort actually performed | Equal-label/different-motion cost, recovery, match/burst caps, replay equality, no movement changes | New locomotion physics, medical/injury model, global fitness rebalance |
+| 5. Match session | Dynamic ownership/restarts and motion-derived state are stable | A session state machine above possession/restart execution | Continues play through throws, corners, goal kicks, free kicks, goals, and kickoffs until stopped | Alternating possession, every restart transition, clock/state persistence, deterministic full session, safe stop/resume | League scheduling, substitutions, tactics UI redesign |
+| 6. Renderer-neutral playback | Stable session event/timeline contract | A renderer adapter interface consumed by both current 2D and later renderers | Lets another renderer consume the same authoritative timeline without engine forks | Shared fixture parity, identical sampled state/events, seeking/replay, renderer cannot mutate simulation | Engine behavior changes, renderer-authored physics, a bundled 3D engine rewrite |
+
+## Action Pattern Schema & Registry v1 (2026-09-05)
+
+Roadmap Stage 1: a parameterized action vocabulary and a frame-annotation
+format, so frame-derived observations become small reusable fragments that
+can propose intentions in many different passages instead of being replayed
+as scripted sequences.
+
+Architecture, composition rules, conflict resolution and mirroring are
+documented in [`MATCH_ENGINE_ARCHITECTURE.md`](MATCH_ENGINE_ARCHITECTURE.md)
+under "Action patterns" -- that file remains the architectural source of
+truth. Recorded here for history:
+
+- `src/lib/actionPatternSchema.js` -- declaration format, validation,
+  normalization, mirroring, and the versioned frame-annotation format.
+- `src/lib/actionPatternRegistry.js` -- the declared vocabulary plus the
+  deterministic, RNG-free matcher.
+- `tools/pattern-annotations/*.json` -- four authored observations (V1, V4,
+  V7 and a kickoff-derived passage). Authored notes only: no images, no
+  video, no named players, no absolute coordinates.
+- Six behaviours migrated: vacate-pocket, arc-overlap, peel-square,
+  show-wide, check-decel, run-off-pass. No new synonyms were invented --
+  every declared job name already existed in the engine's vocabulary.
+
+The migration is provable rather than asserted. The original if-chain is
+kept verbatim as `selectSpecialMoverDirect()` and a 40-fixture A/B sweep
+asserts the declarative path agrees with it on the chosen player and the
+chosen target, including on the fixtures where neither fires. The L3 "1
+special run" cap survives as the `special-run` exclusivity group with
+capacity 1.
+
+Measured: 86 new checks in `npm run test:action-patterns`, with
+spatial-decision (285), possession-runner (628) and the rest of the suite
+unchanged.
+
+## Dynamic Ball Claim v2 (2026-09-05)
+
+Two reported defects -- a through-ball chase that follows the ball out of
+play, and loose-ball ownership that never transfers -- shared one cause:
+nothing continuously re-decided who was going for a loose ball. The claim
+was fixed at the instant the ball came loose, from a 320ms look-ahead using
+a different friction model than the roll the ball then actually performed.
+
+Architecture is documented in
+[`MATCH_ENGINE_ARCHITECTURE.md`](MATCH_ENGINE_ARCHITECTURE.md) under
+"Loose-ball claims" -- that file remains the architectural source of truth.
+Recorded here for history:
+
+- `src/lib/ballClaim.js` -- projects the real decelerating roll, races every
+  player against it at 40ms, and reports intercept / pickup / abandon with a
+  reason. Pure, RNG-free, writes nothing, imports no engine module.
+- `selectLooseBallRecovery()` survives as the static fallback for the case
+  it was always right for: a loose ball with no real momentum to race.
+- `pushPitchExitRestart()` gains `pinActorToExit`. A ball that rolls out
+  untouched no longer names the last toucher as a contact actor at the exit
+  point, which is what had been dragging the passer after it.
+- `pattern:claim-loose-ball@1` and the `loose-ball` exclusivity group
+  (capacity 1) state "one player goes for this ball" declaratively.
+
+Measured, over a 120-fixture sweep of unreached deliveries: balls that
+rolled out pinned the passer to the exit point on 9 of 9 before, 0 of 9
+after. The claim-time prediction saw the ball 5.8 yards from where it went
+loose while it genuinely travelled 91.4 yards; both numbers are now tests.
+
+76 new checks in `npm run test:ball-claim`, including a 48-fixture parity
+sweep between the physics reference and the declarative route.
+possession-runner (628), spatial-decision (285), match-setup (285),
+match-lab-setup (144) and the rest of the suite are unchanged, and
+`test-replay-harness`s one documented failure is byte-identical to the
+pre-change baseline.
+
+## Joint Passer/Runner Candidate Generation (2026-09-05)
+
+A pass candidate no longer means "play the ball to a teammate's current
+coordinate." It means "this passer attempts this delivery toward this
+spatial point while this teammate makes a physically reachable run to meet
+it there" -- passer, runner, intended point and delivery generated and
+scored as one object.
+
+Architecture is documented in
+[`MATCH_ENGINE_ARCHITECTURE.md`](MATCH_ENGINE_ARCHITECTURE.md) under
+"Joint pass/run candidates" -- that file remains the architectural source
+of truth. Recorded here for history:
+
+- `src/lib/passRunCandidates.js` -- seven meeting-point kinds, the joint
+  candidate contract, viability against a closed rejection vocabulary, and
+  deterministic scoring. Pure, RNG-free, writes nothing, and a leaf: the
+  pass-flight and lane primitives are injected so it never joins the
+  existing spatialDecision/matchPassFlight import cycle.
+- `generateFreePlayCandidates()` gains an optional `jointDeps`. One
+  teammate still yields exactly one pass candidate and there is still
+  exactly one through-ball candidate, so `chooseCandidate()`'s one draw per
+  candidate is unchanged and replay determinism is preserved.
+- `resolveThroughBall()` no longer falls back to the receiver's own
+  coordinate. A through ball requires a real runner and a real meeting
+  point; without one it is resolved as the ordinary pass it actually is.
+- Delivery trace events now record `intendedPoint` alongside `ballTo`, so
+  the aim can be shown separately from where the ball really went.
+- The exact planned point and pass type now survive into execution. A safe
+  current-position option for a receiver below a 13-point Pace/Acceleration
+  blend is kept at their feet and weighted down from driven-ground to the
+  controlled ground profile. Faster receivers retain driven deliveries, and
+  slower receivers can still be led when their feet option is not viable.
+
+Measured on a 120-fixture sweep of deep deliveries, against the Stage 2
+baseline: unreached deliveries that ran out of play fell from 20 to 14, and
+the receiver's shortfall when they did not reach it fell from 8.20 to 4.10
+yards on average (max 14.04 to 8.35). The ball is now aimed somewhere the
+runner can actually get to.
+
+Two calibration errors were caught by the recorded bug scenarios and are
+worth remembering. Scoring arrival and defender contest on a pass to feet
+double-counts the existing utility's lane and pressure terms, which
+collapsed passing into hold/dribble streaks. And offering a through ball
+from any forward meeting point, rather than from a genuine run-in-behind
+job, made `congested-pass-loop` start looping again.
+
+93 checks in `npm run test:pass-run-candidates`. possession-runner
+(628), spatial-decision (285), match-setup (285), match-lab-setup (144),
+action-patterns (86), ball-claim (76) and the rest of the suite are
+unchanged, and `test-replay-harness` is byte-identical to the pre-change
+baseline.
+
+## Playback Fluidity v1 -- partial (2026-09-05)
+
+Stage 4 Part A, partially delivered. The reported "players freeze at every
+adjust and choice" was measured first, and the premise turned out to be
+wrong in a useful way: `ACTION.CHOICE` already costs zero wall clock (40 of
+40 intervals), and `ATT.ADJUST`/`DEF.ADJUST` already overlap correctly (0 of
+61 non-overlapping each). Compute is not involved at all -- resolving a
+possession and compiling its plan costs about 90ms and produces about 46
+seconds of playback, a ratio of 1:518.
+
+Two real causes were found and two were fixed:
+
+- **Contest outcomes nobody wins authored no movement.** `T.LOOSE.DEFLECT`
+  and `P.HOLD.SHIELD.LOST` returned no player positions on the reasoning
+  that there is no winner to place, so both bodies froze on the contact
+  point while only the ball moved. The winning branches already separated
+  both players with real trajectories; this was an omission, not a different
+  mechanic. `reaction.separation` now carries the physical fact for every
+  outcome, kept separate from winner/loser, which remain the possession fact.
+- **Long windows were run flat out and then held.** A positional job given a
+  six-second window covered its seven yards in about two seconds and stood
+  still for four. Consecutive shape beats that resolve to the same target
+  are now merged into one leg, and `advanceMotion()` paces that leg across
+  its real window using `sampleContinuousTrajectory`'s existing
+  `paceToArrival`. Chasing intentions are excluded by name and still run
+  flat out.
+
+Measured across 25 possessions: freezes longer than 300ms fell from 50 to
+28, all-static wall clock from 6.97% to 5.03%, and orphaned windows from
+11.20s of `P.HOLD.SHIELD.LOST` alone to none of that class at all.
+
+Two new harness diagnostics were added and are deliberately left reporting
+real remaining defects: `no-orphaned-intervals` and `no-frozen-playback`.
+
+A negative result worth keeping: interleaving an off-ball reaction through
+`P.HOLD` removes its 400ms orphan, but moving ten players during a hold
+changes their positions, changes the next decision, and measurably re-broke
+the recorded `congested-pass-loop` scenario. Reverted rather than traded for
+a worse regression; the freeze needs a fix that does not feed back into
+candidate generation.
+
+`test-motion-arbitration`'s reversal check now measures per track rather
+than per keyframe -- the fix legitimately deleted ~28% of keyframes in which
+nothing happened, which the old ratio scored as a regression. Measured after:
+27 tracks carry a reversal, at most 2 each, dominated by playback's
+pre-existing contact re-pin.
+
+Part B (parry and post/crossbar rebound physics) is NOT started.
+
+---
+
+## Playback Fluidity v1 -- complete, and Rebound Realism v1 (2026-09-06)
+
+Stage 4 finished. Part B landed (`src/lib/ballReboundPhysics.js`,
+`src/lib/matchFluidityDiagnostics.js`), and Part A's two remaining defects
+were found by re-measuring rather than by re-reading the original diagnosis.
+
+Both were artificial, not football, and both were in the *reporting* of
+motion rather than in the decision to move:
+
+- **There was no deceleration model at all.** `reachIn()`/`speedAtElapsed()`
+  described getting up to speed; nothing described coming off it, so a leg
+  that reached its target had its velocity assigned zero. On the real sweep
+  that is a genuine discontinuity: a defender covering across during a
+  `DEF.ADJUST` window was travelling 3.7 yd/s at one playback keyframe and 0
+  at the next, with the position track showing a constant approach and then
+  a dead stop. `decelerationRate()`/`brakingDistance()`/`brakingSeconds()`
+  (playerKinetics) and `arrivalBrakeProfile()` (matchMovementTiming) now
+  plan a completed leg as accelerate -> cruise -> brake to rest ON the
+  target. Applied only when the leg genuinely ends there (never to a carry's
+  per-touch waypoint, which would re-create go-stop-go) and only when the
+  whole profile fits the window, so the authoritative endpoint is unchanged
+  by construction. Early-finished frozen tracks: 82 -> 21.
+
+- **Contact pins erased momentum.** The contact-pin keyframe carried no
+  velocity; `appendKeyframe()` stores that as null, and a null tangent makes
+  hermite decelerate into the pin and re-accelerate out of it -- the same
+  go-stop-go signature this file has fixed twice before, reappearing once
+  per contact. Every carry touch declares a contact, so a five-touch carry
+  planted the carrier five times. The pin now samples the player's real
+  momentum before pinning, exactly as `arbitrateSegment()` already does on
+  supersede. The pinned position is unchanged.
+
+Measured on the identical 15-fixture sweep: fully-static live play 6.97% ->
+0.19%, physical freezes over 300ms 50 -> 0, longest physical freeze 627ms ->
+140ms, orphaned intervals 105 -> 0, physical-limit violations 0.
+
+Velocity seams fell 1172 -> 1093 and, more usefully, changed character:
+828 of the remainder are direction changes at speed, 245 are genuine braking
+now that arrivals decelerate, 20 are launches from rest. None are fabricated
+zero-momentum keyframes any more.
+
+**A parry now follows from the save.** `parryBallVelocity()` branched on
+`handling >= 12`, a step on an attribute, which measured 792 `parry-wide`
+and zero `parry-dangerous` across 4000 shots at a Handling-12 keeper -- the
+dangerous branch was in the vocabulary and never once happened. Control is
+now the keeper's Handling discounted by shot pace and by how far they had to
+reach; the same 4000 shots give 432 wide and 360 dangerous, with goals
+unchanged at 766 and no `K.SAVE.*` selection weight touched.
+
+Known remaining defect, deliberately left in the backlog rather than rushed:
+**carry path continuity.** The last `P.CARRY.TOUCH` and the final `P.CARRY`
+leg can point in materially different directions, so the carrier reverses
+laterally at that seam (worst measured 16.4 yd/s of direction change). That
+is carry *geometry*, not a timeline artefact, and changing it moves
+simulation coordinates -- the exact feedback path that re-broke
+`congested-pass-loop` last time.
+
+---
+
+## Keeper dives, and Stamina from real motion (2026-09-06)
+
+### A keeper could not physically reach shots they should save
+
+The one-on-one calibration test had been left visibly failing at 87.3% while
+the keeper travel model was tuned. The cause was not the save rolls: measured,
+1758 of 1758 shots to the keeper's open side scored, meaning
+`simulateShotKeeperEnvelope()` never reported `reached` at all and the save
+flavour was never consulted.
+
+`reachIn()` is a runner building speed from a standstill, and over the two or
+three tenths of a second a keeper actually has that is 0.15 yd of ground. With
+only a static arm allowance on top, the whole envelope was about two yards.
+
+The earlier attempt at this replaced keeper travel with
+`topSpeed * KEEPER_LOCOMOTION_FACTOR * t`, and that was correctly reverted: a
+constant speed removes Acceleration from goalkeeping entirely, and
+`test-stage4-review.mjs` now asserts against exactly that. The real answer is
+that a dive is a DIFFERENT ACTION -- one explosive push off one leg -- not
+faster running. `diveLaunchSpeedYps()`/`diveReachYards()` (playerKinetics,
+Agility + Jumping, capped at `DIVE_COMMIT_SECONDS`) supply it, and the
+envelope makes the keeper choose, because a dive costs the time it takes:
+
+    travel = max( run(available), run(available - dive) + diveGround(dive) )
+
+Diving wins when there is too little time to build running speed; staying up
+wins over a long window, which is what keeps Acceleration decisive there.
+Calibrated to 65.2% on the recorded fixture (band 51-75%), mid-band rather
+than on an edge. Full-stretch reach 3.9 yd elite / 2.8 yd poor, against a flat
+2.1 / 1.7 before. No other suite moved.
+
+### Stamina stopped reading job names
+
+`burstJobIntensity(action)` was a lookup keyed by what a move was CALLED, and
+speed appeared nowhere in the cost. So the same eight yards cost 0.85 under
+`run-in-behind` and cost nothing at all under `hold-width` -- a defender who
+genuinely sprinted eight yards to hold a line RECOVERED stamina for it -- and
+an unlisted job silently priced at 0.5.
+
+`src/lib/motionEffort.js` derives it from the motion instead. Nothing new had
+to be measured: `advanceMotion()` already returns distance, window, and entry
+and exit speeds. Load is the fraction of THAT player's own top speed
+(deliberately per-player -- six yards in a second is a stroll for one and flat
+out for another), made convex because the last fraction toward top speed is
+disproportionately expensive, plus a surcharge for changing speed that reads
+magnitude not sign, since braking is eccentric loading rather than rest.
+Recovery follows from going slowly, which is the actual reason a player
+recovers, and that is what retires the hand-maintained refill-job list.
+
+`EFFORT_REFERENCE_YARDS` is deliberately left at the label model's own 40.
+This pass moved where intensity COMES FROM; re-pricing every action is a
+separate, evidence-led decision and was not bundled in.
+
+Measured on `repeated-carry-burst-drain`, the fixture recorded for the
+reported "full sprint gets denied a few touches in" bug: the attacker used to
+be refused full sprint after about four carries at 6% burst, and now sustains
+26 carry actions with zero denials.
+
+Side effect on Stage 4's own numbers: velocity seams 1093 -> 878 and
+early-finished tracks 21 -> 19, because players are no longer drained or
+refilled against something other than what they did.
+
+`congested-pass-loop` still passes, which is the check that mattered -- this
+changes burst, burst changes gait selection, and gait selection changes
+coordinates.
+
+One test moved, and it is worth naming rather than burying. `test-possession-
+runner` asserted that a `show-wide` player who covered 4 yards in 900ms --
+53% of their own top speed, a genuine run -- GAINED stamina, because the job
+was on the refill list. That is the defect this stage removes, so the
+assertion now tests the real claim underneath it in both directions: the same
+job ambled (4yd over 3.6s) still recovers, the same job sprinted now costs,
+and a caller with no measurable window still gets the registered list. Three
+checks where there was one; nothing was weakened to make anything pass.
+
+Condition still does NOT feed back into locomotion. That is Stage 5b and a
+much larger behavioural change; both stage tests assert the boundary holds
+until it is opened deliberately.
+
+---
+
+## Corners become a manager instruction (2026-09-06)
+
+Measured first, because the old layout was worse than it looked. A real 22 on
+a right-side corner put **3 attackers and 5 defenders in the penalty area**.
+The corner template named seven roles a side and
+`placeRestartParticipants()` left everyone else on their open-play formation
+anchor, so the defending team's striker stood 103.2 yards away -- on the
+opposite goal line -- while a corner came into his own box. Their left-back
+sat 26 yards out and 25 wide, doing nothing. Defenders occupied an 8-yard
+band with nothing covering the far post beyond -4 yards.
+
+`src/lib/cornerSetup.js` makes a role a KIND WITH A COUNT. Runners, keeper
+occupiers, rest defence and markers are unbounded; `short-option` caps at two;
+post cover can be set to zero on purpose; extra players at one role fan out
+rather than stack (deeper for runners, straddling the anchor for wide roles).
+Anyone unassigned crowds the box -- that default is the actual fix, and a
+sparse spec now yields `box-crowd: 8`, all genuinely inside the area and none
+on the same coordinate.
+
+Coordinates are authored in manager units (yards out from the goal line, yards
+either side of centre, signed toward the corner). The old table was
+flag-relative, which is how a "near-post runner 8 yards from the flag" ended
+up 33 yards from the near post.
+
+Swing follows the foot, which is real data here: right foot from the right
+corner is an out-swinger, from the left an in-swinger, mirrored for a left
+foot, and two equally good feet give a straight ball rather than a guessed
+curl.
+
+Defending resolves against the attack that was actually set up, because
+markers have to know who they mark. Each marker stands goal-side at a distance
+set by tightness; unassigned defenders pick up whoever is unmarked before
+crowding; a short option pulls a defender out whether or not one was asked
+for. The resolver returns `unmarkedCount`, so committing three players to the
+counter reports three attackers unmarked instead of hiding it.
+
+**"Mark their tall players" could not be built as asked.** There is no height
+in this dataset -- `Height` resolves as a baseline inference from current
+ability (confidence 0.35), never as stated data -- so `aerialThreat()` uses
+Heading, Jumping and Strength, which are real. Flagged rather than silently
+substituted; if height is ever imported it can go in behind the same function.
+
+Two layers, chosen deliberately: the team's standing plan on
+`createTeamSetup().cornerPlan`, and a per-corner override on
+`createRestartSetup().cornerOverride`. The override is PARTIAL -- counts and
+assignments merge key by key so changing one role leaves the other ten alone,
+while scalars replace outright because there is no partial version of "aim it
+at the far post". Neither input is mutated. Both plans are captured in the
+scenario's `tacticalSettings`, so a possession ending in a corner replays
+identically; a scenario captured before the field existed is unaffected.
+
+End to end on a real 22: team default (2 far-post runners, delivery far-post,
+away tightness 4) gives 5 attackers and 9 defenders in the box; a per-corner
+override raising near-post runners to 3 takes the attack to 7 in the box and
+reports one more attacker unmarked.
+
+The goalkeeper keeps the existing goal-anchored spot from the restart layout
+rather than being re-derived -- his corner position is goalkeeping, not a role
+the manager assigns, and the old anchor already shades him toward the corner
+the ball comes from. `test-match-lab-setup` caught that when the first version
+lost the shading.
+
+111 checks in `npm run test:corner-setup`.
+
+Not yet done: no Match Lab UI for either layer, and the delivery target and
+swing are produced but not yet consumed by restart EXECUTION -- the corner is
+placed correctly, and taking it still uses the existing path.
+
+---
+
+## Stamina from distance covered (2026-09-06)
+
+Reported: stamina drains too quickly, and randomly. Two different bugs, one
+measurement each, and the fix the user named -- track distance covered -- is
+the right one for both.
+
+**Quickly.** Stage 5 deliberately kept the label model's
+`EFFORT_REFERENCE_YARDS = 40` so that pass could move where intensity came
+from without simultaneously re-pricing everything, and flagged re-pricing as a
+separate evidence-led decision. This is that decision. Measured over one
+68-second possession, a midfielder covered 179 yards. That is not a lot of
+running -- it extrapolates to about 9.5 km over 90 minutes, which is what a
+real midfielder does -- but at 40 yards to the tank it is four and a half
+tanks for a minute of football. Re-priced to 250, calibrated against what the
+burst tank models: about seven hard 40-yard sprints to empty, refilling in
+roughly 40 seconds of rest.
+
+**Randomly.** This one was not tuning. Recovery was an all-or-nothing branch
+on `RECOVERY_LOAD_CEILING = 0.28`, and an ordinary jog measured at load 0.29 --
+sitting exactly on the threshold. Each of the ~50 authored moves in a
+possession independently landed one side or the other, so the same player
+drained or recovered depending on nothing more than how their running happened
+to be chopped into events. Two players doing identical work finished in
+completely different places.
+
+`netBurstChange()` replaces the branch with one continuous signed rate.
+Recovery fades linearly to nothing as load approaches the ceiling instead of
+switching off at it, and both terms always apply -- a player recovers a little
+while working and pays a little while strolling, and the balance decides the
+sign. It is also partition-invariant: splitting an interval and applying it
+twice equals applying it once, so the answer no longer depends on how the
+timeline was cut. Both are asserted.
+
+`distanceCoveredYards` and `activeMs` are now accumulated per player as real
+match state. That is worth having in its own right -- a manager wants to see
+how far a player has run -- and it is the honest basis for match-long
+condition later, rather than a count of how many events named them.
+
+Measured after, on the same fixtures:
+
+| | Before | After |
+| --- | --- | --- |
+| Distance per 90min equivalent | not tracked | 6.4-11.7 km (real: 9-12) |
+| Burst change over a 70s possession | multiple tanks | -0.07 to +0.12 |
+| Full-sprint denials on the carry fixture | several | 0 |
+| Jog at the old threshold | drained or recovered at random | smooth -0.0022 |
+
+Condition still does not feed back into locomotion; both stage tests still
+assert that boundary.
+
+---
+
+## A held ball is wherever the holder is (2026-09-07)
+
+Reported: during `GK.HOLD` the keeper walks the ball around his box and the
+ball is not where his circle is.
+
+The event supplied `ballFrom`/`ballTo` and nothing else, so playback
+interpolated the ball along a straight line between those two endpoints while
+the keeper followed his real accelerate-and-settle trajectory over the same
+window. They started together and finished together, and came apart in the
+middle. Measured on the offending event: the keeper walks 3.29 yards over the
+full six-second law-of-the-game hold, and the straight-line ball drifts up to
+**2.47 yards** away from him -- three quarters of the entire walk. He stands
+still through his reaction delay while the "ball" has already set off.
+
+`heldBallTrajectory()` is `carryLegBallTrajectory()` without the lead. A
+carried ball is knocked ahead of the carrier and earns
+`CARRY_BALL_LEAD_YARDS`; a held ball is not knocked anywhere, so it takes the
+holder's own samples exactly. The first sample stays pinned to the ball's
+previous resting point, because `addBallTrajectory()` rejects a discontinuity
+outright. Worst gap after: 0.057 yards.
+
+A scan for the same mistake elsewhere -- any event with a ballFrom/ballTo, a
+real duration, and an authored move for the ball's own owner, but no
+`ballTrajectory` -- found **no other instance**. Carries, passes and rebounds
+all already author a real path.
+
+### The invariant took three attempts, and the first two were worthless
+
+Worth recording, because both failure modes are easy to ship without noticing.
+
+1. It read `frame.ball.mode` off `samplePlanFrame()`, which returns player
+   positions only -- no ball, no owner. The branch never executed, so the
+   assertion passed without ever testing anything, and the `yardDistance` it
+   would have needed was not even imported.
+2. Fixed to read the real tracks, it then keyed on the ball track's own
+   `state === "held"`. That label is written by whatever authored the
+   trajectory, so an event supplying no trajectory -- exactly the bug -- never
+   carried it. Reintroducing the bug still passed.
+
+It now keys on the resolver's own `ballResult: "held"`, which is present
+whether or not a path was authored. And it still would have been vacuous,
+because **none of the three saved scenarios contains a keeper hold at all**.
+`keeper-hold-walk.json` (seed 7) was captured for it. With the fix reverted the
+assertion now reports "during GK.HOLD the ball was 2.47 yards from keeper, who
+was holding it, at t=27118ms"; with the fix it passes.
+
+An invariant is only worth what the fixture that exercises it is worth.
+
+
+## Stage 4 takeover review and keeper contact parity (2026-09-07)
+
+Reviewed the intervening body-separation, release-contact, keeper carry,
+dive, braking, parry, stamina and corner changes before resuming. Retained
+physical target separation and the later stamina/corner work. Removed
+sample-time/checkpoint separation that concealed overlaps, idle-body
+relocation during contact scans, and delayed close-range pass contact.
+The keeper's shortened/reversed carry route is scored at its real target.
+
+The later dive fix restored the intended keeper calibration, but only the
+save envelope used it; the shot still authored a running-only body path.
+Both now call the same worldMotion action model. A catch uses an explicit
+body point within hand reach and does not schedule a second dive after the
+shot already made contact. The old test requiring that second movement
+was replaced with checks of the incoming shot trajectory, reached body
+point and hand allowance. Added a non-vacuous saved-replay integration
+check so the motion-model field cannot silently disappear in traceEvent.
+Also replaced the parry monotonicity test's always-true clauses with a
+real prohibition on wide-to-dangerous reversal as Handling increases.
+No save-selection function or calibration threshold changed in this review.
+
+The earlier delivered table mixed player-only and ball-inclusive stillness.
+The corrected comparison and remaining failures are in STAGE4_REPORT.md
+and the roadmap. Current motion-derived stamina and corner setup are
+preserved. No browser was connected for visual verification.
+
+
+## Anderson cannot burst away from Sensini: dribble timing fix (2026-09-07)
+
+Reported with screenshots: Pace-17 Sonny Anderson appears slow while carrying
+and Pace-12 Nestor Sensini closes easily. Reproduced: sprint touch positions
+averaged 3.74 yd/s late in the carry while velocity metadata claimed 9.63.
+Cold-start ball impulses, a missed close-touch interception and paced body
+movement stretched the carry; pursuers received all of that extra time.
+Outgoing carrier momentum was also missing at the next action, and the final
+leg retained a fixed duration/stopping behavior.
+
+Running impulses, signed first-contact timing, unpaced physical pursuit and
+committed carrier velocity now agree. A 24-yard controlled reproduction falls
+from 6.30 to 3.344 seconds; the slower pursuer's 6-yard gap grows to 9.39 rather
+than shrinking to 1.5. No player-name special case or defender nerf was used.
+
+Changed timing exposed two old reception moves that credited foot reach as
+body travel; their motion now overlaps the flight with separate body/contact
+points. Keeper and reception tests were updated to exercise those contracts,
+with no weakened reach, calibration or replay thresholds. 29/30 suites pass;
+the congested replay now reaches the unchanged 50-action guard while the
+previous repeated-carry fixture resolves. See DRIBBLE_PACE_REPORT.md.
+
+## Keeper rush and goal cover (2026-09-07)
+
+Implemented the requested keeper sweep/close-down/recovery behavior and a
+defender's goal-covering response. Decisions use own attributes and visible
+geometry; worldMotion and the live pass race decide contact. Claims,
+spills and miskicks leave real held/loose states. Existing save-flavor
+selection is unchanged. Fixed the newly exposed release/carry/held loop;
+all saved replay scenarios now resolve without changing the action guard.
+See KEEPER_RUSH_REPORT.md for tests, measurements and remaining limitations.
+
+### Wide-angle close-down correction (2026-09-08)
+
+The close-down decision now shares the one-on-one resolver's structural
+geometry: no more than 24 yards from the goal, at least a 16-degree view of
+the mouth, the keeper still goal-side, and no outfield defender within the
+nine-yard recovery radius or protecting the shot lane. The previous keeper
+rule used only a 28-yard depth and a narrow local screen check, so it chased
+wide carriers even when staying set was the sound decision. Through-ball
+sweeps remain a separate visible-velocity race and are unchanged.
+
+### Held-ball distance correction (2026-09-07)
+
+`GK.HOLD` no longer treats a nearby attacker as pressure. Opponents keep a
+9.15m target distance through the keeper's walk, with physical retreat and
+no press/delay job. Dropping the ball restores the ordinary press decision.
+
+## Crossed-header goalkeeper contact fix — 2026-09-07
+
+The reported Kluivert-to-Francescoli sequence declared that Michael
+Stensgaard caught an on-target header while playback left the ball near the
+frame and only then moved the goalkeeper toward it. Two stale boundaries were
+responsible. `F.HEADER` completed the whole ball flight before `K.SAVE.1`
+started a separate keeper move, and that header flight still originated from
+the receiver's pre-cross roster coordinate after `X1` had already moved him to
+the delivery contact point.
+
+On-target headers now use a real distance-based flight from the aerial contact
+point. The existing goalkeeper reach envelope and keeper run/dive trajectory
+run concurrently with that flight. A reachable save stops the header at the
+first ball/body envelope; the save event records that exact ball point and
+body point, and a catch spends only 120ms settling the ball into the keeper's
+body. If the envelope never reaches the shot, the keeper is beaten and cannot
+receive a catch, parry or tip result. Existing `resolveFinishAttempt()` and
+`resolveKeeperSave()` header weighting remains unchanged after physical reach.
+
+`tools/test-cross-resolution.mjs` now builds an interleaved cross with a prior
+`GK.ADJUST`, finds a deterministic non-trivial catch, compiles the complete
+playback plan, and asserts ball/keeper proximity at contact plus exact held
+co-location after the catch. A second sweep proves a distant goalkeeper is
+never awarded a save. The same test also caught and now covers the stale
+pre-cross header origin.
+
+## Extreme shot value and miss-arrival audio (2026-09-08)
+
+The reported Jorginho sequence exposed a structural candidate bug rather than
+an unusually aggressive utility roll. At roughly 46m, his attributes
+made `shoot` legally available even though its utility had already fallen to
+near zero. Because that one candidate existed, the post-shield fallback never
+restored `carry`; with no legal pass or repeat duel, the engine was forced to
+select the shot.
+
+Ordinary attempts are available to 32m. A player with at least 16 Long Shots
+(or the historical database's Shooting equivalent) and 13 Technique can try
+from as far as 40m. From 40m to 50m the same specialist additionally needs a
+visibly exposed goal: no goalkeeper, a goalkeeper well off the line, or major
+lateral displacement. A speculative shot beyond 32m no longer suppresses the
+post-shield safety carry, so legality never makes the shot mandatory.
+
+Long-range confidence now contributes directly to shot-choice utility using
+Long Shots/Shooting, Technique and Composure. The new shooting instruction
+is a separate manager bias: Shoot less, Balanced or Shoot more. It is authored
+as a team default with an optional per-player override, then travels with that
+player into the live decision. In the fixed 40m regression,
+an elite specialist chooses the attempt about 5% of the time on Balanced and
+30% on Shoot more; Shoot less reduces it to zero in the same 4,000-choice
+deterministic sweep. The instruction changes selection only, not accuracy or
+shot execution.
+
+Off-target audio had a separate clock mismatch. The trace correctly authored
+each shot's distance- and finish-dependent flight duration, but timeline
+playback called `playEvent()` at the strike; its generic 260ms miss delay could
+therefore finish while a slower ball was still travelling. Failed shot/header
+cues now retain their visual event at contact and add a terminal audio time at
+the exact event endpoint. The renderer dispatches the miss sound and result
+badge on that playback boundary, so pause, speed changes, stepping and replay
+all remain synchronized to the sampled ball trajectory.
+
+## Full tactics workspace and WIB/WOB positioning (2026-09-08)
+
+Tactics no longer share the narrow Match Setup column. Match Lab now has two
+main workspaces: Match for squads, the restart and simulation, and Tactics for
+the complete tactical draft. The full-width tactics screen separates team
+instructions, the positioning board and the selected player's instructions.
+Both Apply buttons commit through the same atomic `applySetup()` path.
+
+Team tactics now own default shooting and tempo instructions. An outfield
+player starts at `inherit`; only an explicit player setting replaces the team
+value. Tempo changes the relative appeal of releasing the ball versus holding
+it and remains a choice bias, not animation speed. Goalkeepers do not accept
+shooting or tempo instructions. Their player panel instead supplies short,
+mixed or long distribution plus cautious, balanced or aggressive sweeping.
+Distribution biases the existing legal keeper-release candidates. Sweeping
+changes the margin a keeper accepts in the visible ball/attacker arrival race
+and how far they commit on an eligible close-down; it never awards contact or
+changes handling execution.
+
+CM01/02-style With Ball and Without Ball positioning is included as an
+optional layer on each formation slot for each of twelve ball zones. The full
+pitch editor shows the active ball zone, keeps the base formation as faint
+reference markers and permits phase positions to be dragged or reset
+individually. An untouched player/zone combination inherits the formation
+anchor. During play, the coordinated team-shape planner derives the ball zone
+from its continuous coordinate, selects the relevant phase anchor first, then
+applies the existing role, duty, ball-side shift, reserved team job, separation
+and physical movement layers. Restarts retain the base formation reference
+until the ball becomes live. This binding makes WIB/WOB the manager's
+positional intent inside the current tactics model rather than a second
+movement engine.
+
+Tactical roles are now selected from the player's exact formation position,
+not a shared goalkeeper/defender/midfielder/forward list. DL and DR offer
+full-back families; DMC offers defensive midfielder, ball-winner, anchor,
+half-back, deep-lying playmaker, regista and segundo volante; the other slot
+families have corresponding central, wide, attacking and forward roles. The
+same catalogue drives the dropdown, setup creation and validation, so an
+incompatible role cannot enter the simulation through a direct model edit.
+Changing formation keeps an instruction only when the new positional slot
+supports it and otherwise restores that position's coherent default. These
+roles also have distinct team-shape offsets and job affinities, so the choice
+affects movement rather than serving as a display label.
+
+The team-tactics column follows the same Home/Away tab as the positioning
+board. It shows only the active side's marking and attacking controls and
+updates its heading with that side, while both teams' draft values remain
+stored independently when the manager switches tabs.
+
+Selecting a formation marker can now draw a pixelated role-allocation map
+behind the team. The grid is 15 columns by 24 rows on the 75-by-120-yard
+pitch, making every pixel a 5-by-5-yard (4.6-by-4.6-metre) area. Its
+intensity is calculated from the same phase-aware role target used by live
+team shape, sampled across all twelve ball areas. Exact position, tactical
+role, duty, WIB/WOB anchors and the current Formation/With ball/Without ball
+view all affect the result. A board-level switch hides the overlay without
+changing any tactical instruction; restart view suppresses it because the
+authored restart layout is authoritative there.
+
+Historical presets may now declare exact occurrence-aware lineup slots, such
+as `DC#0`, `DC#1`, `FC#0` and `FC#1`. The maximum-weight lineup solver treats
+these as authoritative match-lineup evidence while retaining its ordinary
+position-fit fallback whenever a preset or formation has no matching key.
+Manchester United 1999 now loads Irwin-Stam-Johnsen-Neville,
+Blomqvist-Butt-Beckham-Giggs and Cole-Yorke from left to right. Liverpool 2001
+loads Carragher-Hyypia-Henchoz-Babbel, Murphy-McAllister-Hamann-Gerrard and
+Heskey-Owen; Danny Murphy replaces the later-era John Arne Riise entry in that
+specific 2001 XI.

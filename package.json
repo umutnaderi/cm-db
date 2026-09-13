@@ -64,6 +64,9 @@
     "db:repair-club-colours": "python tools/repair_club_colours.py",
     "test:stage5": "node tools/test-stage5.mjs",
     "test:corner-setup": "node tools/test-corner-setup.mjs",
+    "test:influence-audit": "node tools/test-influence-audit.mjs",
+    "test:first-time-play": "node tools/test-first-time-play.mjs",
+    "audit:tactical-influence": "node tools/measure-tactical-influence.mjs",
     "test:coordination": "node tools/test-coordination-coordinator.mjs",
     "test:keeper-angle": "node tools/test-keeper-angle.mjs",
     "test:restart-preparation": "node tools/test-restart-preparation.mjs"

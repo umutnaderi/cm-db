@@ -26,11 +26,24 @@
 // reason to; a winger can badly want to and be physically unable. Both cases
 // are real football and neither survives a single blended "first-time score".
 import { playerAttribute } from "./matchEngineCore.js";
+import { toYardPoint, yardDistance, attackingGoalYForDirection } from "./pitchGeometry.js";
+import { passFlightProfile } from "./matchPassFlight.js";
 
 /** The option kinds this module scores. */
 export const FIRST_TIME_KINDS = Object.freeze([
   "first-time-pass", "layoff", "flick-on", "first-time-shot",
 ]);
+
+/**
+ * Beyond this a first-time ball stops being the action this module is about.
+ * A raking forty-yard switch struck without a touch is real football, but it
+ * is a deliberate, specific action with its own risk profile rather than the
+ * quick release this models, and it belongs with the Stage 5 vocabulary work.
+ */
+export const FIRST_TIME_MAX_RANGE_YARDS = 32;
+
+/** Below this the "target" is close enough that a pass is not what happened. */
+export const FIRST_TIME_MIN_RANGE_YARDS = 2.5;
 
 /**
  * Below this the ball is not really arriving, it is sitting there, and
@@ -285,6 +298,73 @@ export function firstTimeAccuracyPenalty({ feasibility01 = 0, competence01 = 0 }
 }
 
 /**
+ * Compass bearing from one percent-space pitch point to another, in degrees.
+ *
+ * Percent space is not square -- 1% of x is 0.75 yards and 1% of y is 1.2 --
+ * so an angle taken straight off percent coordinates is wrong by up to about
+ * twenty degrees. Everything angular in this module therefore goes through
+ * real yards first.
+ */
+export function bearingDegrees(fromPoint, toPoint) {
+  const from = toYardPoint(fromPoint);
+  const to = toYardPoint(toPoint);
+  return (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI;
+}
+
+/**
+ * Turn a real pitch picture into the candidate list evaluateFirstTimeOptions()
+ * scores.
+ *
+ * Geometry lives here and difficulty lives there, deliberately: this function
+ * needs to know where the players are, and that one needs to know nothing
+ * about pitches at all.
+ *
+ * The outgoing speeds come from the engine's OWN `passFlightProfile()` rather
+ * than from a table of this module's invention -- there must not be a second
+ * ball-flight model, and a difficulty score computed against speeds the
+ * flight would never actually use would be measuring nothing.
+ */
+export function buildFirstTimeCandidates({
+  contactPoint = null,
+  ballFrom = null,
+  receiverId = null,
+  teammates = [],
+  attackingDirection = "down",
+  maxRangeYards = FIRST_TIME_MAX_RANGE_YARDS,
+} = {}) {
+  if (!contactPoint || !ballFrom) return [];
+  const goalY = attackingGoalYForDirection(attackingDirection);
+  // "Advanced" means nearer the goal being attacked, whichever way that is.
+  const advancedThan = (candidateY, referenceY) => Math.abs(candidateY - goalY) < Math.abs(referenceY - goalY);
+  const candidates = [];
+  for (const teammate of teammates) {
+    if (!teammate || String(teammate.id) === String(receiverId)) continue;
+    const distanceYards = yardDistance(contactPoint, teammate);
+    if (!(distanceYards >= FIRST_TIME_MIN_RANGE_YARDS) || distanceYards > maxRangeYards) continue;
+    const outgoingDirectionDeg = bearingDegrees(contactPoint, teammate);
+    const deflectionDeg = deflectionDegrees(bearingDegrees(ballFrom, contactPoint), outgoingDirectionDeg);
+    // A ball sent back the way it came is a layoff and is cushioned; anything
+    // else is struck. The regime boundary is the same one firstTimeFeasibility01
+    // gates on, so the kind chosen here can never be refused for being the
+    // wrong kind of contact.
+    const isReturn = deflectionDeg >= RETURN_REGIME_MIN_DEGREES;
+    candidates.push({
+      kind: isReturn ? "layoff" : "first-time-pass",
+      targetId: teammate.id,
+      outgoingDirectionDeg,
+      distanceYards,
+      outgoingSpeedYps: isReturn
+        // A cushion cannot be driven: the pace is whatever the presented
+        // surface returns, which is short and soft however far the target is.
+        ? Math.min(LAYOFF_MAX_OUTGOING_YPS, 4 + distanceYards * 0.6)
+        : passFlightProfile("ground", distanceYards).speedYardsPerSecond,
+      targetIsAdvanced: advancedThan(teammate.y, contactPoint.y),
+    });
+  }
+  return candidates;
+}
+
+/**
  * Score every candidate release the caller has proposed.
  *
  * The caller owns the geometry: it supplies each candidate's outgoing
@@ -336,6 +416,7 @@ export function evaluateFirstTimeOptions({
       deflectionDeg,
       outgoingDirectionDeg,
       outgoingSpeedYps,
+      distanceYards: Number.isFinite(candidate.distanceYards) ? candidate.distanceYards : null,
       feasibility01,
       competence01,
       preference01,

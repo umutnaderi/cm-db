@@ -190,6 +190,15 @@ import {
   selectLooseBallRecovery,
   transitionBallState,
 } from "./src/lib/matchBallCore.js?v=20260818-06";
+// First-Time Play v1 (Realism Roadmap Stage 1b). The module is pure and
+// consumes no RNG; the draw that decides whether a release is taken belongs
+// here, on its own seeded stream -- see MATCH_ENGINE_REALISM_ROADMAP.md's
+// Stage 1b RNG contract note.
+import {
+  buildFirstTimeCandidates,
+  evaluateFirstTimeOptions,
+  bearingDegrees as firstTimeBearingDegrees,
+} from "./src/lib/firstTimePlay.js?v=20260913-01";
 import {
   GOAL_WIDTH_YARDS,
   GOAL_HEIGHT_YARDS,
@@ -4768,6 +4777,162 @@ function resolveDeliveryWithKeeperMotion(resolver, groups, availability, random,
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// First-Time Play v1 (Realism Roadmap Stage 1b)
+//
+// Asked at the instant of contact, BEFORE any control touch is considered.
+// Returning non-null means the receiver is releasing the ball without
+// settling it: no resolveReceive() roll, no P.RECEIVE.* settling beat, and
+// the onward delivery leaves from the contact point on the possession loop's
+// very next action with no candidate generation of its own.
+//
+// Two properties this must preserve, both load-bearing:
+//
+//   * NO EXISTING DRAW MOVES. The decision reads `availability.firstTimeRandom`,
+//     a stream of its own keyed exactly like oneOnOneDecisionRandom already
+//     is. decisionRandom/executionRandom sequences are untouched, so every
+//     possession that does not take a release is bit-identical to before --
+//     which tools/measure-possession-parity.mjs exists to prove.
+//   * THE PLAYBACK RECEPTION CONTRACT SURVIVES. The emitted event keeps
+//     `action: "receive-pass"` with `contact.phase: "start"` and a move
+//     whose `to` equals the contact point, because matchLabPlayback.js has
+//     a dedicated contactArrivalTiming() path keyed on exactly that shape.
+//     Changing it does not error -- it silently falls back to a generic
+//     window, which is the "everybody freezes" regression shape.
+//
+// The beat is shorter than a control touch's own 160ms because that is the
+// whole football point: the ball is gone before a settling touch would have
+// finished.
+const FIRST_TIME_CONTACT_MS = 90;
+
+function maybeReleaseFirstTime({
+  groups, owner, actualReceiver, contactPoint, contact, pressingOpponent,
+  availability, trace, passFlightEvidence, interleaveOffBall, motionContext,
+}) {
+  const firstTimeRandom = availability?.firstTimeRandom;
+  // No stream, no feature. This is also the switch the A/B parity sweep uses.
+  if (typeof firstTimeRandom !== "function") return null;
+  // A goalkeeper receiving the ball is claiming it, not flicking it on; their
+  // own distribution decision happens afterwards through keeperDecision.
+  if (actualReceiver.role === "keeper") return null;
+  const ballFrom = pointOf(owner);
+  const candidates = buildFirstTimeCandidates({
+    contactPoint,
+    ballFrom,
+    receiverId: actualReceiver.id,
+    teammates: groups.teammates.filter((entry) => entry.id !== actualReceiver.id),
+    attackingDirection: state.attackingDirection[actualReceiver.team],
+  });
+  if (!candidates.length) return null;
+  const attackingSettings = attackingSettingsFor(actualReceiver.team);
+  const pressure01 = pressingOpponent
+    ? computePressure(pressingOpponent.player, contactPoint.zone, 0)
+    : 0;
+  const evaluation = evaluateFirstTimeOptions({
+    player: actualReceiver.player,
+    incoming: {
+      speedYps: passFlightEvidence?.speedYardsPerSecond ?? 0,
+      heightYards: Number(contact?.atPoint?.height) || 0,
+      directionDeg: firstTimeBearingDegrees(ballFrom, contactPoint),
+    },
+    candidates,
+    pressure01,
+    attackingSettings,
+    shootingInstruction: shootingInstructionFor(actualReceiver, attackingSettings),
+  });
+  const best = evaluation.best;
+  // Only the two kinds that reuse the existing pass pipeline are wired for
+  // now. flick-on needs the aerial contest and first-time-shot needs the shot
+  // resolver; both are modelled in firstTimePlay.js and land in a follow-up.
+  if (!best || (best.kind !== "first-time-pass" && best.kind !== "layoff")) return null;
+  const target = groups.teammates.find((entry) => String(entry.id) === String(best.targetId));
+  if (!target) return null;
+  // Exactly one draw, in exactly one place. `score` is the product of
+  // feasibility, competence and appetite, so a player who cannot, cannot do
+  // it well, or does not want to is refused on the same scale.
+  if (firstTimeRandom() > best.score) return null;
+
+  trace.push(traceEvent(
+    "P.RECEIVE.FIRSTTIME",
+    best.kind === "layoff"
+      ? `${playerName(actualReceiver.player)} cushions it back first time for ${playerName(target.player)}`
+      : `${playerName(actualReceiver.player)} lets it run and plays it first time to ${playerName(target.player)}`,
+    {
+      actor: actualReceiver,
+      target,
+      movement: "touch",
+      outcome: "success",
+      playerMoves: [{
+        player: actualReceiver,
+        from: pointOf(actualReceiver),
+        to: contactPoint,
+        // Do not rename. matchLabPlayback.js keys its kinetics-timed arrival
+        // off this exact action string plus contact.phase "start".
+        action: "receive-pass",
+        reactionDelayMs: contact?.reactionDelayMs,
+        reachAllowanceYards: contact?.reachAllowanceYards,
+      }],
+      ballFrom: contactPoint,
+      ballTo: contactPoint,
+      contact: { point: contactPoint, actor: actualReceiver, type: "first-time", phase: "start" },
+      ownerBefore: null,
+      // Transient bookkeeping only, so the loop can address the releasing
+      // player on the next action. No control touch happened and no football
+      // time passed: those are the observable properties that define playing
+      // a ball first time, and both hold.
+      ownerAfter: actualReceiver,
+      duration: FIRST_TIME_CONTACT_MS,
+      metrics: {
+        firstTime: {
+          kind: best.kind,
+          targetId: best.targetId,
+          deflectionDeg: Number(best.deflectionDeg.toFixed(1)),
+          feasibility01: Number(best.feasibility01.toFixed(3)),
+          competence01: Number(best.competence01.toFixed(3)),
+          preference01: Number(best.preference01.toFixed(3)),
+          accuracyPenalty: Number(best.accuracyPenalty.toFixed(3)),
+          optionsConsidered: evaluation.options.length,
+          // Diagnostics only. Nothing in the engine reads these back; they
+          // exist so the Stage 1b sweep can report the release distribution
+          // by pitch third and pressure band without re-deriving either.
+          pressure01: Number(pressure01.toFixed(3)),
+          attackingDirection: state.attackingDirection[actualReceiver.team],
+        },
+      },
+    },
+  ));
+  // Deliberately NO off-ball continuation beat here, unlike P.RECEIVE.CLEAN.
+  //
+  // That call exists to stop the world freezing through a control touch's own
+  // 160ms window while the ball sits at the receiver's feet. A first-time
+  // release has no such window: the outgoing delivery is the very next
+  // action, and its own flight-long reactOffBallContinuous() starts
+  // immediately. Adding a second beat here measurably made things worse --
+  // it handed every off-ball player an extra retarget per release, which
+  // test-motion-arbitration.mjs caught as a jump from ~40 to 50 tracks
+  // carrying a direction reversal.
+  return {
+    outcome: "FIRST TIME",
+    code: "P.RECEIVE.FIRSTTIME",
+    resolved: true,
+    terminal: false,
+    possession: "retained",
+    nextOwnerId: actualReceiver.id,
+    ballEnd: contactPoint,
+    restart: null,
+    reason: "pass-reception-first-time",
+    offBallInterleaved: interleaveOffBall,
+    // Read by runConstructedPossession(): the next action is this delivery,
+    // resolved with no candidate generation and therefore no decision draw.
+    forcedFirstTime: {
+      releaseFromId: actualReceiver.id,
+      targetId: target.id,
+      kind: best.kind,
+      accuracyPenalty: best.accuracyPenalty,
+    },
+  };
+}
+
 function resolvePass(...args) { return resolveDeliveryWithKeeperMotion(resolvePassInternal, ...args); }
 function resolveThroughBall(...args) { return resolveDeliveryWithKeeperMotion(resolveThroughBallInternal, ...args); }
 
@@ -4912,7 +5077,14 @@ function resolvePassInternal(
   // than a simple ground pass -- resolvePassAccuracy() itself stays
   // unmodified (its own already-tuned ground-pass curve), this multiplier
   // is a new dimension layered on top, not an edit to its internals.
-  const accuracyErrorYards = baseAccuracyErrorYards * accuracyMultiplier;
+  // First-Time Play v1 -- a ball struck without a settling touch is less
+  // precise than the same ball after one, and how much less depends on how
+  // awkward the contact was and how good the striker is. Deliberately a
+  // multiplier on THIS error term rather than a second accuracy model:
+  // first-time error then has one tuning surface, and every later
+  // improvement to the shared curve reaches it for free.
+  const firstTimePenalty = Number(availability?.firstTimeRelease?.accuracyPenalty) || 1;
+  const accuracyErrorYards = baseAccuracyErrorYards * accuracyMultiplier * firstTimePenalty;
   // Lead Into Space v1 -- the passer genuinely AIMS at the lead point, so
   // the real accuracy-error scatter (actualEndpoint, the ball's own actual
   // path) must be centered on it too, not on the receiver's raw current
@@ -5553,6 +5725,16 @@ function resolvePassInternal(
   // ball early may find a DIFFERENT opponent now nearest the real contact
   // point, or nobody at all.
   const pressingOpponent = engagingOpponent(contactPoint, groups.opponents);
+
+  // First-Time Play v1 -- asked before EITHER reception branch below, because
+  // a ball played first time is the absence of a control touch rather than a
+  // fast version of one. Returns null (and consumes nothing) whenever there
+  // is no option, which is the common case.
+  const firstTimeRelease = maybeReleaseFirstTime({
+    groups, owner, actualReceiver, contactPoint, contact, pressingOpponent,
+    availability, trace, passFlightEvidence, interleaveOffBall, motionContext,
+  });
+  if (firstTimeRelease) return firstTimeRelease;
 
   if (!pressingOpponent) {
     // Nobody near the real contact point -- a genuinely clean reception
@@ -13000,11 +13182,31 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
     // diagnostics panel. Recorded BEFORE selection and never read back by
     // the engine, so it cannot influence a choice or consume a draw.
     recordJointCandidates(candidates);
-    const decision = chooseCandidate(
-      candidates,
-      groups.owner.player,
-      decisionRandom,
-    );
+    // First-Time Play v1 -- when the previous action ended in a first-time
+    // release, the delivery was already chosen at the contact, by the
+    // receiver, on the receiver's own stream. Deciding again here would both
+    // double-count that choice and spend a decisionRandom draw on an action
+    // that never had a decision to make. The fallback to the ordinary path
+    // covers the target having become unavailable in the meantime.
+    // Self-validating on the releasing player: a descriptor can only fire for
+    // the player who actually made the contact. A possession that ends on the
+    // action cap carries its pending release into the next chunk through
+    // `simulated` (which is the continuation), and this is what guarantees a
+    // stale one can never be applied to somebody else's ball.
+    const forcedFirstTime = simulated.forcedFirstTime
+      && String(simulated.forcedFirstTime.releaseFromId) === String(groups.owner.id)
+      ? simulated.forcedFirstTime
+      : null;
+    const forcedFirstTimeTarget = forcedFirstTime
+      ? groups.teammates.find((entry) => String(entry.id) === String(forcedFirstTime.targetId)) ?? null
+      : null;
+    const decision = forcedFirstTimeTarget
+      ? { type: "pass", target: forcedFirstTimeTarget, utility: 1, firstTime: forcedFirstTime }
+      : chooseCandidate(
+        candidates,
+        groups.owner.player,
+        decisionRandom,
+      );
     const distanceToGoal = distanceToGoalYards(
       groups.owner,
       state.attackingDirection[groups.owner.team],
@@ -13115,6 +13317,17 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       // every explicit point as a pass into space.
       plannedDeliveryIntent: decision.joint?.meetingPointKind
         ?? (decision.moveTo ? "planned-space" : "current-position"),
+      // First-Time Play v1 -- the receiver's own release decision, on its own
+      // stream, keyed exactly like the one-on-one streams beside it. Adding
+      // options to the OWNER's candidate list instead would re-key every
+      // later decisionRandom() draw and invalidate every recorded replay;
+      // see MATCH_ENGINE_REALISM_ROADMAP.md's Stage 1b contract note.
+      firstTimeRandom: seededRandom(
+        hashString(`match-lab:freeplay:first-time:${seed}:${actionsCount}`),
+      ),
+      // Set only when THIS action is itself a first-time release, so the
+      // delivery below is struck with the model's own accuracy penalty.
+      firstTimeRelease: decision?.firstTime ?? null,
       oneOnOneDecisionRandom: seededRandom(
         hashString(`match-lab:freeplay:one-on-one-decision:${seed}:${actionsCount}`),
       ),
@@ -13972,6 +14185,11 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       }
     }
     simulated.ownerId = result.nextOwnerId;
+    // First-Time Play v1 -- a release that has already been decided at the
+    // contact. Carried on `simulated` so the next iteration resolves exactly
+    // that delivery and generates no candidates of its own; cleared on every
+    // other outcome so it can never leak into a later action.
+    simulated.forcedFirstTime = result.forcedFirstTime ?? null;
     // Direct resolvers still report a clean interception/tackle/keeper catch
     // as terminal for their isolated action contract. The sequence runner is
     // broader: any live result with a real next owner begins another action.
@@ -16938,6 +17156,9 @@ function buildSoundContext(event) {
     isPower: event.contactType === "laces",
     blockOutcome: event.blockOutcome,
     wallHit: event.code?.startsWith("FK.WALL.") && event.outcome === "block",
+    // First-Time Play v1 -- a cushioned layoff and a struck first-time ball
+    // are different sounds, and the kind is already on the event.
+    firstTimeKind: event.metrics?.firstTime?.kind ?? null,
     playbackId: state.seed,
     eventId: `${state.lastMode || state.mode}:${state.stepIndex}:${event.code}`,
   };

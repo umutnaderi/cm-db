@@ -3,11 +3,13 @@
 // Deterministic throughout: the module consumes no RNG, so neither does this.
 import assert from "node:assert/strict";
 import {
-  FIRST_TIME_KINDS, MIN_INCOMING_SPEED_YPS, LAYOFF_MAX_OUTGOING_YPS,
+  FIRST_TIME_KINDS, MIN_INCOMING_SPEED_YPS,
   deflectionDegrees, lateralDemandYps, footContactDifficulty01,
   headContactDifficulty01, contactHeightDifficulty01, surfaceFor,
   orientationDifficulty01, firstTimeFeasibility01, firstTimeCompetence01,
   firstTimePreference01, firstTimeAccuracyPenalty, evaluateFirstTimeOptions,
+  bearingDegrees, buildFirstTimeCandidates, LAYOFF_MAX_OUTGOING_YPS,
+  FIRST_TIME_MIN_RANGE_YARDS, FIRST_TIME_MAX_RANGE_YARDS,
 } from "../src/lib/firstTimePlay.js";
 
 let passes = 0;
@@ -280,6 +282,88 @@ const POOR = playerAt(5);
     }).options.length === 0);
   check("missing input does not throw",
     evaluateFirstTimeOptions({}).available === false);
+}
+
+// --- bearingDegrees --------------------------------------------------------
+{
+  // Percent space is not square (1% of x is 0.75 yards, 1% of y is 1.2), so
+  // an angle taken naively off percent coordinates is wrong. A move of equal
+  // PERCENT in both axes is therefore not 45 degrees on the real pitch.
+  check("a pure +x move bears zero", near(bearingDegrees({ x: 50, y: 50 }, { x: 60, y: 50 }), 0));
+  check("a pure +y move bears ninety", near(bearingDegrees({ x: 50, y: 50 }, { x: 50, y: 60 }), 90));
+  check("a pure -y move bears minus ninety", near(bearingDegrees({ x: 50, y: 50 }, { x: 50, y: 40 }), -90));
+  check("equal percent steps are not forty-five degrees on a 75x120 pitch",
+    Math.abs(bearingDegrees({ x: 50, y: 50 }, { x: 60, y: 60 }) - 45) > 5);
+  // 10% of x is 7.5 yards, 10% of y is 12 yards -> atan2(12, 7.5).
+  check("the bearing is taken in real yards",
+    near(bearingDegrees({ x: 50, y: 50 }, { x: 60, y: 60 }),
+      (Math.atan2(12, 7.5) * 180) / Math.PI, 1e-9));
+}
+
+// --- buildFirstTimeCandidates ----------------------------------------------
+{
+  // Ball travelling in +y ("down", toward the attacked goal at y=100).
+  const contactPoint = { x: 50, y: 50 };
+  const ballFrom = { x: 50, y: 30 };
+  const teammates = [
+    { id: "ahead", x: 50, y: 62 },      // further on, small deflection
+    { id: "behind", x: 50, y: 38 },     // back where the ball came from
+    { id: "square", x: 62, y: 50 },     // across the body
+    { id: "self", x: 50, y: 50 },       // the receiver
+    { id: "onTop", x: 50, y: 50.5 },    // too close to be a pass
+    { id: "miles", x: 50, y: 98 },      // beyond first-time range
+  ];
+  const built = buildFirstTimeCandidates({
+    contactPoint, ballFrom, receiverId: "self", teammates, attackingDirection: "down",
+  });
+  const byId = Object.fromEntries(built.map((candidate) => [candidate.targetId, candidate]));
+
+  check("the receiver is not a target for their own release", !byId.self);
+  check("a teammate on top of the receiver is not a pass", !byId.onTop);
+  check("a target beyond first-time range is excluded", !byId.miles);
+  check("the reachable targets are offered", Boolean(byId.ahead && byId.behind && byId.square));
+
+  check("a ball sent back the way it came is a layoff", byId.behind.kind === "layoff");
+  check("a ball carried onward is a first-time pass", byId.ahead.kind === "first-time-pass");
+  check("a ball played square is a first-time pass", byId.square.kind === "first-time-pass");
+
+  check("a layoff is cushioned rather than driven",
+    byId.behind.outgoingSpeedYps <= LAYOFF_MAX_OUTGOING_YPS);
+  check("a struck pass uses the engine's own ground-flight pace",
+    byId.ahead.outgoingSpeedYps > LAYOFF_MAX_OUTGOING_YPS);
+  check("every candidate carries its real distance",
+    built.every((candidate) => candidate.distanceYards >= FIRST_TIME_MIN_RANGE_YARDS
+      && candidate.distanceYards <= FIRST_TIME_MAX_RANGE_YARDS));
+
+  check("a target nearer the attacked goal is marked advanced", byId.ahead.targetIsAdvanced === true);
+  check("a target behind the ball is not marked advanced", byId.behind.targetIsAdvanced === false);
+  // Attacking the other way must invert which target counts as advanced,
+  // or the term would encode a screen direction rather than football.
+  const flipped = buildFirstTimeCandidates({
+    contactPoint, ballFrom, receiverId: "self", teammates, attackingDirection: "up",
+  });
+  check("advancement follows the direction of attack",
+    flipped.find((candidate) => candidate.targetId === "ahead").targetIsAdvanced === false
+    && flipped.find((candidate) => candidate.targetId === "behind").targetIsAdvanced === true);
+
+  check("no contact point means no candidates",
+    buildFirstTimeCandidates({ ballFrom, teammates }).length === 0);
+  check("no teammates means no candidates",
+    buildFirstTimeCandidates({ contactPoint, ballFrom, teammates: [] }).length === 0);
+  check("missing input does not throw", buildFirstTimeCandidates({}).length === 0);
+
+  // The kind each candidate is built as must be a kind feasibility will
+  // accept, or the builder and the scorer disagree and options vanish.
+  const scored = evaluateFirstTimeOptions({
+    player: ELITE,
+    incoming: { speedYps: 14, heightYards: 0.2, directionDeg: bearingDegrees(ballFrom, contactPoint) },
+    candidates: built,
+    pressure01: 0.4,
+  });
+  check("every built candidate survives its own kind's feasibility gates",
+    scored.options.length === built.length);
+  check("the layoff is scored as a genuine return",
+    scored.options.find((option) => option.targetId === "behind").deflectionDeg >= 120);
 }
 
 console.log(`ALL PASS -- ${passes} first-time-play assertions`);

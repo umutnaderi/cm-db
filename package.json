@@ -66,6 +66,8 @@
     "test:corner-setup": "node tools/test-corner-setup.mjs",
     "test:influence-audit": "node tools/test-influence-audit.mjs",
     "test:first-time-play": "node tools/test-first-time-play.mjs",
+    "test:first-time-integration": "node tools/test-first-time-integration.mjs",
+    "audit:parity": "node tools/measure-possession-parity.mjs",
     "audit:tactical-influence": "node tools/measure-tactical-influence.mjs",
     "test:coordination": "node tools/test-coordination-coordinator.mjs",
     "test:keeper-angle": "node tools/test-keeper-angle.mjs",

@@ -581,6 +581,18 @@ export function resolveCueSequence(code, context = {}) {
   if (code === "P.RECEIVE.CLEAN" || code === "P.RECEIVE.PROTECT") {
     return [{ milestone: "touch", cue: "firstTouch", atMs: 0 }];
   }
+  // First-Time Play v1 -- a release taken without controlling the ball. A
+  // layoff is a cushion and sounds like a touch; anything else is a genuine
+  // strike and shares the kick pool, because that is what it is. Without
+  // this the code would fall through to silence, which would make the one
+  // moment in a passage that sounds different sound like nothing at all.
+  if (code === "P.RECEIVE.FIRSTTIME") {
+    return [{
+      milestone: "touch",
+      cue: context.firstTimeKind === "layoff" ? "firstTouch" : "kick",
+      atMs: 0,
+    }];
+  }
   if (code === "P.RECEIVE.HEAVY") {
     return [{ milestone: "touch", cue: "heavyTouch", atMs: 0 }];
   }

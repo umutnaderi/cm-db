@@ -17,7 +17,7 @@ neither supersedes the other.
 | --- | --- | --- |
 | 0 | Tactical influence audit | **Built** (2026-09-13) |
 | 1a | First-time play decision model | **Built** (2026-09-13) |
-| 1b | First-time play engine integration | Next |
+| 1b | First-time play engine integration | **Built** (2026-09-13) — pass/layoff only |
 | 2 | Role personality | Planned |
 | 3 | Coordination families into complete patterns | Planned |
 | 4a | Facing as independent state | Planned |
@@ -284,7 +284,178 @@ Four option kinds: `first-time-pass`, `layoff`, `flick-on`,
 
 ---
 
-## Stage 1b — First-time play engine integration (next)
+## Stage 1b — First-time play engine integration (built)
+
+### The RNG contract decision (2026-09-13)
+
+The prompt below asks whether the first-time choice should be a new candidate
+inside the existing list or a separate decision taken before the list is
+built. The answer is **neither**, and the reasoning matters enough to record
+before the code lands.
+
+`generateFreePlayCandidates()` builds options for a player who **owns** the
+ball. A first-time release is not that decision arriving early — it is a
+structurally different decision, taken by a **different player** (the
+receiver, not the passer), at a **different instant** (ball contact, not the
+on-ball decision beat), about an option that only exists because the ball is
+still moving. Folding it into the owner's list would mean building that list
+at reception time for a non-owner, which the function does not support.
+
+It also could not be done safely. `chooseCandidate()` draws exactly one
+`decisionRandom()` value per candidate in list order, so adding options would
+re-key every later draw in the possession and silently invalidate every
+recorded replay.
+
+So the first-time choice gets **its own seeded stream**, keyed by the same
+`(seed, actionsCount)` pair under a distinct namespace:
+
+```js
+firstTimeRandom: seededRandom(hashString(`match-lab:freeplay:first-time:${seed}:${actionsCount}`))
+```
+
+This is not a new mechanism. `oneOnOneDecisionRandom` and
+`oneOnOneKeeperResponseRandom` are already threaded through `availability`
+exactly this way, for exactly this reason. The consequence that matters:
+**when no first-time option exists, no draw is taken from any stream, and
+every existing possession is bit-identical to today.** That is the property
+the acceptance test has to pin down.
+
+### How the release is resolved
+
+A first-time ball is the *absence* of a control touch, so the reception must
+not emit one: no `resolveReceive()` roll, no `P.RECEIVE.*` settling beat, and
+no time passing between arrival and release.
+
+Rather than recursing into `resolvePassInternal` (1,000 lines, with its own
+offside ruling and target selection), the reception returns a
+`forcedFirstTime` descriptor and the possession loop resolves the named
+delivery on its next iteration **without generating or choosing candidates**.
+No `decisionRandom()` draw is consumed for that action.
+
+The receiver's `ownerId` is transiently set between those two trace events.
+That is bookkeeping, not a control touch: no reception event is emitted and
+no football time elapses, which are the observable properties that actually
+define playing the ball first time.
+
+### Scope of the first pass
+
+`first-time-pass` and `layoff` only. Both reuse the existing pass-flight
+machinery directly. `first-time-shot` needs the shot resolver and
+`flick-on` needs the aerial/heading contest; both are modelled already in
+`firstTimePlay.js` and are wired in a follow-up rather than half-built here.
+
+### Delivered (2026-09-13)
+
+Engine changes, all in `match-lab.js` except the cue:
+
+- `maybeReleaseFirstTime()` — asked at the contact, before either reception
+  branch. Emits `P.RECEIVE.FIRSTTIME` and returns a `forcedFirstTime`
+  descriptor. Returns null, consuming nothing, whenever there is no option.
+- The possession loop honours that descriptor on its next action with **no
+  candidate generation and no `decisionRandom()` draw**, and only for the
+  player who actually made the contact — so a descriptor riding a
+  continuation into the next chunk can never fire on somebody else's ball.
+- `availability.firstTimeRandom`, a stream of its own keyed exactly like the
+  one-on-one streams beside it.
+- The accuracy penalty multiplies the **existing** `resolvePassAccuracy`
+  error term. No second accuracy model.
+- `matchSound.js` maps the release to a strike for a struck ball and a touch
+  for a cushioned layoff.
+
+`tools/measure-possession-parity.mjs` — the A/B parity sweep the engine
+roadmap's "migrate rather than rewrite" rule asks for. It hashes the full
+trace of 40 fixed possessions so a single altered event shows as a changed
+digest, and reports the release distribution.
+
+`tools/test-first-time-integration.mjs` — 23 checks against the real engine.
+
+### Measured
+
+**Parity.** 11 of 40 possessions bit-identical; **every one of the other 29
+contains a first-time release, and none changed without one.** That is the
+property that matters: no unexplained drift anywhere in the engine.
+
+**Cost.** 90-minute fixture **85.9s → 82.6s, a 3.8% speed-up.** A release
+replaces a control touch's `resolveReceive()` roll and its off-ball
+continuation with a lighter event, so first-time play is cheaper than the
+settling touch it displaces rather than more expensive.
+
+**Rate.** 55 releases across 40 possessions — about 12% of all actions.
+
+### What the distribution says, and what it does not
+
+| Split | Result |
+| --- | --- |
+| By kind | layoff 76%, first-time pass 24% |
+| By pressure | free 58%, tight 42% |
+| By third | middle 85%, final 7%, defensive 7% |
+
+**The kind mix is wrong and is a real calibration finding.** Real football
+plays far more first-time balls forward than it lays off. The cause is
+structural rather than a bad constant: a layoff is cheap on every term the
+model has — low lateral demand, low outgoing speed, ground height — so it
+wins the score product most of the time it is available. Fixing it properly
+means making the *value* of the onward ball part of the choice, not only its
+difficulty; a layoff into no advantage should lose to a harder pass that
+breaks a line.
+
+**The other two splits are confounded and should not be read as findings.**
+Every sampled possession starts from a home player's formation position, most
+of which sit in the middle third, so "85% middle" largely restates where the
+sweep starts. And both splits report *counts*, not rate per opportunity, so
+"58% free" may only mean unpressured receptions are more common. Answering
+either properly needs a denominator the harness does not yet collect.
+
+The pressure bands also came back empty in the middle — `computePressure()`
+returned either below 0.2 or above 0.5 and never between — which is worth a
+look on its own.
+
+### Stage 0 before/after — first-time play REDUCED tactical separation
+
+This is the result the standing rule exists to catch, so it is reported first
+rather than buried.
+
+| Input | Before | After |
+| --- | --- | --- |
+| `attacking.style` | strong (d 0.897) | strong (d 0.954) |
+| `attacking.tempo` | **strong** (d 0.825) | visible (d 0.748) |
+| `attacking.directness` | **visible** (d 0.742) | weak (d 0.313) |
+| role | weak (d -0.203) | **none** (d -0.321, p 0.51) |
+
+Three of the four inputs got *less* visible. The cause is structural, and the
+pattern of which inputs suffered points straight at it.
+
+**A forced first-time delivery bypasses `generateFreePlayCandidates()`
+entirely.** Roughly 12% of all actions are now chosen by
+`firstTimePreference01()` instead — and that function reads style, tempo,
+creativity and the shooting instruction, and **nothing else**. It does not
+read directness. It does not read tactical role.
+
+So the inputs that lost the most separation are exactly the inputs with no
+path into the first-time decision, and the one input that held up (style) is
+the one weighted most heavily inside it. That is not a coincidence; it is the
+mechanism.
+
+**First-time play currently routes around the tactical system.** The fix is
+not a bigger constant. The first-time target choice needs to ride the same
+utilities the owner's candidate list already uses, so that an instruction
+reaching one decision reaches both. That is the first thing Stage 1c should
+do, ahead of any new kinds.
+
+### Still to do
+
+- **Route the first-time target choice through the shared tactical
+  utilities** (above). This is the highest-priority follow-up, because it is
+  a measured regression rather than a missing feature.
+- The kind-mix calibration: a layoff into no advantage should lose to a
+  harder pass that breaks a line, which means the *value* of the onward ball
+  has to enter the choice, not only its difficulty.
+- `flick-on` and `first-time-shot`. Both are modelled and tested in
+  `firstTimePlay.js`; neither is wired, because one needs the aerial contest
+  and the other the shot resolver.
+- A rate-per-opportunity denominator in the sweep.
+
+### The original prompt
 
 > Implement Realism Roadmap Stage 1b: wire the first-time play model into the
 > reception pipeline.

@@ -457,7 +457,11 @@ assert.match(browserMain, /scheduledCue\.kind === "audio"\) applyDeferredPlaybac
   "the browser renderer must dispatch the planned arrival cue through the deferred audio path");
 assert.match(browserMain, /if \(!hasDeferredTerminalAudio\) playEvent\(event, buildSoundContext\(event\)\)/,
   "the browser renderer must not also schedule the old fixed-delay miss sound at shot contact");
-assert.match(browserHtml, /match-lab\.js\?v=20260909-04/,
+assert.match(browserHtml, /match-lab\.js\?v=20260913-01/,
   "the HTML must cache-bust the browser entry module that imports playback");
+assert.match(browserMain, /Math\.min\(26, Math\.max\(0, snapshot\.ball\.height \|\| 0\) \* 4\)/,
+  "the renderer must give an authoritative airborne height enough visible lift to read on the 2D pitch");
+assert.match(browserMain, /--ball-flight-scale/,
+  "the renderer must expose a small height-derived scale cue without changing authoritative x/y/z");
 
 console.log("Timeline Playback v1 planner/clock tests passed.");

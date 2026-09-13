@@ -1,4 +1,5 @@
 import { clamp } from "./matchEngineCore.js";
+import { PITCH_LENGTH_YARDS, PITCH_WIDTH_YARDS } from "./pitchGeometry.js";
 
 // ---------------------------------------------------------------------------
 // Ground Roll v1 (2026-08-28) -- the ball is its own particle: a real
@@ -64,4 +65,58 @@ export function rollTraveledYards(launchSpeedYps, elapsedMs) {
   const v0 = Math.max(0, Number(launchSpeedYps) || 0);
   const tSec = Math.min(Math.max(0, Number(elapsedMs) || 0), rollStopDurationMs(v0)) / 1000;
   return Math.max(0, v0 * tSec - 0.5 * GROUND_FRICTION_YPS2 * tSec * tSec);
+}
+
+/** Remaining ground speed under the same constant turf friction. */
+export function rollSpeedAtElapsed(launchSpeedYps, elapsedMs) {
+  const v0 = Math.max(0, Number(launchSpeedYps) || 0);
+  const elapsedSeconds = Math.max(0, Number(elapsedMs) || 0) / 1000;
+  return Math.max(0, v0 - GROUND_FRICTION_YPS2 * elapsedSeconds);
+}
+
+/**
+ * Samples one authoritative rolling trajectory with position and velocity
+ * derived from the same closed-form friction equation. A ball intercepted
+ * before its natural stop keeps non-zero incoming velocity at contact; only
+ * turf friction reaching the natural stop (or a later contact event) may
+ * produce zero velocity.
+ */
+export function buildRollingBallTrajectory({
+  from, aim, launchSpeedYps, durationMs, sampleMs = 80, clampPoint = null,
+} = {}) {
+  if (!from || !aim) return [];
+  const dxYards = (aim.x - from.x) * (PITCH_WIDTH_YARDS / 100);
+  const dyYards = (aim.y - from.y) * (PITCH_LENGTH_YARDS / 100);
+  const length = Math.hypot(dxYards, dyYards);
+  if (length <= 1e-9) {
+    return [
+      { progress: 0, position: { ...from, height: 0 }, velocity: { x: 0, y: 0 }, verticalVelocity: 0, mode: "rolling" },
+      { progress: 1, position: { ...from, height: 0 }, velocity: { x: 0, y: 0 }, verticalVelocity: 0, mode: "rolling" },
+    ];
+  }
+  const unit = { x: dxYards / length, y: dyYards / length };
+  const duration = Math.max(0, Number(durationMs) || 0);
+  const count = Math.max(2, Math.min(80, Math.ceil(duration / Math.max(20, sampleMs))));
+  return Array.from({ length: count + 1 }, (_, index) => {
+    const progress = index / count;
+    const elapsedMs = duration * progress;
+    const distanceYards = rollTraveledYards(launchSpeedYps, elapsedMs);
+    const raw = {
+      x: from.x + (unit.x * distanceYards / PITCH_WIDTH_YARDS) * 100,
+      y: from.y + (unit.y * distanceYards / PITCH_LENGTH_YARDS) * 100,
+      zone: from.zone ?? null,
+    };
+    const point = clampPoint ? clampPoint(raw) : raw;
+    const speedYps = rollSpeedAtElapsed(launchSpeedYps, elapsedMs);
+    return {
+      progress,
+      position: { ...point, height: 0 },
+      velocity: {
+        x: (unit.x * speedYps / PITCH_WIDTH_YARDS) * 100 / 1000,
+        y: (unit.y * speedYps / PITCH_LENGTH_YARDS) * 100 / 1000,
+      },
+      verticalVelocity: 0,
+      mode: "rolling",
+    };
+  });
 }

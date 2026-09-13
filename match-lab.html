@@ -450,7 +450,7 @@
               <div class="match-heat-map" id="labHeatmapGrid" aria-label="Selected heat map"></div>
               <div class="match-stats-table-wrap">
                 <table class="match-stats-table">
-                  <thead><tr><th id="labStatsNameHeading">Player</th><th>Distance</th><th>Passes</th><th>Accuracy</th><th>Key</th><th>On target</th><th>Missed</th></tr></thead>
+                  <thead><tr><th id="labStatsNameHeading">Player</th><th>Distance</th><th>Passes</th><th>Accuracy</th><th>Key passes</th><th>On target</th><th>Missed</th></tr></thead>
                   <tbody id="labPlayerStatsBody"></tbody>
                 </table>
               </div>
@@ -656,6 +656,11 @@
             With-ball and without-ball positions are optional formation overrides.
           </p>
         </header>
+        <div class="match-lab-tactics-actions">
+          <button type="button" id="labApplyTacticsButton" class="match-lab-primary-button">Confirm tactical changes</button>
+          <button type="button" id="labResumeMatchButton" class="match-lab-primary-button" hidden disabled>Resume match</button>
+          <span class="match-lab-setup-status" id="labTacticsStatus"></span>
+        </div>
         <div class="match-lab-tactics-layout">
           <section class="match-lab-tactics-section" id="labTeamTacticsHost">
             <h2 class="match-lab-panel-title" id="labTeamTacticsTitle">Home team tactics</h2>
@@ -668,13 +673,8 @@
             <p class="match-lab-hint">Select a player on the positioning board.</p>
           </aside>
         </div>
-        <div class="match-lab-tactics-actions">
-          <button type="button" id="labApplyTacticsButton" class="match-lab-primary-button">Confirm tactical changes</button>
-          <button type="button" id="labResumeMatchButton" class="match-lab-primary-button" hidden disabled>Resume game</button>
-          <span class="match-lab-setup-status" id="labTacticsStatus"></span>
-        </div>
       </section>
     </main>
-    <script src="match-lab.js?v=20260909-05" type="module"></script>
+    <script src="match-lab.js?v=20260913-01" type="module"></script>
   </body>
 </html>

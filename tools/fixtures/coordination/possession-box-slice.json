@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "seed": 20260911,
+  "baseRosterFixture": "vertical-slice.json",
+  "scenarios": {
+    "recycle": {
+      "ownerId": "h11",
+      "ballPoint": { "x": 22, "y": 54 },
+      "nowMs": 9000,
+      "playerPositions": {
+        "a2": { "x": 24, "y": 53 },
+        "a4": { "x": 27, "y": 53 },
+        "a6": { "x": 30, "y": 53 }
+      },
+      "tacticsByTeam": {
+        "home": { "attacking": { "style": "possession", "mentality": "balanced", "tempo": "slow", "width": "wide", "directness": 1 } },
+        "away": { "defending": { "pressing": "high", "defensiveLine": "standard", "scheme": "zonal", "strictness": 3 } }
+      },
+      "flags": { "recycleNeeded": true, "reason": "ball-side-overload" },
+      "expectedAttack": "RECYCLE_AND_SWITCH"
+    },
+    "penaltyArea": {
+      "ownerId": "h11",
+      "ballPoint": { "x": 24, "y": 14 },
+      "nowMs": 9000,
+      "tacticsByTeam": {
+        "home": { "attacking": { "style": "possession", "mentality": "positive", "width": "wide", "finalThird": "early-crosses" } },
+        "away": { "defending": { "pressing": "standard", "defensiveLine": "standard", "offsideTrap": true, "scheme": "zonal", "strictness": 3 } }
+      },
+      "flags": { "reason": "final-third-entry" },
+      "expectedAttack": "PENALTY_AREA_OCCUPATION",
+      "expectedDefense": "PROTECT_PENALTY_AREA"
+    }
+  }
+}

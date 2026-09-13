@@ -407,7 +407,7 @@ console.log("\n=== 6: foul -- both a real stoppage AND advantage-played continua
     const trace = [];
     const result = resolveDribble(groups, {}, random, trace);
     if (!foundStoppage && result.reason === "foul") foundStoppage = result;
-    if (!foundAdvantage && result.reason === "foul-advantage-played") foundAdvantage = result;
+    if (!foundAdvantage && result.reason === "foul-advantage-played") foundAdvantage = { result, trace };
   }
   check("found a real-stoppage foul outcome within the search budget", Boolean(foundStoppage));
   if (foundStoppage) {
@@ -417,9 +417,15 @@ console.log("\n=== 6: foul -- both a real stoppage AND advantage-played continua
   }
   check("found an advantage-played foul outcome within the search budget", Boolean(foundAdvantage));
   if (foundAdvantage) {
-    check("advantage played is NOT terminal -- the fouled side keeps the ball and play continues", foundAdvantage.terminal === false);
-    check("possession stays retained with the fouled side", foundAdvantage.possession === "retained" && foundAdvantage.nextOwnerId === owner.id);
-    check("no restart when advantage is played", foundAdvantage.restart === null);
+    const { result, trace } = foundAdvantage;
+    check("advantage played is NOT terminal -- the fouled side keeps the ball and play continues", result.terminal === false);
+    check("possession stays retained with the fouled side", result.possession === "retained" && result.nextOwnerId === owner.id);
+    check("no restart when advantage is played", result.restart === null);
+    const advantage = trace.find((event) => event.code.startsWith("CARD.") && event.playerMoves?.length === 2);
+    check("advantage carries both players through contact so the next live event cannot start with overlapping bodies",
+      Boolean(advantage)
+        && yardDistance(advantage.playerMoves[0].to, advantage.playerMoves[1].to) >= 0.3
+        && yardDistance(advantage.ballTo, advantage.playerMoves[0].to) < 0.001);
   }
 }
 
@@ -876,7 +882,10 @@ console.log("\n=== 20: tackle-range wiring -- resolveDribble() never chooses a s
 console.log("\n=== 21: pass contest geometry -- receiver-side pressure matters even when the passer is completely unmarked ===");
 {
   const owner = entry("owner", { team: "home", x: 20, y: 50, playerObj: STRONG_PASSER });
-  const receiver = entry("receiver", { team: "home", x: 60, y: 50, playerObj: AVERAGE });
+  // Keep this receiver-pressure fixture inside the ordinary driven-ground
+  // band (24 real yards). Its subject is the defender at the receiving end,
+  // not whether a 30-yard aerial ball's accuracy scatter can run loose.
+  const receiver = entry("receiver", { team: "home", x: 52, y: 50, playerObj: AVERAGE });
   // No opponent anywhere near the passer OR the passing lane -- only near
   // the receiver. Before this fix, resolvePass()'s fully-uncontested
   // branch (no engager near the passer) skipped resolveReceive()
@@ -892,7 +901,7 @@ console.log("\n=== 21: pass contest geometry -- receiver-side pressure matters e
   // endpoint IS the receiver's position, so tight marking and lane
   // presence genuinely overlap there), which would conflate the two
   // roles this test exists to keep separate.
-  const receiverSideDefender = entry("rdef", { team: "away", x: 67.35, y: 50, playerObj: ELITE_DEFENDER });
+  const receiverSideDefender = entry("rdef", { team: "away", x: 59.35, y: 50, playerObj: ELITE_DEFENDER });
   const groups = { owner, teammates: [receiver], opponents: [receiverSideDefender], keeper: null };
   check("the receiver-side defender is not within duel range of the passer at all",
     engagingOpponent(owner, [receiverSideDefender]) === null);
@@ -1121,13 +1130,21 @@ console.log("\n=== 28: Off-Ball Defender Awareness v1 -- defenders reposition, c
   let sawDefAdjust = false;
   let defendersMoved = false;
   let sawBothRoles = false;
+  let neverHadTwoPressureOwners = true;
   for (let i = 0; i < 80 && !(sawDefAdjust && defendersMoved && sawBothRoles); i += 1) {
     const run = runConstructedPossession(`def-awareness-${i}`);
     const defEvents = run.trace.filter((event) => event.code === "DEF.ADJUST");
     if (defEvents.length) sawDefAdjust = true;
     for (const event of defEvents) {
       const actions = new Set(event.playerMoves.map((move) => move.action));
-      if (actions.has("press-ball") && actions.has("mark")) sawBothRoles = true;
+      const responsibilities = new Set(event.playerMoves.map((move) => move.coordinationResponsibility));
+      const hasPressure = actions.has("press-ball") || responsibilities.has("primary-pressure");
+      const hasCover = actions.has("mark") || ["inside-cover", "runner-tracker", "depth-protector"]
+        .some((responsibility) => responsibilities.has(responsibility));
+      if (hasPressure && hasCover) sawBothRoles = true;
+      if (event.playerMoves.filter((move) => move.coordinationResponsibility === "primary-pressure").length > 1) {
+        neverHadTwoPressureOwners = false;
+      }
     }
     const finalA = run.finalPositions.find((p) => p.id === defenderA.id);
     const finalB = run.finalPositions.find((p) => p.id === defenderB.id);
@@ -1136,7 +1153,8 @@ console.log("\n=== 28: Off-Ball Defender Awareness v1 -- defenders reposition, c
   }
   check("DEF.ADJUST events appear across these possessions", sawDefAdjust);
   check("at least one defender's own simulated position actually changes from where they were authored", defendersMoved);
-  check("both press and mark roles are observed together in at least one combined event -- real multi-defender coordination", sawBothRoles);
+  check("pressure and cover/tracking are observed together in at least one combined event -- real multi-defender coordination", sawBothRoles);
+  check("the coordinator never authors two primary pressure owners in one defensive adjustment", neverHadTwoPressureOwners);
   check("state.roster (authored) is untouched by any of this", JSON.stringify(state.roster) === beforeRosterJson);
 }
 
@@ -2140,21 +2158,17 @@ console.log("\n=== 47: Hold-Up Play v1 -- resolveHold(): uncontested hold, shiel
         && challenge.playerMoves[0].playerId === defender.id
         && challenge.playerMoves[0].to.x === owner.x && challenge.playerMoves[0].to.y === owner.y);
     const won = trace[1];
-    // Engagement Breaker v1 -- contact is pinned at the START of this
-    // event (the shielding win itself, at the shared contact point);
-    // the winner's own real escape happens over the REST of the event's
-    // duration, so it's never at the "end" the old frozen-in-place
-    // behavior used.
     check("the won event's contact names the holder at the contact point, phase 'start', ownership retained",
       won.contact && won.contact.actorId === owner.id && won.contact.phase === "start"
         && won.ownerBeforeId === owner.id && won.ownerAfterId === owner.id);
-    check("the holder genuinely steps away WITH the ball -- a real escape distance, not frozen at the contact point",
-      yardDistance(won.ballFrom, won.ballTo) >= 3);
-    check("the challenger is left behind with a real gap -- both playerMoves authored, never glued together",
-      won.playerMoves.length === 2 && yardDistance(
-        won.playerMoves.find((m) => m.playerId === owner.id).to,
-        won.playerMoves.find((m) => m.playerId === defender.id).to,
-      ) >= CARRY_BODY_CLEARANCE_YARDS);
+    const retentionDistance = yardDistance(won.ballFrom, won.ballTo);
+    check("the holder makes a short, physically authored retention movement rather than a fixed five-yard escape",
+      retentionDistance > 0 && retentionDistance < 3
+        && won.playerMoves.length === 1
+        && won.playerMoves[0].action === "shield-retain"
+        && won.playerMoves[0].trajectory.length >= 2);
+    check("winning the shield does not erase the defender's pressure responsibility",
+      !("beatenDefenderId" in result));
   }
   if (lostFound) {
     const { result, trace, owner, defender } = lostFound;
@@ -3086,9 +3100,13 @@ console.log("\n=== 57: Defensive urgency (2026-08-19) -- interleaved reactions g
   // nudge -- Continuous World Motion During Ball Flight v1's own
   // acceptance criteria ("Pace and Acceleration measurably affect arrival
   // times") applied directly to a defensive reaction, not just a receiver.
-  const passOwner = entry("urgency-pass-owner", { team: "home", x: 50, y: 5, playerObj: STRONG_PASSER });
-  const passReceiver = entry("urgency-pass-receiver", { team: "home", x: 50, y: 90, playerObj: AVERAGE });
-  const passDefender = entry("urgency-pass-defender", { team: "away", x: 80, y: 45, playerObj: WEAK_DEFENDER });
+  // A 24-yard driven-ground flight keeps this fixture focused on the
+  // defender's physical reaction ceiling. A much longer aerial delivery can
+  // legitimately run loose before a normal reception and belongs to the
+  // pass-flight tests instead.
+  const passOwner = entry("urgency-pass-owner", { team: "home", x: 50, y: 20, playerObj: STRONG_PASSER });
+  const passReceiver = entry("urgency-pass-receiver", { team: "home", x: 50, y: 40, playerObj: AVERAGE });
+  const passDefender = entry("urgency-pass-defender", { team: "away", x: 70, y: 30, playerObj: WEAK_DEFENDER });
   const passGroups = { owner: passOwner, teammates: [passReceiver], opponents: [passDefender], keeper: null };
   setupRoster([passOwner, passReceiver, passDefender], passOwner.id);
   const passTrace = [];
@@ -3368,13 +3386,13 @@ console.log("\n=== 61: receiver arrival timing -- unreachable delivery remains l
   // still reliably produce a genuine miss within the same 500-seed
   // search budget: a genuinely poor passer (Passing/Technique/Teamwork/
   // Decisions/Vision at the absolute floor, not merely "weak") over a
-  // real ~25-yard distance -- large enough accuracy error, short enough
+  // real ~27-yard distance -- large enough accuracy error, short enough
   // driven-ground flight time, that a slow receiver's own real reach
   // still comes up short often enough to find within the search budget.
   const veryPoorPasser = player("Very Poor Passer", { Passing: 1, Technique: 1, Teamwork: 1, Decisions: 1, Vision: 1, Strength: 1 });
   const passer = entry("arrival-passer", { team: "home", x: 50, y: 10, playerObj: veryPoorPasser });
   const receiver = entry("arrival-receiver", {
-    team: "home", x: 50, y: 33.8,
+    team: "home", x: 50, y: 32.5,
     playerObj: player("Slow Receiver", { Pace: 3, Acceleration: 3, Anticipation: 6, Decisions: 6 }),
   });
   const groups = { owner: passer, teammates: [receiver], opponents: [], keeper: null };
@@ -4083,18 +4101,36 @@ console.log("\n=== Passing v3, Section B acceptance: a chest-height contest is d
   const groups = { owner, teammates: [receiver], opponents: [defender], keeper: null };
   let chestContests = 0;
   let receiverWon = 0;
+  let lostChestCase = null;
   for (let i = 0; i < 3000; i += 1) {
     const random = seededRandom(hashString(`chest-attrs-${i}`));
     const trace = [];
-    resolvePass(groups, { forcedPassType: "lofted" }, random, trace);
+    const result = resolvePass(groups, { forcedPassType: "lofted" }, random, trace);
     const chestEvent = trace.find((event) => event.code === "P.CHEST.WON" || event.code === "P.CHEST.LOST");
     if (!chestEvent) continue;
     chestContests += 1;
     if (chestEvent.code === "P.CHEST.WON") receiverWon += 1;
+    else if (!lostChestCase) lostChestCase = { trace, result };
   }
   check("exercised real chest-height contests within the search budget", chestContests >= 30);
   check("a receiver with elite chest attrs but terrible Pace wins the clear majority of chest duels against an elite-Pace, weak-chest defender -- chest attrs decide it, not Pace",
     chestContests > 0 && receiverWon / chestContests > 0.6);
+  const lostChestTrace = lostChestCase?.trace;
+  const lostChestEvent = lostChestTrace?.find((event) => event.code === "P.CHEST.LOST");
+  const chestSpillEvent = lostChestTrace?.find((event) => event.code === "P.CHEST.SPILL");
+  check("a lost chest duel authors the ball's spill before any recovery outcome",
+    Boolean(lostChestEvent?.contact?.point) && Boolean(chestSpillEvent)
+      && yardDistance(lostChestEvent.contact.point, chestSpillEvent.ballFrom) < 0.001
+      && chestSpillEvent.duration > 0);
+  const chestSpillIndex = lostChestTrace?.indexOf(chestSpillEvent) ?? -1;
+  const nextChestBallEvent = chestSpillIndex >= 0
+    ? lostChestTrace.slice(chestSpillIndex + 1).find((event) => event.ballFrom || event.ballTo)
+    : null;
+  check("the chest spill chains into the next ball event or remains the resolver's authoritative loose endpoint",
+    nextChestBallEvent
+      ? yardDistance(chestSpillEvent.ballTo, nextChestBallEvent.ballFrom) < 0.001
+      : lostChestCase?.result?.possession === "loose"
+        && yardDistance(chestSpillEvent.ballTo, lostChestCase.result.ballEnd) < 0.001);
 }
 
 console.log("\n=== Passing v3, Section C acceptance: lead into space ===");
@@ -4666,7 +4702,9 @@ console.log("\n=== Gameplay v3.2, required test 1 -- clean reception: off-ball m
 {
   state.attackingDirection = { home: "down", away: "up" };
   const owner = entry("v32-t1-owner", { team: "home", x: 50, y: 20, playerObj: STRONG_PASSER });
-  const receiver = entry("v32-t1-receiver", { team: "home", x: 50, y: 60, playerObj: GOOD_DRIBBLER });
+  // A 24-yard delivery makes clean control deterministic while still
+  // leaving a substantial flight window for the continuity assertion.
+  const receiver = entry("v32-t1-receiver", { team: "home", x: 50, y: 40, playerObj: GOOD_DRIBBLER });
   // Off the direct flight lane and well away from contactPoint, so
   // pressingOpponent stays null (a deterministic, uncontested P.RECEIVE.CLEAN,
   // no seed search needed) while still a real tracking body elsewhere on

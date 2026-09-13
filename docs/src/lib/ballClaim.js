@@ -1,6 +1,7 @@
-import { clamp } from "./matchEngineCore.js";
+import { clamp, playerAttribute } from "./matchEngineCore.js";
 import { yardDistance } from "./pitchGeometry.js";
 import { timeToReach } from "./playerKinetics.js";
+import { facingFromVelocity, speedYpsFromVelocity } from "./worldMotion.js";
 import { pointAlongMovement, CONTACT_REACTION_DELAY_MS } from "./matchMovementTiming.js";
 import {
   rollStopDistanceYards,
@@ -64,6 +65,8 @@ export const CLAIM_MIN_ROLL_SPEED_YPS = 0.3;
  * competing number.
  */
 export const CLAIM_REACTION_MS = CONTACT_REACTION_DELAY_MS;
+export const CLAIM_TRANSFER_ADVANTAGE_MS = 180;
+export const CLAIM_TRANSFER_COMMITMENT_MS = 240;
 
 function finite(value, fallback = 0) {
   const number = Number(value);
@@ -137,6 +140,104 @@ export function projectLooseRoll({
 function arrivalMsAt(candidate, point, reactionMs) {
   const distance = yardDistance(candidate.entry ?? candidate, point);
   return reactionMs + timeToReach((candidate.entry ?? candidate).player, distance) * 1000;
+}
+
+function liveArrivalMsAt(entry, point, reactionMs, velocity) {
+  const speed = speedYpsFromVelocity(velocity);
+  const facing = facingFromVelocity(velocity);
+  const from = entry.entry ?? entry;
+  const dx = ((Number(point?.x) || 0) - (Number(from?.x) || 0)) * 0.75;
+  const dy = ((Number(point?.y) || 0) - (Number(from?.y) || 0)) * 1.2;
+  const heading = Math.atan2(dy, dx) * 180 / Math.PI;
+  const angle = facing == null ? 0 : Math.abs((((heading - facing) % 360) + 540) % 360 - 180);
+  const towardSpeed = speed * Math.max(0, Math.cos(angle * Math.PI / 180));
+  const perception = (playerAttribute(from.player, "Anticipation")
+    + playerAttribute(from.player, "Decisions")) / 40;
+  const adjustedReaction = Math.max(60, reactionMs * (1.15 - perception * 0.3));
+  return {
+    arrivalMs: adjustedReaction + timeToReach(from.player, yardDistance(from, point), towardSpeed) * 1000 + angle * 1.8,
+    angle,
+    speedYps: speed,
+  };
+}
+
+/**
+ * Re-evaluates who owns a live pursuit at every real roll sample. The
+ * contact race above still decides who can physically meet the ball; this
+ * layer records when responsibility should transfer on the way there.
+ * A small ETA lead cannot flicker the assignment, and a newly assigned
+ * chaser receives a minimum commitment window before another ordinary switch.
+ */
+export function evaluateLiveClaimantHandoffs({
+  roll,
+  candidates = [],
+  finalClaim = null,
+  initialClaimantId = null,
+  velocities = {},
+  reactionMs = CLAIM_REACTION_MS,
+  advantageMs = CLAIM_TRANSFER_ADVANTAGE_MS,
+  commitmentMs = CLAIM_TRANSFER_COMMITMENT_MS,
+} = {}) {
+  const pool = candidates.filter(Boolean);
+  if (!roll?.samples?.length || !pool.length) return { initialClaimantId: null, finalClaimantId: null, transfers: [], timeline: [] };
+  const rankedAt = (sample) => pool.map((entry) => {
+    const arrival = liveArrivalMsAt(entry, sample.point, reactionMs, velocities[String(entry.id)]);
+    return { id: entry.id, entry, etaMs: arrival.arrivalMs, approachAngle: arrival.angle, currentSpeedYps: arrival.speedYps };
+  }).sort((left, right) => left.etaMs - right.etaMs || String(left.id).localeCompare(String(right.id)));
+  const firstRanking = rankedAt(roll.samples[0]);
+  let current = firstRanking.find((entry) => String(entry.id) === String(initialClaimantId)) ?? firstRanking[0];
+  const initial = current?.id ?? null;
+  let assignedAtMs = 0;
+  const transfers = [];
+  const timeline = [];
+  for (const sample of roll.samples) {
+    const ranked = rankedAt(sample);
+    const incumbent = ranked.find((entry) => String(entry.id) === String(current?.id));
+    const challenger = ranked[0];
+    if (!incumbent || !challenger) continue;
+    const advantage = incumbent.etaMs - challenger.etaMs;
+    if (challenger.id !== incumbent.id
+      && advantage >= advantageMs
+      && sample.tMs - assignedAtMs >= commitmentMs) {
+      transfers.push({
+        atMs: sample.tMs,
+        fromId: incumbent.id,
+        toId: challenger.id,
+        advantageMs: advantage,
+        reason: "challenger projects a meaningfully earlier physically reachable arrival",
+        formerResponsibility: challenger.entry.team === incumbent.entry.team ? "close-support" : "shape-recovery",
+      });
+      current = challenger;
+      assignedAtMs = sample.tMs;
+    }
+    const last = timeline.at(-1);
+    if (!last || String(last.claimantId) !== String(current.id)) timeline.push({
+      atMs: sample.tMs,
+      claimantId: current.id,
+      etaMs: current.etaMs,
+      approachAngle: current.approachAngle,
+      currentSpeedYps: current.currentSpeedYps,
+    });
+  }
+  const physicalWinner = finalClaim?.claimant ?? finalClaim?.pickup?.entry ?? null;
+  const contactMs = finalClaim?.interceptMs ?? finalClaim?.pickup?.arrivalMs ?? roll.horizonMs;
+  if (physicalWinner && String(physicalWinner.id) !== String(current?.id)) {
+    const incumbentAtContact = rankedAt({ point: finalClaim.interceptPoint ?? finalClaim.pickup?.point ?? roll.restPoint })
+      .find((entry) => String(entry.id) === String(current?.id));
+    const winnerAtContact = rankedAt({ point: finalClaim.interceptPoint ?? finalClaim.pickup?.point ?? roll.restPoint })
+      .find((entry) => String(entry.id) === String(physicalWinner.id));
+    transfers.push({
+      atMs: contactMs,
+      fromId: current?.id ?? null,
+      toId: physicalWinner.id,
+      advantageMs: incumbentAtContact && winnerAtContact ? incumbentAtContact.etaMs - winnerAtContact.etaMs : null,
+      reason: "incumbent cannot make contact before the physically reachable winner",
+      formerResponsibility: physicalWinner.team === current?.entry?.team ? "close-support" : "shape-recovery",
+    });
+    current = winnerAtContact ?? { id: physicalWinner.id, entry: physicalWinner, etaMs: contactMs };
+    timeline.push({ atMs: contactMs, claimantId: physicalWinner.id, etaMs: current.etaMs, forcedByContact: true });
+  }
+  return { initialClaimantId: initial, finalClaimantId: current?.id ?? null, transfers, timeline };
 }
 
 /**

@@ -6979,6 +6979,7 @@ body.is-hall-of-fame-open {
 }
 
 .match-lab-marker-dot {
+  position: relative;
   width: 22px;
   height: 22px;
   display: flex;
@@ -6991,6 +6992,36 @@ body.is-hall-of-fame-open {
   font-size: 0.62rem;
   font-weight: 800;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* Restart preparation signal. The engine records whether the taker raises
+   one or two arms; this draws that authored cue without changing position. */
+.match-lab-marker[data-signal-arms] .match-lab-marker-dot::before,
+.match-lab-marker[data-signal-arms="2"] .match-lab-marker-dot::after {
+  content: "";
+  position: absolute;
+  bottom: 15px;
+  width: 3px;
+  height: 13px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  transform-origin: bottom center;
+  animation: match-lab-restart-signal 420ms ease-in-out infinite alternate;
+}
+
+.match-lab-marker[data-signal-arms] .match-lab-marker-dot::before {
+  left: 5px;
+  transform: rotate(-24deg);
+}
+
+.match-lab-marker[data-signal-arms="2"] .match-lab-marker-dot::after {
+  right: 5px;
+  transform: rotate(24deg);
+}
+
+@keyframes match-lab-restart-signal {
+  to { translate: 0 -2px; }
 }
 
 .match-lab-marker[data-role="defender"] .match-lab-marker-dot,
@@ -7055,7 +7086,8 @@ body.is-hall-of-fame-open {
          never inferred from a nearby player. Ground touches stay at zero;
          crosses/shots rise above it. */
 .match-lab-marker-ball {
-  transform: translate(-50%, calc(-50% - var(--ball-lift, 0px)));
+  transform: translate(-50%, calc(-50% - var(--ball-lift, 0px)))
+    scale(var(--ball-flight-scale, 1));
   z-index: 8;
 }
 
@@ -8896,6 +8928,10 @@ body.is-hall-of-fame-open {
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: 10px;
+  position: sticky;
+  top: 8px;
+  z-index: 20;
+  margin-bottom: 12px;
 }
 
 @media (max-width: 1180px) {

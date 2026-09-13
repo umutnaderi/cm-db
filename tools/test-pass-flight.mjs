@@ -9,6 +9,7 @@
 // flat gate.
 import {
   buildPassFlight, earliestReachableContact, contactBandForHeight, playerMaxReachYards,
+  selectPassType,
 } from "../src/lib/matchPassFlight.js";
 
 let failures = 0;
@@ -25,7 +26,28 @@ const OWNER = player("Owner", { Passing: 14, Technique: 13 });
 const RECEIVER_PLAYER = player("Receiver", { Anticipation: 13, Decisions: 13, Pace: 14, Acceleration: 13, Jumping: 12, Heading: 13 });
 const JUMPING_DEFENDER = player("Jumping Defender", { Anticipation: 13, Decisions: 13, Pace: 13, Acceleration: 13, Jumping: 15, Heading: 14, Positioning: 14, Marking: 13 });
 
-console.log("=== contactBandForHeight() -- the real per-height band boundaries ===");
+console.log("=== delivery family follows distance, intention and passer capability ===");
+{
+  const from = { x: 50, y: 10 };
+  const strong = player("Long Passer", { Passing: 19, Technique: 18, Strength: 18 });
+  const weak = player("Weak Long Passer", { Passing: 7, Technique: 7, Strength: 7 });
+  check("a normal clear 24-yard pass remains driven on the ground",
+    selectPassType({ passer: strong, from, to: { x: 50, y: 30 }, opponents: [] }) === "driven-ground");
+  check("a clear 30-yard pass into space becomes driven aerial",
+    selectPassType({
+      passer: strong, from, to: { x: 50, y: 35 }, opponents: [], deliveryIntent: "forward-lead",
+    }) === "driven-aerial");
+  check("the same exceptional 30-yard lane can still be drilled to feet",
+    selectPassType({
+      passer: strong, from, to: { x: 50, y: 35 }, opponents: [], deliveryIntent: "current-position",
+    }) === "driven-ground");
+  check("a clear 40-yard ball from a strong passer is driven aerial, never ground",
+    selectPassType({ passer: strong, from, to: { x: 50, y: 43.333333 }, opponents: [] }) === "driven-aerial");
+  check("a 40-yard ball from a weak passer is lofted",
+    selectPassType({ passer: weak, from, to: { x: 50, y: 43.333333 }, opponents: [] }) === "lofted");
+}
+
+console.log("\n=== contactBandForHeight() -- the real per-height band boundaries ===");
 {
   check("ankle height reads as the foot band", contactBandForHeight(0.3) === "foot");
   check("exactly the old flat cutoff (0.6yd) still reads as foot", contactBandForHeight(0.6) === "foot");

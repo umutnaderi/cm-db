@@ -600,3 +600,90 @@ weighting remains in place after reach, while geometry vetoes impossible
 saves. The cross regression suite covers an interleaved close-down followed by
 a catch, exact ball/body contact continuity, settled held possession, and a
 distant goalkeeper who cannot be awarded a save.
+
+## Footage coordination vertical slice (delivered 2026-09-11)
+
+The first coupled attacking/defensive coordinator is active in Match Lab.
+Delivered attacking families are `REGAIN_QUICK_RELEASE`, `WIDE_TRANSITION`
+and `SHORT_COMBINATION`; delivered defensive responses are
+`LOSS_COUNTERPRESS_WINDOW`, `TRANSITION_DELAY_AND_RECOVER`,
+`PROTECT_DEPTH_AND_HANDOFF`, `SHIFT_BLOCK_AND_PRESS` and
+`DEFEND_WIDE_OVERLOAD`.
+
+The slice includes live replanning during ball travel, exclusive pressure and
+tracking responsibilities with hysteresis, role reservations, overlap versus
+underlap support selection, dynamic loose-ball claimant transfer, saved replay
+evidence and deterministic tactical counterfactual fixtures. It retains Team
+Shape and worldMotion as the shape and kinetics authorities. It does not add a
+renderer or alter finish, goalkeeper or scoring probabilities.
+
+Hard retargets now brake and turn through the shared world-motion path instead
+of switching to a full lateral/opposite velocity in one beat. Late control
+convergence uses a reachable sequential trajectory, so it cannot overlap the
+carry that created the gap or commit an endpoint before the player arrives.
+
+The next smallest coordination step is richer receiving and engagement state:
+select body orientation, first-time release, cushion, let-run and jockey/delay
+responses from the same authoritative contact and motion data.
+
+## Sustained possession and final-third coordination (delivered 2026-09-11)
+
+`RECYCLE_AND_SWITCH` responds to ball-side congestion with three distinct
+relationships: a safe outlet behind pressure, a circulation connector, and a
+receiver holding the weak-side width. It biases only existing legal pass/hold
+candidates and preserves rest defence.
+
+`PENALTY_AREA_OCCUPATION` allocates near-post, central, far-post, cutback and
+edge-of-box responsibilities to separate participants. Pre-contact targets are
+clamped behind the effective offside line. `PROTECT_PENALTY_AREA` ranks and
+tracks those threats through the existing pressure/cover/handoff contract.
+
+Defensive line control now exposes a shared depth derived from line-height
+tactics, pressure arrival and the goalkeeper's position. Keeper close-downs
+use a post-ray angle bisector and expose cone width and coverage diagnostics.
+No finish, save or scoring probability was changed.
+
+## Restart choreography and roll continuity (delivered 2026-09-11)
+
+Normal corners, free kicks and goal kicks now proceed through placement,
+retreat, scan/signal and run-up before the existing take resolver. Throw-ins
+hold the ball before release. Quick restarts remain a seeded tactical option
+and do not perturb resolver RNG. Long Throws and Strength expand specialist
+throw-in range, with a distinct hand-flight profile below kicked-ball speed.
+
+Loose ground travel now records velocity from the same friction equation as
+its position. A moving ball cannot acquire a zero-velocity sample before its
+natural stop unless a real contact, boundary or dead-ball transition ends the
+motion.
+
+Restart runners and distinct defensive markers now move during the taker's
+scan and approach. Corner delivery targets now produce a primary run, separate
+decoys and a short-option show; crossed free kicks separate their lead and
+decoy checks without advancing anyone beyond the kick-time offside line.
+Resolved marker ownership travels into the live preparation, and the chosen
+corner target biases the existing resolver rather than pre-resolving its
+outcome. The next small restart step is an editable Match Lab corner/free-kick
+routine panel with ordered taker fallbacks.
+
+## Intent-aware pass delivery variety (delivered 2026-09-13)
+
+Pass height now follows both distance and intent. Clear controlled deliveries
+can remain driven on the ground below 30 yards; the 30-to-35-yard band keeps
+that option only for an exceptional clear pass to feet. Passes into space
+from 30 yards and all passes beyond 35 yards select driven-aerial or lofted
+flight from passer power and live lane obstruction. The slow-receiver
+to-feet adaptation is capped at 28 yards and cannot flatten a long pass.
+
+The meeting-point kind survives the choice/execution handoff, and every
+executed pass exposes its type, intent, distance, peak height and launch speed
+in trace diagnostics. Match Lab renders the existing authoritative ball
+height more clearly. Completion, interception and accuracy probabilities are
+unchanged; the next smallest calibration step is a deterministic pass-mix
+report over representative tactical fixtures before changing any selector
+threshold.
+
+The new aerial frequency exposed a missing failed-chest-control leg. A lost
+chest duel now emits `P.CHEST.SPILL` from the aerial contact to the loose-ball
+race point, with the actual last toucher and concurrent surrounding movement.
+Full-match playback therefore keeps both the ball and the recovering players
+continuous through that second-ball phase.

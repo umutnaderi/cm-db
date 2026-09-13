@@ -184,6 +184,7 @@ export function captureScenario({
       withBallAnchors: deepClone(entry.withBallAnchors || {}),
       withoutBallAnchors: deepClone(entry.withoutBallAnchors || {}),
       restartRole: entry.restartRole ?? null,
+      restartSubjectId: entry.restartSubjectId ?? null,
       player: deepClone(entry.player),
     })),
   };
@@ -229,6 +230,7 @@ export function applyScenarioToState(state, scenario) {
     withBallAnchors: deepClone(entry.withBallAnchors || {}),
     withoutBallAnchors: deepClone(entry.withoutBallAnchors || {}),
     restartRole: entry.restartRole ?? null,
+    restartSubjectId: entry.restartSubjectId ?? null,
     player: deepClone(entry.player),
   }));
   const restoredBall = scenario.ballState?.position

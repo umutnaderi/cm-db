@@ -80,6 +80,7 @@ function check(label, condition) {
 console.log("=== 0: the tactics screen exposes the complete team-instruction set ===");
 {
   const html = readFileSync(new URL("../match-lab.html", import.meta.url), "utf8");
+  const controller = readFileSync(new URL("../match-lab.js", import.meta.url), "utf8");
   const fields = [
     "kickoff", "mentality", "width", "focusPlay", "dribbling", "creativity", "finalThird",
     "timeWasting", "passIntoSpace", "playOutOfDefence", "onGain", "onLoss",
@@ -90,6 +91,32 @@ console.log("=== 0: the tactics screen exposes the complete team-instruction set
     fields.every((field) => (html.match(new RegExp(`data-field="${field}"`, "g")) ?? []).length === 2));
   check("the controls are grouped into possession, transition and defending sections",
     html.includes(">In possession<") && html.includes(">Transition<") && html.includes(">Out of possession<"));
+  check("paused tactics expose a separate Resume match control above the long editor",
+    html.includes('id="labResumeMatchButton"') && html.includes(">Resume match<")
+      && html.indexOf('class="match-lab-tactics-actions"') < html.indexOf('class="match-lab-tactics-layout"'));
+  check("match statistics separate Player and Team views",
+    html.includes('id="labPlayerStatsTab"') && html.includes('id="labTeamStatsTab"'));
+  check("the obsolete Free Play implementation note is removed",
+    !html.includes("Give a placed player the ball, then ask the engine what it would"));
+  const confirmHandler = controller.slice(
+    controller.indexOf('elements.applyTacticsButton?.addEventListener("click"'),
+    controller.indexOf('elements.resumeMatchButton?.addEventListener("click"'),
+  );
+  const resumeHandler = controller.slice(
+    controller.indexOf('elements.resumeMatchButton?.addEventListener("click"'),
+    controller.indexOf("function showMainWorkspace"),
+  );
+  check("confirming paused tactics enables Resume without consuming the pause",
+    confirmHandler.includes("pausedTacticsConfirmed = true")
+      && !confirmHandler.includes("resumeMatchAfterTactics();"));
+  check("Resume match continues the preserved match session",
+    resumeHandler.includes("resumeMatchAfterTactics();"));
+  const matchTabHandler = controller.slice(
+    controller.indexOf('elements.matchTab?.addEventListener("click"'),
+    controller.indexOf('elements.tacticsTab?.addEventListener("click"'),
+  );
+  check("the Match tab resumes a confirmed paused match as a second visible route",
+    matchTabHandler.includes("if (pausedTacticsConfirmed) resumeMatchAfterTactics();"));
 }
 
 console.log("\n=== 0b: desktop landscape pitch keeps the world coordinates reversible ===");
@@ -774,7 +801,11 @@ console.log("\n=== 9: Resolve & Play dispatches the restart, never ACTION.CHOICE
     const choiceAt = run.trace.findIndex((event) => event.code === "ACTION.CHOICE");
     const restartAt = run.trace.findIndex((event) => String(event.code).startsWith("RESTART.")
       && event.code.endsWith(".TAKE"));
-    check(`${choice}: the trace opens with ${RESTART_CODES[choice]}`, first === RESTART_CODES[choice]);
+    const needsPreparation = choice !== "kickoff";
+    check(`${choice}: ${needsPreparation ? "preparation leads into" : "the trace opens with"} ${RESTART_CODES[choice]}`,
+      needsPreparation
+        ? restartAt > 0 && ["RESTART.PLACE_BALL", "RESTART.QUICK", "RESTART.THROW_IN.COLLECT"].includes(first)
+        : first === RESTART_CODES[choice]);
     check(`${choice}: no ACTION.CHOICE before the restart is taken`,
       choiceAt === -1 || choiceAt > restartAt);
     check(`${choice}: the restart event is the real trajectory, with contact and ownership data`,
@@ -796,7 +827,30 @@ console.log("\n=== 9: Resolve & Play dispatches the restart, never ACTION.CHOICE
         run.trace.some((event) => String(event.restartSourceCode ?? event.code).startsWith("FK.WALL.")));
     }
     check(`${choice}: the dead ball becomes live -- a real resolver ran after it`,
-      run.trace.length > 1 && !String(run.trace[1].code).startsWith("RESTART."));
+      run.trace.slice(restartAt + 1).some((event) => !String(event.code).startsWith("RESTART.")));
+    if (["free-kick-attacking", "free-kick-defending", "corner", "goal-kick"].includes(choice)
+        && first === "RESTART.PLACE_BALL") {
+      const sequence = run.trace.slice(0, restartAt).map((event) => event.code);
+      const preparationSequence = sequence.filter((code) => code !== "RESTART.MOVEMENT");
+      check(`${choice}: normal preparation has placement, retreat, scan and approach`,
+        preparationSequence[0] === "RESTART.PLACE_BALL"
+          && preparationSequence[1] === "RESTART.SET_POSITION"
+          && ["RESTART.SCAN", "RESTART.SIGNAL"].includes(preparationSequence[2])
+          && preparationSequence[3] === "RESTART.APPROACH");
+      const coordinatedMovement = run.trace.slice(0, restartAt)
+        .filter((event) => event.code === "RESTART.MOVEMENT");
+      check(`${choice}: runners and markers move during preparation rather than freezing`,
+        coordinatedMovement.length > 0
+          && coordinatedMovement.every((event) => event.overlapWithPrevious && event.playerMoves?.length)
+          && coordinatedMovement.some((event) => event.playerMoves.some((move) =>
+            /restart-(?:run|position|option)$/.test(move.teamJob ?? ""))));
+    }
+    if (choice === "throw-in") {
+      check("throw-in: the ball is visibly held before release",
+        run.trace.slice(0, restartAt).some((event) =>
+          event.code === "RESTART.THROW_IN.HOLD"
+            && event.ballTrajectory?.every((sample) => sample.mode === "held")));
+    }
     check(`${choice}: players release from the restart shape rather than teleporting`,
       run.trace.some((event) => event.code === "RESTART.RELEASE") || !run.trace.some((event) => event.code === "ACTION.CHOICE"));
     let playbackCheck;
@@ -1030,6 +1084,8 @@ console.log("\n=== 14: a saved scenario preserves the restart ===");
     scenario.roster.every((entry) => entry.formationAnchor));
   check("restart roles survive onto the roster too",
     scenario.roster.some((entry) => entry.restartRole));
+  check("corner marker subjects survive in the saved roster",
+    scenario.roster.some((entry) => entry.restartSubjectId));
   state.pendingRestart = null;
   state.restartSetupDraft = null;
   state.ball = { x: 1, y: 1, ownerId: null, deadBall: false, phase: "live" };
@@ -1042,9 +1098,12 @@ console.log("\n=== 14: a saved scenario preserves the restart ===");
     && state.ball.ownerId === scenario.restart.takerId
     && Math.abs(state.ball.x - scenario.restart.ball.x) < 1e-9
     && Math.abs(state.ball.y - scenario.restart.ball.y) < 1e-9);
+  check("applying the saved scenario restores corner marker subjects",
+    state.roster.some((entry) => entry.restartSubjectId));
   const replayed = runConstructedPossession(scenario.seed);
-  check("a saved restart replays from its required event",
-    replayed.trace[0]?.code === "RESTART.CORNER.TAKE");
+  check("a saved restart replays through preparation into its required event",
+    replayed.trace.some((event) => event.code === "RESTART.CORNER.TAKE")
+      && replayed.trace.findIndex((event) => event.code === "RESTART.CORNER.TAKE") > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1171,6 +1230,46 @@ console.log("\n=== 17: the tactics editor keeps a consistent attacking-up viewpo
     tacticsBoardZone(0, "down") === 11
       && tacticsBoardZone(11, "down") === 0
       && tacticsBoardZone(4, "up") === 4);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== 18: live Match Lab decisions and motion expose coordination evidence ===");
+{
+  const { runConstructedPossession, buildLastRun, cancelPendingRestart } = mod;
+  cancelPendingRestart("coordination integration fixture");
+  const owner = state.roster.find((entry) => entry.team === "home" && entry.role !== "keeper");
+  state.ball = {
+    x: owner.x, y: owner.y, zone: zoneFromPercent(owner.x, owner.y),
+    ownerId: owner.id, deadBall: false, phase: "controlled",
+  };
+  const run = runConstructedPossession(20260910, { maxActions: 4 });
+  const choice = run.trace.find((event) => event.code === "ACTION.CHOICE" && event.coordination);
+  const coordinatedMove = run.trace.flatMap((event) => event.playerMoves ?? [])
+    .find((move) => move.coordinationResponsibility);
+  check("an actual on-ball decision carries candidate, selection and defensive ownership evidence",
+    Boolean(choice?.coordination?.candidates?.length)
+      && Boolean(choice.coordination.selectedDefense)
+      && Boolean(choice.coordination.pressure?.ownerId));
+  check("the decision snapshot records authoritative positions and velocities",
+    Boolean(choice?.coordination?.world?.ball)
+      && Object.values(choice.coordination.world.players ?? {}).every((entry) =>
+        Number.isFinite(entry.position?.x) && Number.isFinite(entry.position?.y)
+          && Number.isFinite(entry.velocity?.x) && Number.isFinite(entry.velocity?.y)));
+  check("coordinated jobs move through the ordinary world-motion trace",
+    Boolean(coordinatedMove?.trajectory?.length)
+      && coordinatedMove.action.startsWith("coordinate-")
+      && coordinatedMove.from && coordinatedMove.to);
+  check("material participant attributes are available only in expandable coordination diagnostics",
+    Object.keys(choice?.coordination?.participantAttributes ?? {}).length > 2);
+  const defensiveAdjustments = run.trace.filter((event) => event.code === "DEF.ADJUST");
+  check("every integrated defensive replan exposes at most one primary pressure owner",
+    defensiveAdjustments.every((event) => (event.playerMoves ?? [])
+      .filter((move) => move.coordinationResponsibility === "primary-pressure").length <= 1));
+  check("legacy team-shape pressure cannot survive beside the coordinator owner",
+    defensiveAdjustments.every((event) => ((event.label ?? "").match(/owns the pressure on the ball/g) ?? []).length <= 1));
+  const saved = buildLastRun(20260910, run);
+  check("the saved run retains coordination snapshots and responsibility history",
+    saved.coordinationSnapshots.length > 0 && Array.isArray(saved.coordinationHistory));
 }
 
 

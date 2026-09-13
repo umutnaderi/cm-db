@@ -6596,24 +6596,24 @@ Concrete thresholds (documented here so recalibration later is a data
 change, not an archaeology exercise):
 - `distance <= 15yd`: **ground**, always -- a short pass doesn't need
   power or a lane judgment.
-- `15yd < distance <= 35yd`: **driven-ground** if `laneObstruction < 0.5`
-  (nobody within ~1.5yd of the direct line), else **lofted** (a blocked
-  medium-range lane calls for going over the top, not forcing it
-  through).
-- `distance > 35yd`: **lofted** by default (the safe long-range option);
-  **driven-aerial** instead when the passer's own power+technique blend
-  (`(Strength + Technique + Passing) / 3 >= 13`) supports a firm, flatter
-  diagonal AND the lane isn't badly congested (`laneObstruction < 0.6`)
-  -- a skill-gated upgrade, not the default. A genuinely clear, long
-  lane (`laneObstruction < 0.15`) with an elite passer (`>= 15` on the
-  same blend) keeps **driven-ground** viable even beyond 35yd -- "a
-  50-metre ground pass can remain possible... [with] an unusually open
-  lane, enough power and suitable technique" verbatim -- deliberately
-  rare (all three conditions must hold at once) and, being ground-height
-  for its entire flight, exposed to the reachability race along its
-  ENTIRE path length, not just at the reception point, which is what
-  makes it "highly exposed to interception" a natural consequence of the
-  model rather than a separate penalty bolted on.
+- `15yd < distance < 30yd`: **driven-ground** if
+  `laneObstruction < 0.5` (nobody within roughly 1.5 yards of the direct
+  line), else **lofted**.
+- `30yd <= distance <= 35yd`: **driven-ground** is exceptional and requires
+  a current-position/to-feet intent, `laneObstruction < 0.12`, and a
+  power+technique blend of at least 17. Other deliveries in this band use
+  the aerial family.
+- `distance > 35yd`: never ground. **Driven-aerial** is selected when the
+  passer's power+technique blend is at least 13 and obstruction is below
+  0.6; otherwise the delivery is **lofted**. Passes into space enter this
+  rule from 30 yards because their purpose is to clear intervening ground
+  while the receiver runs onto the ball.
+
+The receiver-mobility downgrade from driven-ground to controlled ground is
+also capped at 28 yards, so a slow receiver cannot accidentally flatten a
+long ball. The selected meeting-point kind is carried into execution as the
+delivery intent rather than inferred from the mere presence of an explicit
+aim point.
 
 Per-type flight profile (ground speed component + peak height + an
 accuracy-error multiplier applied ON TOP of the EXISTING, unmodified
@@ -7124,11 +7124,19 @@ of truth. Recorded here for history:
   point; without one it is resolved as the ordinary pass it actually is.
 - Delivery trace events now record `intendedPoint` alongside `ballTo`, so
   the aim can be shown separately from where the ball really went.
-- The exact planned point and pass type now survive into execution. A safe
-  current-position option for a receiver below a 13-point Pace/Acceleration
-  blend is kept at their feet and weighted down from driven-ground to the
-  controlled ground profile. Faster receivers retain driven deliveries, and
-  slower receivers can still be led when their feet option is not viable.
+- Executed `P.PASS` events also record `metrics.passFlight`: delivery type,
+  meeting-point intent, distance, peak height and launch speed. Match Lab
+  renders the authoritative height with a larger lift and small scale cue so
+  lofted and driven-aerial deliveries remain visible on the 2D pitch.
+- The exact planned point, semantic intent and pass type now survive into
+  execution. A safe current-position option through 28 yards for a receiver
+  below a 13-point Pace/Acceleration blend is kept at their feet and weighted
+  down from driven-ground to the controlled ground profile. Faster receivers
+  retain driven deliveries, and slower receivers can still be led when their
+  feet option is not viable. The adjustment cannot flatten a long aerial pass.
+  Passes into space from 30 yards and every pass above 35 yards stay in the
+  aerial family; the 30-to-35-yard ground exception applies only to an
+  unusually clear pass to feet from an elite ball striker.
 
 Measured on a 120-fixture sweep of deep deliveries, against the Stage 2
 baseline: unreached deliveries that ran out of play fell from 20 to 14, and
@@ -7404,9 +7412,16 @@ lost the shading.
 
 111 checks in `npm run test:corner-setup`.
 
-Not yet done: no Match Lab UI for either layer, and the delivery target and
-swing are produced but not yet consumed by restart EXECUTION -- the corner is
-placed correctly, and taking it still uses the existing path.
+The resolved delivery target is now consumed by restart preparation and the
+existing restart resolver. Near-post, far-post, central, six-yard, edge and
+short targets reserve the matching primary role. Other box players make
+separate decoy movements, assigned defenders retain their named marking
+subject, and short routines bring the short option toward the taker. The real
+cross/pass resolver receives the preferred role and still decides delivery,
+interception, contest and outcome from live geometry.
+
+Still open: Match Lab has no editor for the standing or per-corner plan, and
+corner swing is diagnostic rather than part of the ball-flight curl model.
 
 ---
 
@@ -7715,3 +7730,81 @@ Blomqvist-Butt-Beckham-Giggs and Cole-Yorke from left to right. Liverpool 2001
 loads Carragher-Hyypia-Henchoz-Babbel, Murphy-McAllister-Hamann-Gerrard and
 Heskey-Owen; Danny Murphy replaces the later-era John Arne Riise entry in that
 specific 2001 XI.
+
+## Future shape-up: set pieces and attacking support
+
+- Add editable team corner layouts, including distinct player positions and
+  duties for attacking and defending corners.
+- Let each team assign its corner-kick takers, with an ordered fallback list.
+- Let each team assign its free-kick takers, with an ordered fallback list and
+  support for the relevant free-kick situations.
+- Let each team designate a main playmaker who becomes the preferred attacking
+  link when the match state and passing lanes allow it.
+- Make Work Rate affect how quickly, how often and how far a player moves to
+  support teammates, while still respecting stamina, role, duty, team shape
+  and the current phase of play.
+
+## Footage-derived coordination slice (2026-09-11)
+
+- Added a shared, deterministic attack/defence responsibility coordinator with
+  three attacking pattern families and five defensive responses.
+- Coordinated intentions now overlap passes, carries, shots, crosses and loose
+  rolls. Team Shape preserves formation relationships and worldMotion limits
+  every resulting move by the existing kinetics contract.
+- Added exclusive pressure ownership, cover and runner tracking with commitment
+  time, ETA advantage thresholds and stable multi-runner reservations.
+- Added live loose-ball claimant handoff and recorded each transfer and former
+  claimant recovery in the replay evidence.
+- Added expandable pattern candidates, utility contributions, reservations,
+  threats, ETAs, attributes, transfers, abort/fallback reasons and world
+  positions/velocities to Match Lab diagnostics and saved runs.
+- Replaced won-shield's repeated five-yard lateral rail with a short
+  momentum/space-aware retention movement. A shield win no longer removes the
+  challenger from the next pressure plan.
+- Added braking and planted-turn footwork for hard live retargets, and made
+  late body-to-ball convergence a physically timed sequential movement.
+- Moved the paused-match confirmation/resume controls above the tactics editor,
+  made the action bar sticky and allowed the Match tab to resume after
+  confirmation while preserving the stoppage clock and continuation state.
+
+## Sustained possession, box occupation, line and goalkeeper slice (2026-09-11)
+
+- Added `RECYCLE_AND_SWITCH` with a rear outlet, circulation connector,
+  opposite-width receiver and a forward who pins the line during circulation.
+- Added `PENALTY_AREA_OCCUPATION` with separate near-post, central, far-post,
+  cutback and edge-of-box participants. Threat targets remain onside before
+  the next contact.
+- Added `PROTECT_PENALTY_AREA` and shared defensive-line evidence. The line
+  steps only with controlled pressure, drops when the passer has time, and
+  remains ahead of the goalkeeper.
+- Added post-to-ball cone diagnostics for goalkeeper close-downs: target
+  depth, cone width, estimated coverage, defensive cover and lob exposure.
+- Kept every destination on Team Shape/worldMotion and left shot/save outcome
+  probabilities unchanged.
+
+## Restart preparation and ball momentum continuity (2026-09-11)
+
+- Added an explicit placement -> step-back -> scan/signal -> run-up timeline
+  for normal corners, free kicks and goal kicks. Taker movement uses
+  worldMotion and the kick still resolves only at `RESTART.*.TAKE`.
+- Added a distinct quick-restart path using separate seeded presentation RNG,
+  so it cannot change the resolver's pass/cross/shot probabilities.
+- Added a held-ball throw-in interval. Long Throws and Strength now determine
+  specialist range; the long hand throw has its own slower, higher flight.
+- Added one closed-form rolling trajectory builder for position and velocity.
+  Early interceptions retain incoming momentum, while friction-only zero
+  velocity is permitted solely at the calculated natural stop.
+- Added deterministic preparation, long-throw, hand-speed and no-premature-stop
+  fixtures, plus full restart playback continuity coverage.
+- Added one compact `RESTART.MOVEMENT` evidence event during scans and
+  run-ups. It carries concurrent runner/marker trajectories and named tracking
+  subjects while normal commentary remains readable.
+- Connected the resolved corner delivery target to distinct primary, decoy,
+  second-ball and short-option responsibilities. Existing marker assignments
+  persist into preparation, and the matching attacking role becomes the real
+  resolver's preferred target without guaranteeing the delivery outcome.
+- Made restart reaction timing attribute-driven: Anticipation, Off the Ball
+  and Work Rate affect attackers; Anticipation, Positioning and Marking affect
+  defenders. World motion remains authoritative for reachable travel.
+- Corrected failed-control bounce races so their winner is selected from the
+  same live motion state that playback renders.

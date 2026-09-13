@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "seed": 20260910,
+  "ownerId": "h6",
+  "ballPoint": { "x": 50, "y": 55 },
+  "attackingDirectionByTeam": { "home": "up", "away": "down" },
+  "players": [
+    { "id": "h1", "team": "home", "role": "keeper", "positionalSlot": "GK", "x": 50, "y": 94 },
+    { "id": "h2", "team": "home", "positionalSlot": "DL", "tacticalRole": "wing-back", "duty": "support", "x": 18, "y": 64, "attributes": { "Work Rate": 17, "Pace": 16 } },
+    { "id": "h3", "team": "home", "positionalSlot": "DR", "tacticalRole": "full-back", "duty": "support", "x": 82, "y": 64, "attributes": { "Work Rate": 15, "Pace": 14 } },
+    { "id": "h4", "team": "home", "positionalSlot": "DC", "duty": "defend", "x": 42, "y": 72, "attributes": { "Positioning": 17, "Anticipation": 16 } },
+    { "id": "h5", "team": "home", "positionalSlot": "DC", "duty": "defend", "x": 58, "y": 72, "attributes": { "Positioning": 16, "Anticipation": 15 } },
+    { "id": "h6", "team": "home", "positionalSlot": "MC", "tacticalRole": "advanced-playmaker", "duty": "support", "x": 50, "y": 55, "attributes": { "Decisions": 17, "Anticipation": 16, "Vision": 18, "Passing": 17, "Technique": 16 } },
+    { "id": "h7", "team": "home", "positionalSlot": "ML", "tacticalRole": "wide-playmaker", "duty": "support", "x": 41, "y": 49, "attributes": { "Passing": 16, "Technique": 16, "Teamwork": 17, "First Touch": 16 } },
+    { "id": "h8", "team": "home", "positionalSlot": "MR", "tacticalRole": "winger", "duty": "attack", "x": 59, "y": 49, "attributes": { "Off the Ball": 17, "Pace": 17, "Acceleration": 17, "Agility": 16 } },
+    { "id": "h9", "team": "home", "positionalSlot": "ST", "tacticalRole": "advanced-forward", "duty": "attack", "x": 48, "y": 35, "attributes": { "Off the Ball": 18, "Pace": 18, "Acceleration": 17 } },
+    { "id": "h10", "team": "home", "positionalSlot": "AMR", "tacticalRole": "inside-forward", "duty": "attack", "x": 78, "y": 43, "attributes": { "Off the Ball": 16, "Work Rate": 15, "Pace": 16 } },
+    { "id": "h11", "team": "home", "positionalSlot": "AML", "tacticalRole": "winger", "duty": "attack", "x": 22, "y": 43, "attributes": { "Off the Ball": 16, "Work Rate": 16, "Pace": 16 } },
+    { "id": "a1", "team": "away", "role": "keeper", "positionalSlot": "GK", "x": 50, "y": 6, "attributes": { "Positioning": 16, "Anticipation": 15 } },
+    { "id": "a2", "team": "away", "positionalSlot": "DL", "duty": "defend", "x": 22, "y": 39, "attributes": { "Positioning": 15, "Marking": 15, "Pace": 14, "Acceleration": 14 } },
+    { "id": "a3", "team": "away", "positionalSlot": "DR", "duty": "defend", "x": 78, "y": 39, "attributes": { "Positioning": 15, "Marking": 15, "Pace": 15, "Acceleration": 15 } },
+    { "id": "a4", "team": "away", "positionalSlot": "DC", "duty": "defend", "x": 44, "y": 38, "attributes": { "Positioning": 17, "Marking": 17, "Anticipation": 16, "Pace": 12, "Acceleration": 12 } },
+    { "id": "a5", "team": "away", "positionalSlot": "DC", "duty": "defend", "x": 56, "y": 38, "attributes": { "Positioning": 16, "Marking": 16, "Anticipation": 15, "Pace": 16, "Acceleration": 16 } },
+    { "id": "a6", "team": "away", "positionalSlot": "DM", "duty": "defend", "x": 52, "y": 49, "attributes": { "Decisions": 17, "Anticipation": 17, "Positioning": 17, "Work Rate": 17, "Stamina": 17, "Pace": 14, "Acceleration": 15 } },
+    { "id": "a7", "team": "away", "positionalSlot": "MC", "duty": "support", "x": 42, "y": 47, "attributes": { "Decisions": 14, "Anticipation": 14, "Positioning": 14, "Work Rate": 16, "Stamina": 16, "Pace": 14, "Acceleration": 14 } },
+    { "id": "a8", "team": "away", "positionalSlot": "MC", "duty": "support", "x": 64, "y": 47, "attributes": { "Decisions": 13, "Anticipation": 13, "Positioning": 13, "Work Rate": 14, "Pace": 13, "Acceleration": 13 } },
+    { "id": "a9", "team": "away", "positionalSlot": "ML", "duty": "support", "x": 25, "y": 50, "attributes": { "Marking": 13, "Positioning": 13, "Pace": 15, "Acceleration": 15 } },
+    { "id": "a10", "team": "away", "positionalSlot": "MR", "duty": "support", "x": 75, "y": 50, "attributes": { "Marking": 13, "Positioning": 13, "Pace": 15, "Acceleration": 15 } },
+    { "id": "a11", "team": "away", "positionalSlot": "ST", "duty": "attack", "x": 50, "y": 65, "attributes": { "Pace": 15, "Acceleration": 15 } }
+  ],
+  "scenarios": {
+    "regain": {
+      "flags": { "regain": true, "reason": "central-regain" },
+      "tacticsByTeam": {
+        "home": { "attacking": { "style": "direct", "mentality": "positive", "passIntoSpace": true }, "transition": { "onGain": "counter" } },
+        "away": { "defending": { "pressing": "standard", "defensiveLine": "standard", "scheme": "zonal", "strictness": 3 }, "transition": { "onLoss": "regroup" } }
+      },
+      "expectedAttack": "REGAIN_QUICK_RELEASE",
+      "expectedDefense": "TRANSITION_DELAY_AND_RECOVER"
+    },
+    "wideRight": {
+      "ballPoint": { "x": 72, "y": 55 }, "ownerId": "h10",
+      "flags": { "transition": true, "reason": "right-wide-transition" },
+      "tacticsByTeam": {
+        "home": { "attacking": { "style": "wing", "mentality": "positive", "width": "wide", "focusPlay": "right" }, "transition": { "onGain": "counter" } },
+        "away": { "defending": { "pressing": "standard", "defensiveLine": "standard", "scheme": "zonal", "strictness": 3 } }
+      },
+      "expectedAttack": "WIDE_TRANSITION", "expectedDefense": "DEFEND_WIDE_OVERLOAD"
+    },
+    "wideLeft": {
+      "ballPoint": { "x": 28, "y": 55 }, "ownerId": "h11",
+      "flags": { "transition": true, "reason": "left-wide-transition" },
+      "tacticsByTeam": {
+        "home": { "attacking": { "style": "wing", "mentality": "positive", "width": "wide", "focusPlay": "left" }, "transition": { "onGain": "counter" } },
+        "away": { "defending": { "pressing": "standard", "defensiveLine": "standard", "scheme": "zonal", "strictness": 3 } }
+      },
+      "expectedAttack": "WIDE_TRANSITION", "expectedDefense": "DEFEND_WIDE_OVERLOAD"
+    },
+    "combination": {
+      "flags": { "reason": "settled-central-possession" },
+      "tacticsByTeam": {
+        "home": { "attacking": { "style": "possession", "mentality": "balanced", "directness": 1, "tempo": "slow", "finalThird": "work-ball" }, "transition": { "onGain": "balanced" } },
+        "away": { "defending": { "pressing": "standard", "defensiveLine": "standard", "scheme": "man", "strictness": 4 } }
+      },
+      "expectedAttack": "SHORT_COMBINATION", "expectedDefense": "SHIFT_BLOCK_AND_PRESS"
+    },
+    "delayedCounter": {
+      "flags": { "regain": true, "reason": "counter-delayed" },
+      "tacticsByTeam": {
+        "home": { "attacking": { "style": "possession", "mentality": "cautious", "directness": 1, "tempo": "slow", "finalThird": "work-ball" }, "transition": { "onGain": "hold-shape" } },
+        "away": { "defending": { "pressing": "high", "defensiveLine": "deep", "scheme": "zonal", "strictness": 2 } }
+      },
+      "expectedAttack": "SHORT_COMBINATION", "expectedDefense": "SHIFT_BLOCK_AND_PRESS"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "from": { "x": 50, "y": 20 },
+  "aim": { "x": 50, "y": 100 },
+  "speedYps": 18,
+  "initialClaimantId": "near",
+  "players": [
+    { "id": "near", "team": "home", "x": 50, "y": 24, "attributes": { "Pace": 4, "Acceleration": 4, "Anticipation": 4, "Decisions": 5 } },
+    { "id": "deep", "team": "away", "x": 50, "y": 62, "attributes": { "Pace": 19, "Acceleration": 19, "Anticipation": 17, "Decisions": 16 } }
+  ],
+  "expectedFinalClaimantId": "deep"
+}

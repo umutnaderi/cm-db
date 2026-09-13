@@ -96,7 +96,13 @@ export const DEFENDER_CUTOUT_MARGIN_MS = 120;
 // pass-type table's own geometric ceiling. This is not a second ball-flight
 // model: selectPassType() still chooses the type, and this only says which
 // of its answers are physically silly over real distance.
-export const GROUND_FAMILY_MAX_YARDS = 45;
+export const GROUND_FAMILY_MAX_YARDS = 35;
+
+// Slowing a firm delivery down for a receiver waiting at their feet is a
+// useful adaptation over ordinary passing range. Beyond this distance the
+// adaptation used to turn 30-42 yard passes into plain ground balls, hiding
+// the aerial family even when the underlying selector had asked for pace.
+export const CONTROLLED_TO_FEET_MAX_YARDS = 28;
 
 // A receiver below this Pace/Acceleration blend is better served by a
 // controlled ground ball to their current position than by the quicker,
@@ -325,12 +331,14 @@ export function resolveDeliveryType({
       receiverAdjusted: false, receiverMobility: null,
     };
   }
-  let selected = deps.selectPassType({ passer, from, to, opponents });
+  let selected = deps.selectPassType({
+    passer, from, to, opponents, deliveryIntent: meetingPointKind ?? "current-position",
+  });
   const receiverMobility = receiver
     ? playerAttribute(receiver, "Pace") * 0.7 + playerAttribute(receiver, "Acceleration") * 0.3
     : null;
   const receiverAdjusted = selected === "driven-ground"
-    && distanceYards <= GROUND_FAMILY_MAX_YARDS
+    && distanceYards <= CONTROLLED_TO_FEET_MAX_YARDS
     && meetingPointKind === "current-position"
     && receiverMobility !== null
     && receiverMobility < TO_FEET_DRIVEN_MIN_MOBILITY;
@@ -647,6 +655,7 @@ export function generateJointCandidates({
     const toRunnerYards = yardDistance(passer, runner);
     const nominalType = deps.selectPassType({
       passer: passer.player, from: pointOf(passer), to: pointOf(runner), opponents,
+      deliveryIntent: "current-position",
     });
     const nominalFlightMs = deps.flightDurationMs(toRunnerYards, nominalType);
     const nominalReactionMs = deps.reactionDelayMs

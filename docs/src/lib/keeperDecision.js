@@ -51,6 +51,62 @@ export function keeperGoalMouthAngleDegrees(point, defendingDirection = "down") 
   ) * 180 / Math.PI;
 }
 
+/**
+ * Builds the keeper's set/close-down point from the two post-to-ball rays.
+ * The target only describes where the keeper wants to set. worldMotion still
+ * decides how much ground is reachable before the next contact, and this
+ * calculation never changes shot or save probability.
+ */
+export function keeperAngleManagementPlan({
+  keeper, ball, defendingDirection = "down", attackerVelocity = null,
+  defenders = [], instruction = "balanced",
+} = {}) {
+  const ballDepth = depth(ball, defendingDirection);
+  const keeperDepth = depth(keeper, defendingDirection);
+  const positioning = skill(keeper.player, "Positioning", "Decisions", "Anticipation") / 20;
+  const bravery = skill(keeper.player, "Bravery", "Decisions") / 20;
+  const attackerSpeed = speedYpsFromVelocity(attackerVelocity);
+  const goalSideCover = defenders.some((entry) => depth(entry, defendingDirection) < ballDepth
+    && movementDistanceYards(entry, ball) <= 6);
+  const instructionDelta = instruction === "aggressive" ? 1.5 : instruction === "cautious" ? -1 : 0;
+  const movingThreatDelta = clamp(0, 1.5, attackerSpeed * 0.16);
+  const coverDelta = goalSideCover ? -0.8 : 0;
+  const desiredDepth = clamp(
+    1.5,
+    Math.max(1.5, ballDepth - 0.85),
+    ballDepth * (0.42 + positioning * 0.11 + bravery * 0.05)
+      + instructionDelta + movingThreatDelta + coverDelta,
+  );
+  const ballYards = yardPoint(ball);
+  const leftPostX = (PITCH_WIDTH_YARDS - GOAL_WIDTH_YARDS) / 2;
+  const rightPostX = (PITCH_WIDTH_YARDS + GOAL_WIDTH_YARDS) / 2;
+  const leftDistance = Math.hypot(ballYards.x - leftPostX, Math.max(0.01, ballDepth));
+  const rightDistance = Math.hypot(ballYards.x - rightPostX, Math.max(0.01, ballDepth));
+  const bisectorGoalX = (leftPostX * rightDistance + rightPostX * leftDistance)
+    / Math.max(0.01, leftDistance + rightDistance);
+  const ratio = desiredDepth / Math.max(ballDepth, 0.1);
+  const targetYards = {
+    x: bisectorGoalX + (ballYards.x - bisectorGoalX) * ratio,
+    y: defendingDirection === "up" ? PITCH_LENGTH_YARDS - desiredDepth : desiredDepth,
+  };
+  const coneWidthAtTarget = GOAL_WIDTH_YARDS * Math.max(0.05, 1 - ratio);
+  const bodyCoverageYards = 2.1 + positioning * 0.65;
+  return {
+    target: {
+      x: clamp(0, 100, targetYards.x / PITCH_WIDTH_YARDS * 100),
+      y: clamp(0, 100, targetYards.y / PITCH_LENGTH_YARDS * 100),
+    },
+    ballDepthYards: ballDepth,
+    keeperDepthYards: keeperDepth,
+    desiredDepthYards: desiredDepth,
+    shotAngleDegrees: keeperGoalMouthAngleDegrees(ball, defendingDirection),
+    coneWidthAtTargetYards: coneWidthAtTarget,
+    estimatedCoverageRatio: clamp(0, 1, bodyCoverageYards / Math.max(0.1, coneWidthAtTarget)),
+    goalSideCover,
+    lobExposureYards: Math.max(0, desiredDepth - 8),
+  };
+}
+
 export function assessKeeperCloseDown({ keeper, ball, attacker = null, defenders = [],
   defendingDirection = "down" }) {
   const goalPoint = goal(defendingDirection);
@@ -106,6 +162,13 @@ export function planKeeperResponse({ keeper, ball, attacker = null, defenders = 
   // a claim and "cautious" does not chain the keeper to the goal line.
   const sweepMarginBias = sweepingInstruction === "aggressive" ? -0.18
     : sweepingInstruction === "cautious" ? 0.2 : 0;
+  const angleManagement = keeperAngleManagementPlan({
+    keeper, ball, defendingDirection, attackerVelocity, defenders,
+    instruction: sweepingInstruction,
+  });
+  if (ballDepth <= KEEPER_CLOSE_DOWN_MAX_GOAL_DISTANCE_YARDS + 6 && ballDepth >= ownDepth - 1) {
+    base.angleManagement = angleManagement;
+  }
   if (ballVelocity && Math.abs(ballVelocity.y) > 0.0001) {
     // A bounded extrapolation of the visible ball velocity, not access to
     // the passer's intended receiver or an opponent's true arrival time.
@@ -128,32 +191,8 @@ export function planKeeperResponse({ keeper, ball, attacker = null, defenders = 
   if (!closeDown.eligible) return base;
   if (sweepingInstruction === "cautious"
     && (closeDown.goalDistanceYards > 18 || closeDown.shotAngleDegrees < 20)) return base;
-  // Stop short enough to set for a shot. A committed, more confident keeper
-  // closes further; this also exposes space for a chip or a sideways touch.
-  const goalPoint = goal(defendingDirection);
-  const instructionDepth = sweepingInstruction === "aggressive" ? 1.75
-    : sweepingInstruction === "cautious" ? -1.25 : 0;
-  const maximumCloseDepth = sweepingInstruction === "aggressive" ? 19 : 17;
-  // A fixed five-yard gap retreats almost to the line against a six-yard
-  // finish. Shorten that gap as the cone opens, leaving room to set without
-  // targeting the ball itself. These are destinations, never awarded saves.
-  const standOffDepth = Math.min(6.5 - 2 * boldness, ballDepth * 0.35);
-  const desiredDepth = Math.min(maximumCloseDepth, ballDepth - Math.min(1.25, ballDepth * 0.5),
-    Math.max(Math.min(2, ballDepth * 0.5), ballDepth - standOffDepth + instructionDepth));
-  // Bisect the actual post-to-ball angle in yards. A line to the centre of
-  // goal leaves unequal angles either side of the keeper on off-centre runs.
-  const ballYards = yardPoint(ball);
-  const leftPostX = (PITCH_WIDTH_YARDS - GOAL_WIDTH_YARDS) / 2;
-  const rightPostX = (PITCH_WIDTH_YARDS + GOAL_WIDTH_YARDS) / 2;
-  const leftDistance = Math.hypot(ballYards.x - leftPostX, ballDepth);
-  const rightDistance = Math.hypot(ballYards.x - rightPostX, ballDepth);
-  const bisectorGoalX = (leftPostX * rightDistance + rightPostX * leftDistance)
-    / (leftDistance + rightDistance) / PITCH_WIDTH_YARDS * 100;
-  const ratio = desiredDepth / Math.max(ballDepth, 0.1);
-  return { ...base, action: "keeper-close-down", target: {
-    x: bisectorGoalX + (ball.x - bisectorGoalX) * ratio,
-    y: goalPoint.y + (ball.y - goalPoint.y) * ratio,
-  } };
+  return { ...base, action: "keeper-close-down", target: angleManagement.target,
+    angleManagement };
 }
 
 export function chooseGoalCover({ keeper, defenders = [], ball, defendingDirection = "down", keeperAction }) {

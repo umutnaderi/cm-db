@@ -257,6 +257,7 @@ loop starts, so a restart can never fall through into a generic
 | Module | Owns |
 | --- | --- |
 | `src/lib/restartRoles.js` | Who takes a restart, and which player fills each restart role. |
+| `src/lib/restartPreparation.js` | Seeded quick/normal preparation phases, set position, signal choice and throw-in range. |
 | `src/lib/restartExecution.js` | Which real resolver a restart dispatches to, and the release back into open play. |
 
 Three things this deliberately does **not** own. Every football outcome
@@ -693,25 +694,40 @@ with one endpoint and then struck faster and farther toward another.
 
 ### Receiver-aware delivery weight
 
-For a safe current-position option, a receiver below a 13-point blend of
-Pace (70%) and Acceleration (30%) is preferred at their feet. A medium-range
-driven-ground baseline is weighted down to the more controlled ground
-profile, which travels more slowly and has less accuracy scatter. A quicker
-receiver keeps the driven delivery. If the feet option is not viable, the
-slower player may still attack a viable lead point; the rule does not erase
-runs into genuinely better space.
+For a safe current-position option no longer than 28 yards, a receiver below
+a 13-point blend of Pace (70%) and Acceleration (30%) is preferred at their
+feet. A medium-range driven-ground baseline is weighted down to the more
+controlled ground profile, which travels more slowly and has less accuracy
+scatter. A quicker receiver keeps the driven delivery. If the feet option is
+not viable, the slower player may still attack a viable lead point; the rule
+does not erase runs into genuinely better space. That receiver adjustment is
+bounded to controlled passing range and can never turn a long aerial delivery
+back into a ground pass.
 
 ### Unrealistic long ground passes
 
-`selectPassType()` supplies the geometric baseline. Two joint-candidate rules
-sit on top of it: the receiver-aware to-feet weighting above, and a
-ground-family answer beyond 45 yards is not a credible delivery, so it
-is **upgraded** to a driven aerial or lofted ball depending on the passer,
-and the upgrade is recorded rather than applied silently. A pass explicitly
-forced to stay on the ground at that range is rejected as
-`ground-pass-too-long`. A long pass is never rejected merely for being long;
-it is rejected for being longer than the passer can credibly strike, which
-is a separate test against their own range.
+`selectPassType()` supplies an intent-aware geometric baseline. Passes through
+15 yards stay on the ground. Clear passes under 30 yards may be driven on the
+ground. From 30 to 35 yards, that delivery survives only for an unusually
+clear pass to feet from a sufficiently powerful technician. Passes into space
+from that range and every pass beyond 35 yards use an aerial family: driven
+aerial when power and lane geometry support it, lofted otherwise.
+
+The joint-candidate layer retains a 35-yard ground-family credibility ceiling
+as a defensive invariant for forced or stale inputs. A pass explicitly forced
+to stay on the ground beyond it is rejected as `ground-pass-too-long`. A long
+pass is never rejected merely for being long; it is rejected for being longer
+than the passer can credibly strike, which is a separate test against their
+own range. Each executed `P.PASS` records type, semantic intent, distance,
+peak height and launch speed in `metrics.passFlight`.
+
+A failed chest control has two physical ball legs. The incoming aerial pass
+ends at the chest-contact point; `P.CHEST.SPILL` then carries the loose ball
+from that point to the reachable recovery or resting point. The spill owns a
+real duration and trajectory, while the winner's body races it independently.
+This prevents the ball from jumping between the two points and keeps the
+defender who made the last chest contact authoritative for any resulting
+restart.
 
 ### Preserving the RNG contract
 
@@ -1183,3 +1199,128 @@ uses only the short hand-to-body settling motion; it never starts a second
 goalkeeper journey after the ball has already reached the frame. The aerial
 contact point also replaces the receiver's stale pre-cross roster coordinate
 for shot, save and rebound geometry.
+
+## Coupled coordination slice (2026-09-11)
+
+`src/lib/coordinationCoordinator.js` is the renderer-neutral responsibility
+layer between action candidates and Team Shape. It ranks five attacking
+families (`REGAIN_QUICK_RELEASE`, `WIDE_TRANSITION`, and
+`SHORT_COMBINATION`, `RECYCLE_AND_SWITCH`, and
+`PENALTY_AREA_OCCUPATION`) and pairs them with one of six defensive responses.
+Its output is a set of temporary responsibilities and intention targets. It
+does not move players or resolve a pass, shot, cross, duel, or pattern ending.
+
+`runConstructedPossession()` asks the coordinator to re-evaluate at each
+on-ball choice and at intervals of at most 500 ms during live travel.
+`coordinateTargetProposals()` merges those intentions into the existing Team
+Shape pass. `worldMotion.advanceMotion()` remains the only layer that commits
+reachable positions and velocities. Action candidate order and resolver
+probabilities are unchanged; selected responsibilities add utility only to
+legal candidates that already exist.
+
+The coupled coordinator activates when both sides carry authored formation
+relationships. Sparse legacy resolver probes keep their established local
+planners, which preserves saved-fixture compatibility instead of inventing a
+formation from a few loose coordinates.
+
+The defensive contract reserves one primary pressure owner, inside cover,
+depth protection, runner tracking, recovery screen, far-side balance, a line
+controller, and goalkeeper cover. Pressure ETA includes current speed, facing,
+approach angle, physical reach, perception attributes, danger and cover cost.
+Pressure and tracker ownership use a 650 ms commitment plus a minimum ETA
+advantage before transfer. Existing tracker owners are reserved across a
+replan so two simultaneous threats cannot exchange markers merely because the
+allocator visited them in a different order.
+
+Loose-ball claim ownership is re-ranked along the authoritative decelerating
+roll. Transfer boundaries become motion replan boundaries; the current
+claimant chases the sampled ball point, while previous claimants recover shape
+or support the new owner. Every transfer, ETA advantage, abort, completion,
+fallback, reservation, tactical contribution, material attribute input and
+world position/velocity snapshot is stored in coordination diagnostics and
+saved-run history.
+
+A won shielding duel now retains pressure and uses a short momentum/space
+target through `worldMotion`. The old fixed five-yard perpendicular escape and
+`beatenDefenderId` handoff were removed from this outcome. The duel probability
+is unchanged.
+
+Large live retargets no longer reverse the current velocity vector in one
+rendered beat. `worldMotion` spends real time decelerating at the existing
+attribute-derived braking rate, adds a short planted-turn footwork arc, and
+then accelerates toward the new intention. A body that must still converge on
+a ball after a touch receives a sequential world-motion interval long enough
+to reach it; the possession loop does not commit the tactical endpoint ahead
+of the physical trajectory.
+
+The second slice adds ball-side congestion recognition and reserves a rear
+recycle outlet, circulation connector, and weak-side switch receiver. Final-
+third entry reserves distinct near-post, central, far-post, cutback and edge-
+of-box lanes. Prospective runners stay behind the effective ball/second-last-
+opponent line until the next contact; the pass resolver still takes the
+authoritative law snapshot at the kick.
+
+The defending side now records a shared line depth. Controlled pressure and
+an enabled offside trap permit a coordinated step; time for the passer causes
+a safety drop. The line remains at least two yards ahead of the goalkeeper,
+and available back-line members align to the controller rather than drifting
+independently. `PROTECT_PENALTY_AREA` adds the sixth defensive response.
+
+`keeperDecision.keeperAngleManagementPlan()` constructs the two post-to-ball
+rays, sets the keeper on their angle bisector, and records the cone width,
+estimated body coverage, cover and lob exposure. A genuine close-down uses
+that destination through worldMotion. Cover can temper the advance. The plan
+does not modify shot or save probability.
+
+Current limits: the registry contains the first five attacking families;
+pattern completion is inferred from later live events rather than a richer
+multi-touch phase model; ordinary turns and pressure approaches still use
+point targets rather than full steering/orientation envelopes; and the 2D Match Lab remains the only
+diagnostic renderer.
+
+## Restart preparation and continuous ground momentum (2026-09-11)
+
+`restartPreparation.js` adds a seeded presentation plan in front of the
+existing restart resolver. It cannot choose the football outcome. A normal
+corner, free kick or goal kick records ball placement, a 2.2-3.45 yard retreat,
+a scan with an optional one/two-arm signal, and a run-up. The retreat and
+approach are committed by `worldMotion`; the following
+`RESTART.*.TAKE` remains the first touch that makes the ball live. Eligible
+short free kicks, short corners and throw-ins can choose a separately recorded
+quick restart, biased by tempo, Decisions and Anticipation through a dedicated
+seed that does not consume resolver RNG.
+
+A throw-in holds the ball through an explicit scan interval before the hand
+release. `Long Throws` and Strength determine reach; a high Long Throws
+specialist in a direct/long-ball side may select a farther legal teammate.
+The `long-throw` flight has a higher hand arc but remains slower than every
+ground kick. Throw-in contact and last-touch metadata continue to identify the
+hand, and the offside restart exemption is unchanged.
+
+During the scan and approach, `planRestartSupportMovement()` proposes a small
+set of simultaneous runner checks and one-to-one defensive tracking responses.
+These moves use the same `worldMotion.advanceMotion()` path as open play and
+overlap the taker's preparation interval. Walls and goal-kick opponents hold;
+opponent-distance constraints remain enforced; free-kick runners check
+laterally until contact so preparation cannot create an unobserved offside run.
+For corners, the resolved manager delivery target selects one primary lane;
+other box players make decoy runs, a short option shows only when the short
+routine is selected, and the defensive marking subjects resolved during setup
+remain attached to their markers. Anticipation, Off the Ball and Work Rate set
+attacking reaction delay; Anticipation, Positioning and Marking do the same for
+defenders. Pace, acceleration and momentum still determine the distance each
+body can actually cover. The delivery target also biases the real cross/pass
+resolver toward the matching restart role, while that resolver retains every
+execution, interception, contest and outcome decision.
+
+`ballRollPhysics.buildRollingBallTrajectory()` now derives every sampled
+position and velocity from the same constant-friction equation used by loose
+ball claims. An ownerless ball intercepted before its natural stop retains
+non-zero incoming velocity at the contact. Velocity reaches zero only when
+turf friction reaches the calculated stopping time, or when a later player,
+boundary or dead-ball event supplies a real opposing interaction.
+
+Failed-control bounce races now start from each candidate's latest authored
+position and incoming velocity. Candidate selection and the recovery trace
+share the exact same kinetic result, preventing a stale kick-time race from
+awarding a contact the live body cannot reach.

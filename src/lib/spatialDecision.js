@@ -95,7 +95,7 @@ import { matchActionPatterns } from "./actionPatternRegistry.js";
 // ball-flight model anywhere in that module.
 import {
   generateJointCandidates, bestCandidateForRunner, bestThroughBallCandidate,
-} from "./passRunCandidates.js?v=20260907-01";
+} from "./passRunCandidates.js?v=20260913-01";
 import {
   fromYardPoint, GOAL_WIDTH_YARDS, PENALTY_AREA_DEPTH_YARDS, PENALTY_AREA_WIDTH_YARDS,
   PITCH_LENGTH_YARDS, PITCH_WIDTH_YARDS, toYardPoint, yardDistance, findPitchExit,

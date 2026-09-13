@@ -20,6 +20,7 @@
 import { yardDistance } from "./pitchGeometry.js";
 import { roleBand } from "./formationTemplates.js";
 import { candidateKey } from "./positionFit.js";
+import { qualifiesForLongThrow, throwInRangeYards } from "./restartPreparation.js";
 
 /** Restart type -> the required first event code. Mirrors restartSetup.js. */
 export const RESTART_ACTION_CODES = Object.freeze({
@@ -106,7 +107,9 @@ export function restartPlan({ type, variant, openingStyle = "possession", kickof
         ? { resolver: "pass", forcedPassType: null, targetPreference: "short" }
         : { resolver: "pass", forcedPassType: "lofted", targetPreference: "long" };
     case "throw-in":
-      return { resolver: "pass", forcedPassType: "throw", targetPreference: "short" };
+      return variant === "long"
+        ? { resolver: "pass", forcedPassType: "long-throw", targetPreference: "throw-long" }
+        : { resolver: "pass", forcedPassType: "throw", targetPreference: "short" };
     default:
       throw new Error(`No restart plan for type "${type}".`);
   }
@@ -203,9 +206,15 @@ export function promoteRestartEvent({ restart, groups, target, events, traceEven
  * football choice about DISTANCE and space, not an attribute contest --
  * the resolver that follows decides whether the ball actually arrives.
  */
-export function selectRestartTarget({ taker, teammates, preference, attackingGoalY }) {
+export function selectRestartTarget({
+  taker, teammates, preference, attackingGoalY, preferredRestartRoles = [],
+}) {
   const options = (teammates ?? []).filter((entry) => entry && entry.id !== taker.id);
   if (!options.length) return null;
+  const rolePreferred = preferredRestartRoles.length
+    ? options.filter((entry) => preferredRestartRoles.includes(entry.restartRole))
+    : [];
+  const considered = rolePreferred.length ? rolePreferred : options;
   const byDistance = (left, right) =>
     yardDistance(taker, left) - yardDistance(taker, right)
     || candidateKey(left.player).localeCompare(candidateKey(right.player));
@@ -213,25 +222,25 @@ export function selectRestartTarget({ taker, teammates, preference, attackingGoa
   if (preference === "short") {
     // The nearest teammate who is not the goalkeeper, so a kick-off is a
     // controlled roll to a supporting player.
-    const outfield = options.filter((entry) => entry.role !== "keeper");
-    return (outfield.length ? outfield : options).slice().sort(byDistance)[0];
+    const outfield = considered.filter((entry) => entry.role !== "keeper");
+    return (outfield.length ? outfield : considered).slice().sort(byDistance)[0];
   }
   if (preference === "backwards") {
-    const backward = options.filter((entry) => Math.abs(entry.y - attackingGoalY) > Math.abs(taker.y - attackingGoalY) + 3);
-    return (backward.length ? backward : options).slice().sort(byDistance)[0];
+    const backward = considered.filter((entry) => Math.abs(entry.y - attackingGoalY) > Math.abs(taker.y - attackingGoalY) + 3);
+    return (backward.length ? backward : considered).slice().sort(byDistance)[0];
   }
   if (preference === "midfield") {
-    const midfield = options.filter((entry) => /^(DMC|MC|AMC)$/.test(entry.positionalSlot ?? ""));
-    return (midfield.length ? midfield : options).slice().sort(byDistance)[0];
+    const midfield = considered.filter((entry) => /^(DMC|MC|AMC)$/.test(entry.positionalSlot ?? ""));
+    return (midfield.length ? midfield : considered).slice().sort(byDistance)[0];
   }
   if (preference === "target-forward") {
-    const forwards = options.filter((entry) => /^(FC|ST)$/.test(entry.positionalSlot ?? "") || /target/i.test(entry.tacticalRole ?? ""));
-    return (forwards.length ? forwards : options.filter((entry) => entry.role !== "keeper")).slice()
+    const forwards = considered.filter((entry) => /^(FC|ST)$/.test(entry.positionalSlot ?? "") || /target/i.test(entry.tacticalRole ?? ""));
+    return (forwards.length ? forwards : considered.filter((entry) => entry.role !== "keeper")).slice()
       .sort((a, b) => Number(/target/i.test(b.tacticalRole ?? "")) - Number(/target/i.test(a.tacticalRole ?? "")) || Math.abs(a.y - attackingGoalY) - Math.abs(b.y - attackingGoalY) || byDistance(a, b))[0] ?? null;
   }
   if (preference === "box") {
     // Whoever is closest to the goal being attacked -- the delivery target.
-    return options
+    return considered
       .filter((entry) => entry.role !== "keeper")
       .slice()
       .sort((left, right) =>
@@ -241,24 +250,48 @@ export function selectRestartTarget({ taker, teammates, preference, attackingGoa
   if (preference === "long") {
     // The furthest forward outfielder: a long goal kick aims at a target
     // man, and the aerial race decides the rest.
-    return options
+    return considered
       .filter((entry) => entry.role !== "keeper")
       .slice()
       .sort((left, right) =>
         Math.abs(left.y - attackingGoalY) - Math.abs(right.y - attackingGoalY)
         || candidateKey(left.player).localeCompare(candidateKey(right.player)))[0] ?? null;
   }
+  if (preference === "throw-long") {
+    const maximum = throwInRangeYards(taker.player);
+    const inRange = considered.filter((entry) => entry.role !== "keeper"
+      && yardDistance(taker, entry) <= maximum);
+    return (inRange.length ? inRange : considered.filter((entry) => entry.role !== "keeper"))
+      .slice()
+      .sort((left, right) =>
+        Math.abs(left.y - attackingGoalY) - Math.abs(right.y - attackingGoalY)
+        || byDistance(left, right))[0] ?? null;
+  }
   if (preference === "wide") {
     // Wing opening: the widest sensible outfielder becomes the outlet;
     // stable identity breaks an exactly symmetric left/right shape.
-    return options
+    return considered
       .filter((entry) => entry.role !== "keeper")
       .slice()
       .sort((left, right) =>
         Math.abs(right.x - 50) - Math.abs(left.x - 50)
         || byDistance(left, right))[0] ?? null;
   }
-  return options.slice().sort(byDistance)[0];
+  return considered.slice().sort(byDistance)[0];
+}
+
+function preferredRestartTargetRoles(restart) {
+  if (restart?.type !== "corner") return [];
+  const target = restart.corner?.delivery?.target
+    ?? (restart.variant === "short" ? "short" : null);
+  return ({
+    short: ["short-option"],
+    "near-post": ["near-post-runner"],
+    "far-post": ["far-post-runner"],
+    "penalty-area": ["central-runner", "box-crowd"],
+    "six-yard-box": ["keeper-occupier", "central-runner"],
+    "edge-of-area": ["edge-of-area"],
+  })[target] ?? [];
 }
 
 /**
@@ -284,7 +317,13 @@ export function executeRestart({
 }) {
   if (!restart?.type) throw new Error("executeRestart() requires a restart specification.");
   if (!groups?.owner) throw new Error("executeRestart() requires the taker as groups.owner.");
-  const plan = restartPlan(restart);
+  const effectiveRestart = restart.type === "throw-in"
+    && restart.variant !== "long"
+    && qualifiesForLongThrow(groups.owner.player)
+    && ["direct", "long-ball"].includes(restart.openingStyle)
+    ? { ...restart, variant: "long" }
+    : restart;
+  const plan = restartPlan(effectiveRestart);
   const resolver = resolvers[plan.resolver];
   if (!resolver) throw new Error(`Restart resolver "${plan.resolver}" is not available.`);
 
@@ -292,6 +331,7 @@ export function executeRestart({
     ? selectRestartTarget({
         taker: groups.owner, teammates: groups.teammates,
         preference: plan.targetPreference, attackingGoalY,
+        preferredRestartRoles: preferredRestartTargetRoles(effectiveRestart),
       })
     : null;
 
@@ -308,13 +348,13 @@ export function executeRestart({
   const resolverTrace = [];
   const result = resolver(groups, availability, random, resolverTrace, true, motionContext);
   trace.push(...promoteRestartEvent({
-    restart, groups, target, events: resolverTrace, traceEvent, playerName,
+    restart: effectiveRestart, groups, target, events: resolverTrace, traceEvent, playerName,
   }));
   return {
     ...result,
     restartExecuted: {
       type: restart.type,
-      variant: restart.variant,
+      variant: effectiveRestart.variant,
       takerId: groups.owner.id,
       targetId: target ? target.id : null,
       code: RESTART_ACTION_CODES[restart.type],

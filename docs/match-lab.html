@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Match Lab · Old-School-Football</title>
     <meta name="retroball-api-url" content="https://retroball-api.umutnaderi.workers.dev">
-    <link rel="stylesheet" href="styles.css?v=20260909-03">
+    <link rel="stylesheet" href="styles.css?v=20260909-04">
   </head>
   <body class="match-lab-page">
     <main class="match-lab-shell">
@@ -438,16 +438,19 @@
               <span id="labTacticsRequestStatus" aria-live="polite"></span>
             </div>
             <div class="match-stats-panel" id="labMatchStatsPanel" hidden>
-              <label class="match-stats-scope">Heat map
+              <div class="match-stats-tabs" role="tablist" aria-label="Match statistics view">
+                <button type="button" id="labPlayerStatsTab" role="tab" aria-selected="true" class="is-selected">Player Stats</button>
+                <button type="button" id="labTeamStatsTab" role="tab" aria-selected="false">Team Stats</button>
+              </div>
+              <label class="match-stats-scope"><span id="labStatsScopeLabel">Player heat map</span>
                 <select id="labStatsScope">
-                  <option value="team:home">Home team</option>
-                  <option value="team:away">Away team</option>
+                  <option value="">No match data</option>
                 </select>
               </label>
               <div class="match-heat-map" id="labHeatmapGrid" aria-label="Selected heat map"></div>
               <div class="match-stats-table-wrap">
                 <table class="match-stats-table">
-                  <thead><tr><th>Player</th><th>Distance</th><th>Passes</th><th>Accuracy</th><th>Key</th><th>On target</th><th>Missed</th></tr></thead>
+                  <thead><tr><th id="labStatsNameHeading">Player</th><th>Distance</th><th>Passes</th><th>Accuracy</th><th>Key passes</th><th>On target</th><th>Missed</th></tr></thead>
                   <tbody id="labPlayerStatsBody"></tbody>
                 </table>
               </div>
@@ -463,18 +466,6 @@
           </div>
 
           <div id="labFreePlayPanel">
-            <p class="match-lab-hint">
-              Give a placed player the ball, then ask the engine what it would
-              attempt. The <strong>choice</strong> of action (pass vs. through
-              ball vs. cross vs. dribble vs. carry vs. shoot vs. hold-up play)
-              is new, Match-Lab-only logic — there's
-              no callable "what would the engine try" function to call, so this
-              can't reuse one (see MATCH_LAB_PLAN.md — Spatial Decision
-              Intelligence v1 scores concrete candidates by real geometry:
-              distance, pressure, lane obstruction). Once an action is chosen,
-              its <strong>resolution</strong> always calls the real, unmodified
-              match engine.
-            </p>
             <p class="match-lab-hint" id="labBallOwnerStatus">No ball owner assigned yet.</p>
             <div class="match-lab-action-table" id="labActionTable"></div>
           </div>
@@ -665,6 +656,11 @@
             With-ball and without-ball positions are optional formation overrides.
           </p>
         </header>
+        <div class="match-lab-tactics-actions">
+          <button type="button" id="labApplyTacticsButton" class="match-lab-primary-button">Confirm tactical changes</button>
+          <button type="button" id="labResumeMatchButton" class="match-lab-primary-button" hidden disabled>Resume match</button>
+          <span class="match-lab-setup-status" id="labTacticsStatus"></span>
+        </div>
         <div class="match-lab-tactics-layout">
           <section class="match-lab-tactics-section" id="labTeamTacticsHost">
             <h2 class="match-lab-panel-title" id="labTeamTacticsTitle">Home team tactics</h2>
@@ -677,12 +673,8 @@
             <p class="match-lab-hint">Select a player on the positioning board.</p>
           </aside>
         </div>
-        <div class="match-lab-tactics-actions">
-          <button type="button" id="labApplyTacticsButton" class="match-lab-primary-button">Confirm tactical changes</button>
-          <span class="match-lab-setup-status" id="labTacticsStatus"></span>
-        </div>
       </section>
     </main>
-    <script src="match-lab.js?v=20260909-04" type="module"></script>
+    <script src="match-lab.js?v=20260913-01" type="module"></script>
   </body>
 </html>

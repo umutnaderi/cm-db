@@ -6,9 +6,15 @@ import {
   observeMatchEvent,
   lastTenMinutePossession,
   heatForScope,
-} from "./src/lib/matchTelemetry.js?v=20260909-02";
+  statsForTeam,
+} from "./src/lib/matchTelemetry.js?v=20260909-03";
 import { buildHighlightWindows, isHighlightTime, advanceHighlightTime } from "./src/lib/matchHighlights.js?v=20260909-01";
 import { applyKickoffInstructions } from "./src/lib/kickoffInstructions.js?v=20260909-01";
+import {
+  applyCoordinationCandidateBiases,
+  coordinateInteraction,
+  createCoordinationState,
+} from "./src/lib/coordinationCoordinator.js?v=20260911-02";
 import {
   assessKeeperCloseDown,
   planKeeperResponse,
@@ -16,7 +22,7 @@ import {
   outfieldPositionAheadOfKeeper,
   observeKeeperMotion,
   executeKeeperSweep,
-} from "./src/lib/keeperDecision.js?v=20260909-03";
+} from "./src/lib/keeperDecision.js?v=20260911-02";
 import {
   getDatabases,
   getDraftCandidates,
@@ -126,7 +132,7 @@ import {
   toYardPoint,
   yardDistance,
   classifyPitchExit,
-} from "./src/lib/spatialDecision.js?v=20260908-05";
+} from "./src/lib/spatialDecision.js?v=20260913-01";
 import {
   buildMatchLabPlaybackPlan,
   sampleMatchLabPlaybackPlan,
@@ -146,11 +152,13 @@ import {
   rollStopDurationMs,
   rollTraveledYards,
   rollDurationForDistance,
-} from "./src/lib/ballRollPhysics.js";
+  buildRollingBallTrajectory,
+} from "./src/lib/ballRollPhysics.js?v=20260911-01";
 import {
   claimLooseBall,
   CLAIM_MIN_ROLL_SPEED_YPS,
-} from "./src/lib/ballClaim.js";
+  evaluateLiveClaimantHandoffs,
+} from "./src/lib/ballClaim.js?v=20260911-01";
 import { timeToReach, topSpeed, reachIn,
 } from "./src/lib/playerKinetics.js?v=20260828-01";
 import {
@@ -164,12 +172,14 @@ import {
   selectPassType,
   passFlightProfile,
   buildPassFlight,
+  ballPositionAtElapsed,
+  contactBandForHeight,
   earliestReachableContact,
   simulateFlightUntilContact,
   playerMaxReachYards,
   jumpReachYards,
   reactionDelayMsFor,
-} from "./src/lib/matchPassFlight.js?v=20260827-02";
+} from "./src/lib/matchPassFlight.js?v=20260913-01";
 import {
   createMotionState,
   resolveMotionBatch,
@@ -197,7 +207,7 @@ import { captureScenario } from "./src/lib/replayHarness.js?v=20260908-03";
 // they actually get -- never straight onto the target.
 import {
   advanceMotion, advanceKeeperSaveMotion, keeperSaveTravel, readMotionRecord, speedYpsFromVelocity, writeMotionRecord, continueMotionIntentions, velocityAlong,
-} from "./src/lib/worldMotion.js?v=20260909-01";
+} from "./src/lib/worldMotion.js?v=20260911-01";
 // Match Setup Integration v1 (2026-09-04). Every one of these is a pure,
 // DOM-free module -- Match Lab is the CONSUMER of the setup model, never a
 // second copy of it. In particular the historical squad catalogue is never
@@ -227,8 +237,12 @@ import { assignLineup } from "./src/lib/lineupAssignment.js?v=20260908-01";
 // Action Pattern Schema v1 (2026-09-05) -- read-only diagnostics. The
 // registry itself is consumed inside spatialDecision.js; Match Lab only
 // displays what the last evaluation decided.
-import { lastActionPatternDiagnostics } from "./src/lib/spatialDecision.js?v=20260908-05";
-import { executeRestart } from "./src/lib/restartExecution.js?v=20260904-05";
+import { lastActionPatternDiagnostics } from "./src/lib/spatialDecision.js?v=20260913-01";
+import { executeRestart } from "./src/lib/restartExecution.js?v=20260912-01";
+import {
+  planRestartPreparation, planRestartSupportMovement, qualifiesForLongThrow,
+  restartSupportReactionDelay,
+} from "./src/lib/restartPreparation.js?v=20260912-01";
 import {
   assignRestartRoles, isWallCandidate, selectRestartTaker, wallSizeFor,
 } from "./src/lib/restartRoles.js?v=20260904-04";
@@ -242,7 +256,7 @@ import {
 } from "./src/lib/teamPhase.js?v=20260908-02";
 import {
   coordinateTeamShape, phaseAnchorSelectionFor, teamShapeMetrics,
-} from "./src/lib/teamShape.js?v=20260908-06";
+} from "./src/lib/teamShape.js?v=20260911-02";
 import {
   buildRoleOccupancyMap,
 } from "./src/lib/roleOccupancyMap.js?v=20260908-02";
@@ -356,7 +370,8 @@ function zoneCenterPoint(zone) {
 // actually kicked -- a keeper's own hand throw (2026-08-25). Every other
 // passType keeps the exact existing phrasing.
 function passVerbPhrase(passType, verb) {
-  if (passType !== "throw") return `${verb} a ${passType.replace("-", " ")} pass`;
+  if (!String(passType).includes("throw")) return `${verb} a ${passType.replace("-", " ")} pass`;
+  if (passType === "long-throw") return verb === "attempts" ? "attempts a long throw" : "launches a long throw";
   return verb === "attempts" ? "attempts a throw" : "throws it";
 }
 
@@ -906,15 +921,34 @@ function looseBallFlightMs(distanceYards) {
 function realMoverTrajectory(mover, to, {
   from = pointOf(mover), floorMs = MOVEMENT_DURATIONS.reposition, action = "advance",
   reactionDelayMs = CONTACT_REACTION_DELAY_MS, initialSpeedYps = 0, incomingVelocity = null,
+  paceToArrival = false,
 } = {}) {
-  const duration = Math.max(
+  let duration = Math.max(
     floorMs,
     Math.ceil(reactionDelayMs + timeToReach(mover.player, yardDistance(from, to), initialSpeedYps) * 1000),
   );
-  const motion = advanceMotion({ from, intentionTarget: to, player: mover.player,
+  const entryVelocity = incomingVelocity ?? velocityAlong(from, to, initialSpeedYps);
+  let motion = advanceMotion({ from, intentionTarget: to, player: mover.player,
     elapsedMs: duration, reactionDelayMs,
-    incomingVelocity: incomingVelocity ?? velocityAlong(from, to, initialSpeedYps), paceToArrival: false,
+    incomingVelocity: entryVelocity, paceToArrival,
     intention: action, sampleCount: Math.max(10, Math.min(24, Math.ceil(duration / 160))) });
+  // timeToReach() is a straight-ahead lower bound. When the player enters
+  // this move facing sharply away from the target, worldMotion correctly
+  // spends part of that window braking and planting. Extend the authored
+  // interval until the same kinetic path actually arrives instead of
+  // committing the tactical endpoint after a physically short trajectory.
+  for (let attempt = 0; attempt < 3 && !motion.reachedTarget; attempt += 1) {
+    const extraMs = Math.max(250, Math.ceil(timeToReach(
+      mover.player,
+      motion.remainingYards,
+      speedYpsFromVelocity(motion.velocity),
+    ) * 1000));
+    duration += extraMs;
+    motion = advanceMotion({ from, intentionTarget: to, player: mover.player,
+      elapsedMs: duration, reactionDelayMs,
+      incomingVelocity: entryVelocity, paceToArrival,
+      intention: action, sampleCount: Math.max(10, Math.min(32, Math.ceil(duration / 160))) });
+  }
   return {
     duration,
     playerMoves: [{
@@ -1622,6 +1656,9 @@ function traceEvent(code, label, opts = {}) {
     // same legal candidate list the chooser consumes; never reconstructed by
     // playback from where markers happen to be drawn later.
     metrics = null,
+    // Coupled attacking/defensive coordination evidence. This is a
+    // read-only snapshot of the planner decision; playback never consumes it.
+    coordination = null,
     // Optional override for the law-relevant touch descriptor. Ordinarily
     // contact already states the actor and touch type explicitly, allowing
     // this producer adapter to normalize that data once for ball state.
@@ -1674,6 +1711,10 @@ function traceEvent(code, label, opts = {}) {
         targetRegionOccupancy: entry.targetRegionOccupancy ?? null,
         tacticalRole: entry.tacticalRole ?? null,
         duty: entry.duty ?? null,
+        coordinationFamily: entry.coordinationFamily ?? null,
+        coordinationResponsibility: entry.coordinationResponsibility ?? null,
+        coordinationRelationship: entry.coordinationRelationship ?? null,
+        coordinationThreatId: entry.coordinationThreatId ?? null,
         authoritative: entry.authoritative !== false,
         reactionDelayMs: Number.isFinite(entry.reactionDelayMs)
           ? entry.reactionDelayMs
@@ -1846,6 +1887,7 @@ function traceEvent(code, label, opts = {}) {
     ballTrajectory: resolvedBallTrajectory,
     attribution: attribution.map((entry) => ({ ...entry })),
     metrics: metrics ? { ...metrics } : null,
+    coordination: coordination ? JSON.parse(JSON.stringify(coordination)) : null,
   };
 }
 
@@ -4101,7 +4143,25 @@ function looseBallBouncePoint(fromPoint, originPoint, random) {
 // bouncePoint) rather than always claiming the full leg -- otherwise the
 // very next event's ballFrom would start somewhere the previous event
 // never claimed the ball reached, a genuine continuity break.
-function looseBallRaceContact(receiver, fromPoint, bouncePoint, bounceDurationMs, groups) {
+function latestAuthoredPlayerMove(trace, playerId) {
+  return (trace || []).slice().reverse()
+    .flatMap((event) => (event.playerMoves || []).slice().reverse())
+    .find((move) => String(move.playerId ?? move.player?.id) === String(playerId)) ?? null;
+}
+
+function livePlayerMotionStart(entry, motionContext, trace) {
+  const record = readMotionRecord(motionContext, entry.id, pointOf(entry));
+  const lastMove = latestAuthoredPlayerMove(trace, entry.id);
+  return {
+    position: lastMove?.to ?? record.position ?? pointOf(entry),
+    velocity: lastMove?.trajectory?.at(-1)?.velocity ?? record.velocity ?? { x: 0, y: 0 },
+  };
+}
+
+function looseBallRaceContact(
+  receiver, fromPoint, bouncePoint, bounceDurationMs, groups,
+  { motionContext = null, trace = null } = {},
+) {
   const bounceFlight = buildPassFlight({
     owner: receiver,
     receiver: null,
@@ -4111,6 +4171,67 @@ function looseBallRaceContact(receiver, fromPoint, bouncePoint, bounceDurationMs
     passType: "ground",
     durationMs: bounceDurationMs,
   });
+  // A live bounce happens after the incoming delivery has already moved
+  // players. The old frozen oracle below remains useful to standalone
+  // resolver fixtures, but a real possession must race from the latest
+  // authored body and velocity. The same advanceMotion result is later
+  // rendered as the recovery run, so selection and playback cannot disagree
+  // about whether the winner was physically within touching distance.
+  if (motionContext || trace) {
+    const candidates = [receiver, ...groups.opponents].map((candidate) => ({
+      candidate,
+      ...livePlayerMotionStart(candidate, motionContext, trace),
+    }));
+    const steps = Math.max(1, Math.ceil(bounceDurationMs / 40));
+    for (let step = 0; step <= steps; step += 1) {
+      const atMs = Math.min(bounceDurationMs, step * 40);
+      const atPoint = ballPositionAtElapsed(bounceFlight, atMs);
+      if (movementDistanceYards(fromPoint, atPoint) <= 1.5) continue;
+      const eligible = [];
+      for (const live of candidates) {
+        if (atPoint.height > playerMaxReachYards(live.candidate.player)) continue;
+        const reactionDelayMs = reactionDelayMsFor(live.candidate.player, {
+          isIntendedReceiver: live.candidate.id === receiver.id,
+        });
+        const motion = advanceMotion({
+          from: live.position,
+          intentionTarget: atPoint,
+          player: live.candidate.player,
+          elapsedMs: atMs,
+          incomingVelocity: live.velocity,
+          reactionDelayMs,
+          intention: "recover",
+          paceToArrival: false,
+        });
+        const neededYards = movementDistanceYards(motion.position, atPoint);
+        if (neededYards <= 1.5) eligible.push({ live, motion, neededYards, reactionDelayMs });
+      }
+      if (eligible.length) {
+        eligible.sort((left, right) => left.neededYards - right.neededYards
+          || String(left.live.candidate.id).localeCompare(String(right.live.candidate.id)));
+        const winner = eligible[0];
+        return {
+          candidate: winner.live.candidate,
+          isIntendedReceiver: winner.live.candidate.id === receiver.id,
+          atMs,
+          atPoint,
+          bodyPoint: winner.motion.position,
+          sourceFrom: winner.live.position,
+          motion: winner.motion,
+          reactionDelayMs: winner.reactionDelayMs,
+          reachAllowanceYards: 1.5,
+          neededYards: winner.neededYards,
+          band: contactBandForHeight(atPoint.height),
+          contestants: eligible.map((item) => ({
+            candidate: item.live.candidate,
+            neededYards: item.neededYards,
+            reactionDelayMs: item.reactionDelayMs,
+          })),
+        };
+      }
+    }
+    return null;
+  }
   return earliestReachableContact({
     flight: bounceFlight,
     candidates: [receiver, ...groups.opponents],
@@ -4122,7 +4243,7 @@ function looseBallRaceContact(receiver, fromPoint, bouncePoint, bounceDurationMs
 // resolveLooseBallBounce() (the ordinary HEAVY/LOSE case, which also
 // narrates the spill itself) and the chest-duel-lost case (whose own duel
 // event already narrates how it came loose, so it calls straight in here).
-function resolveLooseBallRaceOutcome(receiver, pressingOpponent, bouncePoint, bounceDurationMs, raceContact, trace) {
+function resolveLooseBallRaceOutcome(receiver, pressingOpponent, bouncePoint, bounceDurationMs, raceContact, trace, motionContext = null) {
   if (!raceContact) {
     return {
       outcome: "LOOSE",
@@ -4138,12 +4259,19 @@ function resolveLooseBallRaceOutcome(receiver, pressingOpponent, bouncePoint, bo
   }
   const winner = raceContact.candidate;
   const recoveredByReceiver = winner.id === receiver.id;
-  const recovery = advanceMotion({from:pointOf(winner),intentionTarget:raceContact.atPoint,
+  // The roster entry is the action's opening snapshot. During the incoming
+  // pass its owner may already have moved through the shared world-motion
+  // context, so starting this overlapping bounce chase from pointOf(winner)
+  // can jump them back to that stale snapshot. Continue from the exact live
+  // position and velocity carried by the preceding authored movement.
+  const recoveryStart = livePlayerMotionStart(winner, motionContext, trace);
+  const recoveryFrom = raceContact.sourceFrom ?? recoveryStart.position;
+  const recovery = raceContact.motion ?? advanceMotion({from:recoveryFrom,intentionTarget:raceContact.atPoint,
     player:winner.player,elapsedMs:raceContact.atMs,reactionDelayMs:raceContact.reactionDelayMs ?? 0,
-    intention:"recover",paceToArrival:false});
+    incomingVelocity:recoveryStart.velocity,intention:"recover",paceToArrival:false});
   trace.push(traceEvent("BALL.RECOVERY.RUN", `${playerName(winner.player)} reaches for the loose ball`, {
     actor:winner,movement:"reposition",duration:raceContact.atMs,overlapWithPrevious:true,
-    playerMoves:[{player:winner,from:pointOf(winner),to:recovery.position,trajectory:recovery.trajectory,
+    playerMoves:[{player:winner,from:recoveryFrom,to:recovery.position,trajectory:recovery.trajectory,
       action:"recover-loose-ball",reactionDelayMs:raceContact.reactionDelayMs ?? 0}],
   }));
   trace.push(
@@ -4203,7 +4331,9 @@ function resolveLooseBallBounce(receiver, pressingOpponent, fromPoint, originPoi
     };
   }
   const bounceDurationMs = looseBallFlightMs(yardDistance(fromPoint, bouncePoint));
-  const raceContact = looseBallRaceContact(receiver, fromPoint, bouncePoint, bounceDurationMs, groups);
+  const raceContact = looseBallRaceContact(
+    receiver, fromPoint, bouncePoint, bounceDurationMs, groups, { motionContext, trace },
+  );
   trace.push(
     traceEvent(
       code,
@@ -4249,7 +4379,7 @@ function resolveLooseBallBounce(receiver, pressingOpponent, fromPoint, originPoi
     [raceContact?.candidate?.id].filter(Boolean),
   );
   return {
-    ...resolveLooseBallRaceOutcome(receiver, pressingOpponent, bouncePoint, bounceDurationMs, raceContact, trace),
+    ...resolveLooseBallRaceOutcome(receiver, pressingOpponent, bouncePoint, bounceDurationMs, raceContact, trace, motionContext),
     offBallInterleaved: bounceOffBallInterleaved,
   };
 }
@@ -4763,11 +4893,14 @@ function resolvePassInternal(
   // comment) always wins outright; selectPassType()'s distance/lane-
   // congestion geometry is for a genuinely kicked ball and has no concept
   // of "this is a throw," so it must never override one.
+  const deliveryIntent = availability?.plannedDeliveryIntent
+    ?? (availability?.plannedMoveTo ? "planned-space" : "current-position");
   const passType = availability?.forcedPassType || availability?.plannedPassType || selectPassType({
     passer: owner.player,
     from: pointOf(owner),
     to: aimPointForDelivery,
     opponents: groups.opponents,
+    deliveryIntent,
   });
   const { accuracyErrorYards: baseAccuracyErrorYards } = resolvePassAccuracy(
     owner.player,
@@ -4841,6 +4974,13 @@ function resolvePassInternal(
     passType,
     durationMs: passDuration,
   });
+  const passFlightEvidence = {
+    passType,
+    deliveryIntent,
+    distanceYards: Number(passDistanceYards.toFixed(2)),
+    peakHeightYards: Number(flight.peakHeightYards.toFixed(2)),
+    speedYardsPerSecond: passFlightProfile(passType, passDistanceYards).speedYardsPerSecond,
+  };
 
   // The unified race -- see matchPassFlight.js's own header comment on
   // earliestReachableContact() for the full rationale. The intended
@@ -4901,6 +5041,7 @@ function resolvePassInternal(
           ownerAfter: null,
           offside,
           duration: passDuration,
+          metrics: { passFlight: passFlightEvidence },
         },
       ),
     );
@@ -5000,6 +5141,7 @@ function resolvePassInternal(
           ownerAfter: null,
           offside,
           duration: contact.atMs,
+          metrics: { passFlight: passFlightEvidence },
         },
       ),
     );
@@ -5059,21 +5201,21 @@ function resolvePassInternal(
           offBallInterleaved: aerialOffBallInterleaved,
         };
       }
-      // Bounce On Failed Control v1 -- the duel event just above already
-      // narrated how it came loose (contact.atPoint); only the live race
-      // for who actually gets there is still needed, via
-      // resolveLooseBallRaceOutcome() (see its own header comment).
+      // The duel names who won the chest contact, but the spill after that
+      // contact is a separate physical ball leg. It must be authored before
+      // the recovery race; otherwise the resolver returns the later bounce
+      // point while playback's ball is still at the aerial contact point.
       const chestBouncePoint = looseBallBouncePoint(contact.atPoint, pointOf(owner), random);
       // Ball Out of Bounds v1 -- see resolveLooseBallBounce()'s own
       // matching comment.
       const chestPitchExit = classifyPitchExit({
-        from: contact.atPoint, to: chestBouncePoint, lastTouchTeam: receiver.team, attackingDirectionByTeam: state.attackingDirection,
+        from: contact.atPoint, to: chestBouncePoint, lastTouchTeam: aerialDefender.team, attackingDirectionByTeam: state.attackingDirection,
       });
       if (chestPitchExit) {
         return {
           ...pushPitchExitRestart(trace, {
-            actor: receiver, ballFrom: contact.atPoint, exit: chestPitchExit, movement: "reception",
-            contact: { point: contact.atPoint, actor: receiver, type: "control", phase: "start" },
+            actor: aerialDefender, ballFrom: contact.atPoint, exit: chestPitchExit, movement: "reception",
+            contact: { point: contact.atPoint, actor: aerialDefender, type: "control", phase: "start" },
           }),
           offBallInterleaved: aerialOffBallInterleaved,
         };
@@ -5081,12 +5223,44 @@ function resolvePassInternal(
       const chestBounceDurationMs = looseBallFlightMs(yardDistance(contact.atPoint, chestBouncePoint));
       const chestRaceContact = looseBallRaceContact(
         receiver, contact.atPoint, chestBouncePoint, chestBounceDurationMs, groups,
+        { motionContext, trace },
+      );
+      const chestSpillPoint = chestRaceContact?.atPoint ?? chestBouncePoint;
+      const chestSpillDurationMs = chestRaceContact?.atMs ?? chestBounceDurationMs;
+      trace.push(traceEvent(
+        "P.CHEST.SPILL",
+        `${playerName(aerialDefender.player)} cannot bring the chest ball under control`,
+        {
+          actor: aerialDefender,
+          movement: "reception",
+          outcome: "loose",
+          ballFrom: contact.atPoint,
+          ballTo: chestSpillPoint,
+          contact: { point: contact.atPoint, actor: aerialDefender, type: "control", phase: "start" },
+          ownerBefore: null,
+          ownerAfter: null,
+          duration: chestSpillDurationMs,
+        },
+      ));
+      const chestBounceOffBallInterleaved = interleaveFlightOffBall(
+        interleaveOffBall,
+        groups,
+        contact.atPoint,
+        chestSpillPoint,
+        chestSpillDurationMs,
+        trace,
+        motionContext,
+        // Both aerial contestants already have contact-pinned movement on
+        // P.CHEST.LOST. Do not give either a second generic trajectory from
+        // their stale kick-time roster coordinate during this short spill;
+        // the eventual recovery winner receives its own BALL.RECOVERY.RUN.
+        [receiver.id, aerialDefender.id, chestRaceContact?.candidate?.id].filter(Boolean),
       );
       return {
         ...resolveLooseBallRaceOutcome(
-          receiver, aerialDefender, chestBouncePoint, chestBounceDurationMs, chestRaceContact, trace,
+          receiver, aerialDefender, chestBouncePoint, chestBounceDurationMs, chestRaceContact, trace, motionContext,
         ),
-        offBallInterleaved: aerialOffBallInterleaved,
+        offBallInterleaved: aerialOffBallInterleaved || chestBounceOffBallInterleaved,
       };
     }
     if (isHeader && isCrossTargetZone(contact.atPoint, state.attackingDirection[owner.team])) {
@@ -5158,6 +5332,7 @@ function resolvePassInternal(
           ownerAfter: null,
           offside,
           duration: duel.won ? passDuration : contact.atMs,
+          metrics: { passFlight: passFlightEvidence },
         },
       ),
     );
@@ -5287,6 +5462,7 @@ function resolvePassInternal(
           ownerAfter: null,
           offside,
           duration: contact.atMs,
+          metrics: { passFlight: passFlightEvidence },
         },
       ),
     );
@@ -5819,6 +5995,7 @@ function resolveThroughBallInternal(
     from: pointOf(owner),
     to: targetPoint,
     opponents: groups.opponents,
+    deliveryIntent: "run-in-behind",
   });
   const landingXY = deliveryLandingPoint(
     targetPoint,
@@ -7314,6 +7491,70 @@ function applyOffBallSeparation(proposals, roster) {
   });
 }
 
+// A successful shield retains control through contact; it is not the same
+// event as dribbling past the challenger. Choose a short continuation from
+// live momentum and nearby space, then let worldMotion determine how much of
+// it the holder can physically cover during the hold beat.
+function shieldRetentionMotion(owner, defender, opponents, contactPoint, motionContext) {
+  const contactYards = toYardPoint(contactPoint);
+  const direction = state.attackingDirection[owner.team] === "up" ? -1 : 1;
+  const record = readMotionRecord(motionContext, owner.id, contactPoint);
+  const velocity = record.velocity ?? { x: 0, y: 0 };
+  const velocityYards = {
+    x: (Number(velocity.x) || 0) * PITCH_WIDTH_YARDS,
+    y: (Number(velocity.y) || 0) * PITCH_LENGTH_YARDS,
+  };
+  const velocityLength = Math.hypot(velocityYards.x, velocityYards.y);
+  const momentumHeading = velocityLength > 0.15
+    ? { x: velocityYards.x / velocityLength, y: velocityYards.y / velocityLength }
+    : null;
+  const agility = playerAttribute(owner.player, "Agility");
+  const balance = playerAttribute(owner.player, "Balance");
+  const desiredYards = 1.25 + ((agility + balance) / 40) * 0.65;
+  const headings = [
+    ...(momentumHeading ? [momentumHeading] : []),
+    { x: 0, y: direction },
+    { x: -0.48, y: direction * 0.88 },
+    { x: 0.48, y: direction * 0.88 },
+    { x: -0.7, y: -direction * 0.35 },
+    { x: 0.7, y: -direction * 0.35 },
+  ];
+  const nearby = (opponents ?? []).filter((entry) => String(entry.id) !== String(defender.id));
+  const candidates = headings.map((heading, index) => {
+    const length = Math.hypot(heading.x, heading.y) || 1;
+    const unit = { x: heading.x / length, y: heading.y / length };
+    const yards = {
+      x: reflectIntoRange(contactYards.x + unit.x * desiredYards, 0, PITCH_WIDTH_YARDS),
+      y: reflectIntoRange(contactYards.y + unit.y * desiredYards, 0, PITCH_LENGTH_YARDS),
+    };
+    const candidate = fromYardPoint(yards);
+    const clearance = nearby.length
+      ? Math.min(...nearby.map((entry) => yardDistance(candidate, entry)))
+      : 8;
+    const momentum = momentumHeading
+      ? unit.x * momentumHeading.x + unit.y * momentumHeading.y
+      : 0;
+    const forward = unit.y * direction;
+    const boundaryMargin = Math.min(yards.x, PITCH_WIDTH_YARDS - yards.x, yards.y, PITCH_LENGTH_YARDS - yards.y);
+    return { candidate, score: clearance * 0.7 + momentum * 1.8 + forward * 0.55 + Math.min(2, boundaryMargin) * 0.2 - index * 0.001 };
+  }).sort((a, b) => b.score - a.score);
+  const intentionTarget = candidates[0]?.candidate ?? contactPoint;
+  const duration = MOVEMENT_DURATIONS.hold;
+  const motion = advanceMotion({
+    from: contactPoint,
+    intentionTarget,
+    player: owner.player,
+    elapsedMs: duration,
+    reactionDelayMs: 0,
+    incomingVelocity: velocity,
+    paceToArrival: false,
+    intention: "shield-retain",
+    continuesAfter: true,
+    sampleCount: 7,
+  });
+  return { ...motion, intentionTarget, duration };
+}
+
 // Player Body Occupancy v1 (2026-09-06) -- see src/lib/playerBody.js's own
 // header for why this is a SECOND, different constraint rather than a
 // retuning of the 8-yard tactical spacing above.
@@ -7415,8 +7656,8 @@ function enforceHeldKeeperDistance(targets, opponents, keeperPoint, keeperId) {
 function offBallAssignmentsLabel(moves, role) {
   return moves
     .map((move) => {
-      const phrase =
-        OFF_BALL_ACTION_PHRASE[role]?.[move.action] ?? "repositions";
+      const phrase = COORDINATION_RESPONSIBILITY_PHRASE[move.coordinationResponsibility]
+        ?? OFF_BALL_ACTION_PHRASE[role]?.[move.action] ?? "repositions";
       return `${playerName(move.player.player)} ${phrase}`;
     })
     .join("; ");
@@ -7551,14 +7792,96 @@ function diagnosticShapeAssignment(assignment) {
   };
 }
 
+function updateLiveCoordination(motionContext, roster, ownerId, ballPoint, nowMs, flags = {}) {
+  if (!motionContext || !ownerId || !ballPoint) return null;
+  const teams = [...new Set(roster.map((entry) => entry.team).filter(Boolean))];
+  const hasAuthoredTeamShape = teams.length >= 2 && teams.every((team) => {
+    const entries = roster.filter((entry) => entry.team === team);
+    return entries.filter((entry) => entry.formationAnchor).length >= Math.min(3, entries.length);
+  });
+  // Legacy saved probes and small resolver fixtures can contain only loose
+  // coordinates, with no formation relationship for the coordinator to
+  // preserve. Their established local planners remain authoritative until a
+  // real Match Setup supplies anchors; this also keeps replay compatibility.
+  if (!hasAuthoredTeamShape) {
+    motionContext.coordination = null;
+    return null;
+  }
+  const tacticsByTeam = Object.fromEntries(teams.map((team) => [team, {
+    attacking: attackingSettingsFor(team),
+    transition: transitionSettingsFor(team),
+    defending: markingSettingsFor(team),
+  }]));
+  const velocities = Object.fromEntries(roster.map((entry) => [String(entry.id),
+    motionContext.state?.players?.[entry.id]?.velocity ?? { x: 0, y: 0 }]));
+  const coordinated = coordinateInteraction({
+    previous: motionContext.coordination ?? createCoordinationState(motionContext.seed),
+    players: roster,
+    ownerId,
+    ballPoint,
+    attackingDirectionByTeam: state.attackingDirection,
+    tacticsByTeam,
+    velocities,
+    nowMs,
+    flags,
+  });
+  motionContext.coordination = coordinated.state;
+  motionContext.coordinationSnapshots ||= [];
+  if (!motionContext.coordinationSnapshots.length
+    || motionContext.coordinationSnapshots.at(-1).timeMs !== coordinated.evidence?.timeMs
+    || motionContext.coordinationSnapshots.at(-1).selectedAttack?.family !== coordinated.evidence?.selectedAttack?.family) {
+    motionContext.coordinationSnapshots.push(coordinated.evidence);
+    if (motionContext.coordinationSnapshots.length > 160) motionContext.coordinationSnapshots.shift();
+  }
+  return coordinated;
+}
+
 function coordinateTargetProposals({
   targets, snapshots, ballPoint, phaseState, motionContext,
   activeOwnerId = snapshots.owner?.id ?? null, recordSnapshot = false,
   simulationTimeMs = motionContext?.simulationTimeMs ?? 0,
+  coordinationFlags = {},
 }) {
   const roster = uniqueSnapshotEntries(snapshots);
   const possessionTeam = snapshots.owner?.team ?? null;
   const byId = new Map(targets.map((target) => [String(target.id), target]));
+  const liveCoordination = updateLiveCoordination(
+    motionContext,
+    roster,
+    snapshots.owner?.id ?? null,
+    ballPoint,
+    simulationTimeMs,
+    { ...coordinationFlags, reason: coordinationFlags.reason ?? (recordSnapshot ? "live-motion-replan" : "off-ball-plan") },
+  );
+  for (const target of targets) {
+    if (!liveCoordination && !target.coordinationBase) continue;
+    target.coordinationBase ??= {
+      action: target.action,
+      target: { ...(target.target ?? target.intentionTarget) },
+      intentionTarget: { ...(target.intentionTarget ?? target.target) },
+    };
+    target.action = target.coordinationBase.action;
+    target.target = { ...target.coordinationBase.target };
+    target.intentionTarget = { ...target.coordinationBase.intentionTarget };
+    target.coordinationResponsibility = null;
+    target.coordinationFamily = null;
+    target.coordinationRelationship = null;
+    target.coordinationThreatId = null;
+  }
+  const coordinationById = new Map((liveCoordination?.intentions ?? [])
+    .map((intent) => [String(intent.playerId), intent]));
+  for (const target of targets) {
+    const intent = coordinationById.get(String(target.id));
+    if (!intent || intent.responsibility === "ball-carrier"
+      || intent.responsibility === "goalkeeper-cover-sweeper") continue;
+    target.action = intent.action;
+    target.intentionTarget = { ...intent.target };
+    target.target = { ...intent.target };
+    target.coordinationResponsibility = intent.responsibility;
+    target.coordinationFamily = intent.family;
+    target.coordinationRelationship = intent.relationship;
+    target.coordinationThreatId = intent.threatId ?? null;
+  }
   const teamDiagnostics = {};
   for (const team of [...new Set(roster.map((entry) => entry.team).filter(Boolean))]) {
     const entries = roster.filter((entry) => entry.team === team);
@@ -7610,6 +7933,21 @@ function coordinateTargetProposals({
       target.targetRegionOccupancy = assignment.targetRegionOccupancy;
       target.tacticalRole = assignment.tacticalRole;
       target.duty = assignment.duty;
+      const intent = coordinationById.get(String(assignment.id));
+      if (intent && intent.responsibility !== "ball-carrier"
+        && intent.responsibility !== "goalkeeper-cover-sweeper") {
+        target.teamJob = intent.responsibility;
+        target.coordinationResponsibility = intent.responsibility;
+        target.coordinationFamily = intent.family;
+        target.coordinationRelationship = intent.relationship;
+        target.coordinationThreatId = intent.threatId ?? null;
+      } else if (liveCoordination?.evidence?.pressure?.ownerId
+        && (assignment.teamJob === "primary-presser" || target.action === "press-ball")) {
+        target.action = "shift-unit";
+        target.target = { ...assignment.shapeTarget };
+        target.intentionTarget = { ...assignment.shapeTarget };
+        target.teamJob = "shape-balance";
+      }
     }
     teamDiagnostics[team] = {
       phase: phaseForTeam(phaseState, team),
@@ -7632,20 +7970,33 @@ function coordinateTargetProposals({
     const response = planKeeperResponse({ keeper, ball: ballPoint, attacker: snapshots.owner,
       defenders: snapshots.opponents, defendingDirection: state.attackingDirection[keeper.team],
       velocity: motionContext?.state?.players?.[keeper.id]?.velocity ?? keeper.keeperVelocity,
+      attackerVelocity: snapshots.owner
+        ? motionContext?.state?.players?.[snapshots.owner.id]?.velocity ?? null
+        : null,
       holdTarget: keeperPositioningPoint(ballPoint, state.attackingDirection[keeper.team]),
       random: seededRandom(hashString(`keeper-read:${motionContext?.seed ?? 0}:${keeper.id}:${Math.floor(simulationTimeMs / 500)}`)),
     });
-    if (response.action !== "set-position") Object.assign(proposal, {
+    Object.assign(proposal, {
       target: response.target, intentionTarget: response.target,
       action: response.action, teamJob: response.action, reactionDelayMs: response.reactionDelayMs,
     });
+    if (response.angleManagement && liveCoordination?.evidence) {
+      liveCoordination.evidence.goalkeeper = {
+        playerId: keeper.id,
+        action: response.action,
+        ...response.angleManagement,
+      };
+      if (motionContext?.coordination?.latestEvidence) {
+        motionContext.coordination.latestEvidence.goalkeeper = liveCoordination.evidence.goalkeeper;
+      }
+    }
     const cover = chooseGoalCover({ keeper, defenders: snapshots.opponents, ball: ballPoint,
       defendingDirection: state.attackingDirection[keeper.team], keeperAction: response.action });
     const defender = cover && byId.get(String(cover.id));
     if (defender) Object.assign(defender, { target: cover.target, intentionTarget: cover.target,
       action: cover.action, teamJob: cover.action, reactionDelayMs: cover.reactionDelayMs });
   }
-  return { targets, teamDiagnostics };
+  return { targets, teamDiagnostics, coordination: liveCoordination };
 }
 
 function reactOffBall(
@@ -7921,6 +8272,10 @@ function reactOffBall(
         regionMove: proposal.regionMove ?? null,
         tacticalRole: proposal.tacticalRole ?? null,
         duty: proposal.duty ?? null,
+        coordinationFamily: proposal.coordinationFamily ?? null,
+        coordinationResponsibility: proposal.coordinationResponsibility ?? null,
+        coordinationRelationship: proposal.coordinationRelationship ?? null,
+        coordinationThreatId: proposal.coordinationThreatId ?? null,
       });
     }
   }
@@ -7954,6 +8309,10 @@ function reactOffBall(
           regionMove: proposal?.regionMove ?? null,
           tacticalRole: proposal?.tacticalRole ?? null,
           duty: proposal?.duty ?? null,
+          coordinationFamily: proposal?.coordinationFamily ?? null,
+          coordinationResponsibility: proposal?.coordinationResponsibility ?? null,
+          coordinationRelationship: proposal?.coordinationRelationship ?? null,
+          coordinationThreatId: proposal?.coordinationThreatId ?? null,
         };
       })
       .filter(
@@ -7965,6 +8324,12 @@ function reactOffBall(
   const attackerMoves = byRole("attacker");
   const keeperMoves = byRole("keeper");
   const defenderMoves = byRole("defender");
+  let discreteCoordinationAttached = false;
+  const discreteCoordination = () => {
+    if (discreteCoordinationAttached) return null;
+    discreteCoordinationAttached = true;
+    return motionContext?.coordination?.latestEvidence ?? null;
+  };
 
   if (attackerMoves.length || heldAttackerJobs.length) {
     const allAttackerAssignments = [...attackerMoves, ...heldAttackerJobs];
@@ -7980,6 +8345,7 @@ function reactOffBall(
               duration,
               overlapWithPrevious: true,
               overlapStartOffsetMs,
+              coordination: discreteCoordination(),
             }
           : { outcome: "neutral" },
       ),
@@ -7995,6 +8361,7 @@ function reactOffBall(
         duration,
         overlapWithPrevious: true,
         overlapStartOffsetMs,
+        coordination: discreteCoordination(),
       }),
     );
   }
@@ -8010,6 +8377,7 @@ function reactOffBall(
           duration,
           overlapWithPrevious: true,
           overlapStartOffsetMs,
+          coordination: discreteCoordination(),
         },
       ),
     );
@@ -8096,6 +8464,8 @@ function reactOffBallContinuous(
     // Only GK.HOLD supplies this. Once the ball is released to the feet,
     // the option disappears and ordinary press/delay assignments resume.
     keeperHolding = false,
+    coordinationFlags = {},
+    ballPointAtElapsed = null,
   } = {},
 ) {
   const flightMoverIds = flushKeeperFlight(defendingGroups, trace, motionContext, totalMs);
@@ -8142,6 +8512,23 @@ function reactOffBallContinuous(
 
   const targets = [];
   const heldAttackerJobs = [];
+  const coordinationFlagsAtElapsed = (elapsedMs) => {
+    const handoffs = coordinationFlags?.claimantHandoffs;
+    if (!handoffs) return coordinationFlags;
+    const reached = (handoffs.transfers ?? []).filter((entry) => entry.atMs <= elapsedMs);
+    const activeClaimantId = reached.at(-1)?.toId ?? handoffs.initialClaimantId;
+    const formerClaimantIds = [...new Set(reached.map((entry) => String(entry.fromId)))]
+      .filter((id) => id !== String(activeClaimantId));
+    const { claimantHandoffs: _claimantHandoffs, ...baseFlags } = coordinationFlags;
+    return {
+      ...baseFlags,
+      looseBall: true,
+      activeClaimantId,
+      formerClaimantIds,
+      claimantTransferReason: reached.at(-1)?.reason ?? null,
+      reason: reached.length ? "loose-ball-claimant-handoff" : "loose-ball-live-chase",
+    };
+  };
 
   // Off-Ball v2 (2026-08-24) -- defensive plan first, same reorder and
   // same syncMarkingAssignments() reasoning as reactOffBall()'s own
@@ -8273,16 +8660,17 @@ function reactOffBallContinuous(
   const phaseStateAtStart = ensureTeamPhaseContext(
     motionContext, snapshots, ballFrom, ballTo,
   );
-  coordinateTargetProposals({
+  const initialCoordination = coordinateTargetProposals({
     targets,
     snapshots,
-    ballPoint: ballTo,
+    ballPoint: ballPointAtElapsed ? ballPointAtElapsed(0) : ballTo,
     phaseState: phaseStateAtStart,
     motionContext,
     // During a real delivery the passer is no longer a stationary ball
     // owner: their run-off-pass proposal must be free to claim a support
     // job and leave the centre spot.
     activeOwnerId: passerId ? null : snapshots.owner?.id,
+    coordinationFlags: coordinationFlagsAtElapsed(0),
   });
   if (heldKeeper) {
     enforceHeldKeeperDistance(targets, snapshots.opponents, ballTo, heldKeeper.id);
@@ -8337,26 +8725,45 @@ function reactOffBallContinuous(
   // short post-contact nudge remains one beat and does not advance the
   // phase clock because it overlaps the producer's own interval.
   const SHAPE_REFRESH_MS = 500;
-  const shapeWindowCount = phaseStateAtStart && chaseIntention
-    ? Math.max(1, Math.min(6, Math.ceil(effectiveTotalMs / SHAPE_REFRESH_MS)))
-    : 1;
+  const shapeBoundaries = [];
+  if (phaseStateAtStart && chaseIntention) {
+    if (initialCoordination.coordination) {
+      for (let boundary = SHAPE_REFRESH_MS; boundary < effectiveTotalMs; boundary += SHAPE_REFRESH_MS) {
+        shapeBoundaries.push(boundary);
+      }
+    } else {
+      // Saved probes without authored formation relationships keep the legacy
+      // capped cadence. It avoids manufacturing rapid target reversals from a
+      // planner that was designed for a handful of broad flight snapshots.
+      const legacyWindowCount = Math.max(1, Math.min(6, Math.ceil(effectiveTotalMs / SHAPE_REFRESH_MS)));
+      for (let windowIndex = 1; windowIndex < legacyWindowCount; windowIndex += 1) {
+        shapeBoundaries.push(Math.round((effectiveTotalMs * windowIndex) / legacyWindowCount));
+      }
+    }
+  }
+  for (const transfer of coordinationFlags?.claimantHandoffs?.transfers ?? []) {
+    if (transfer.atMs > 0 && transfer.atMs < effectiveTotalMs) shapeBoundaries.push(transfer.atMs);
+  }
+  shapeBoundaries.push(effectiveTotalMs);
+  const orderedBoundaries = [...new Set(shapeBoundaries.map((entry) => Math.round(entry)))]
+    .filter((entry) => entry > 0)
+    .sort((left, right) => left - right);
   const targetWindowsById = new Map();
   let phaseCursor = phaseStateAtStart;
   let elapsedShapeMs = 0;
   let previousBallPoint = ballFrom;
-  for (let windowIndex = 0; windowIndex < shapeWindowCount; windowIndex += 1) {
-    const remainingMs = effectiveTotalMs - elapsedShapeMs;
-    const windowDurationMs = windowIndex === shapeWindowCount - 1
-      ? remainingMs
-      : Math.round(effectiveTotalMs / shapeWindowCount);
-    const progress = (windowIndex + 1) / shapeWindowCount;
+  for (const boundaryMs of orderedBoundaries) {
+    const windowDurationMs = boundaryMs - elapsedShapeMs;
+    const progress = effectiveTotalMs ? boundaryMs / effectiveTotalMs : 1;
+    const sampledBallPoint = ballPointAtElapsed
+      ? ballPointAtElapsed(boundaryMs)
+      : {
+          x: ballFrom.x + (ballTo.x - ballFrom.x) * progress,
+          y: ballFrom.y + (ballTo.y - ballFrom.y) * progress,
+        };
     const liveBallPoint = {
-      x: ballFrom.x + (ballTo.x - ballFrom.x) * progress,
-      y: ballFrom.y + (ballTo.y - ballFrom.y) * progress,
-      zone: zoneFromPercent(
-        ballFrom.x + (ballTo.x - ballFrom.x) * progress,
-        ballFrom.y + (ballTo.y - ballFrom.y) * progress,
-      ),
+      ...sampledBallPoint,
+      zone: sampledBallPoint.zone ?? zoneFromPercent(sampledBallPoint.x, sampledBallPoint.y),
     };
     if (phaseCursor && chaseIntention) {
       phaseCursor = updateTeamPhaseState(
@@ -8379,6 +8786,7 @@ function reactOffBallContinuous(
       activeOwnerId: passerId ? null : snapshots.owner?.id,
       recordSnapshot: true,
       simulationTimeMs: (motionContext?.simulationTimeMs ?? 0) + elapsedShapeMs + windowDurationMs,
+      coordinationFlags: coordinationFlagsAtElapsed(boundaryMs),
     });
     if (heldKeeper) {
       enforceHeldKeeperDistance(windowTargets, snapshots.opponents, liveBallPoint, heldKeeper.id);
@@ -8405,6 +8813,10 @@ function reactOffBallContinuous(
         regionMove: target.regionMove ?? null,
         tacticalRole: target.tacticalRole ?? null,
         duty: target.duty ?? null,
+        coordinationFamily: target.coordinationFamily ?? null,
+        coordinationResponsibility: target.coordinationResponsibility ?? null,
+        coordinationRelationship: target.coordinationRelationship ?? null,
+        coordinationThreatId: target.coordinationThreatId ?? null,
       });
       targetWindowsById.set(String(target.id), windows);
     }
@@ -8454,6 +8866,10 @@ function reactOffBallContinuous(
         regionMove: entry.regionMove ?? null,
         tacticalRole: entry.tacticalRole ?? null,
         duty: entry.duty ?? null,
+        coordinationFamily: entry.coordinationFamily ?? null,
+        coordinationResponsibility: entry.coordinationResponsibility ?? null,
+        coordinationRelationship: entry.coordinationRelationship ?? null,
+        coordinationThreatId: entry.coordinationThreatId ?? null,
       }];
       // Playback Fluidity v1 (2026-09-05) -- a real reported bug: "players
       // freeze". A long producer window (a six-second keeper hold) is split
@@ -8537,6 +8953,10 @@ function reactOffBallContinuous(
         regionMove: finalWindow.regionMove,
         tacticalRole: finalWindow.tacticalRole,
         duty: finalWindow.duty,
+        coordinationFamily: finalWindow.coordinationFamily,
+        coordinationResponsibility: finalWindow.coordinationResponsibility,
+        coordinationRelationship: finalWindow.coordinationRelationship,
+        coordinationThreatId: finalWindow.coordinationThreatId,
         velocity: incomingVelocity,
         trajectory,
       };
@@ -8571,10 +8991,16 @@ function reactOffBallContinuous(
   // originally asked for -- correct either way, since a `true` caller
   // already wanted every push concurrent with the SAME producer window.
   let sharedIntervalEstablished = false;
+  let coordinationEvidenceAttached = false;
   const overlapForThisPush = () => {
     const value = sharedIntervalEstablished ? true : overlapWithPrevious;
     sharedIntervalEstablished = true;
     return value;
+  };
+  const coordinationForThisPush = () => {
+    if (coordinationEvidenceAttached) return null;
+    coordinationEvidenceAttached = true;
+    return motionContext?.coordination?.latestEvidence ?? null;
   };
 
   if (attackerMoves.length || heldAttackerJobs.length) {
@@ -8592,6 +9018,7 @@ function reactOffBallContinuous(
               playerMoves: attackerMoves,
               duration: effectiveTotalMs,
               overlapWithPrevious: overlapForThisPush(),
+              coordination: coordinationForThisPush(),
             }
           : { outcome: "neutral" },
       ),
@@ -8606,6 +9033,7 @@ function reactOffBallContinuous(
         playerMoves: keeperMoves,
         duration: effectiveTotalMs,
         overlapWithPrevious: overlapForThisPush(),
+        coordination: coordinationForThisPush(),
       }),
     );
   }
@@ -8620,6 +9048,7 @@ function reactOffBallContinuous(
           playerMoves: defenderMoves,
           duration: effectiveTotalMs,
           overlapWithPrevious: overlapForThisPush(),
+          coordination: coordinationForThisPush(),
         },
       ),
     );
@@ -9330,6 +9759,32 @@ function resolveDribble(
       FIXED_MINUTE,
       random,
     );
+    const advantagePlayed = foul.restart === "none";
+    let advantageMotion = null;
+    let advantageDefenderMotion = null;
+    let advantageDefenderTarget = null;
+    if (advantagePlayed) {
+      advantageMotion = shieldRetentionMotion(owner, defender, groups.opponents, reaction.contactPoint, motionContext);
+      const contactYards = toYardPoint(reaction.contactPoint);
+      const ownerEndYards = toYardPoint(advantageMotion.position);
+      const awayX = contactYards.x - ownerEndYards.x;
+      const awayY = contactYards.y - ownerEndYards.y;
+      const awayLength = Math.hypot(awayX, awayY) || 1;
+      advantageDefenderTarget = fromYardPoint({
+        x: reflectIntoRange(contactYards.x + (awayX / awayLength) * 1.1, 0, PITCH_WIDTH_YARDS),
+        y: reflectIntoRange(contactYards.y + (awayY / awayLength) * 1.1, 0, PITCH_LENGTH_YARDS),
+      });
+      advantageDefenderMotion = advanceMotion({
+        from: reaction.contactPoint,
+        intentionTarget: advantageDefenderTarget,
+        player: defender.player,
+        elapsedMs: advantageMotion.duration,
+        reactionDelayMs: 0,
+        intention: "recover-after-foul",
+        continuesAfter: true,
+        sampleCount: 7,
+      });
+    }
     trace.push(
       traceEvent(
         `CARD.${foul.card.toUpperCase()}`,
@@ -9340,11 +9795,28 @@ function resolveDribble(
           movement: "foul",
           outcome: "neutral",
           ballFrom: reaction.ballEnd,
-          ballTo: reaction.contactPoint,
+          ballTo: advantageMotion?.position ?? reaction.contactPoint,
+          ...(advantageMotion ? {
+            duration: advantageMotion.duration,
+            playerMoves: [
+              {
+                player: owner, from: reaction.contactPoint, to: advantageMotion.position,
+                action: "play-advantage", trajectory: advantageMotion.trajectory,
+                intention: { action: "play-advantage", target: advantageMotion.intentionTarget },
+                reactionDelayMs: 0,
+              },
+              {
+                player: defender, from: reaction.contactPoint, to: advantageDefenderMotion.position,
+                action: "recover-after-foul", trajectory: advantageDefenderMotion.trajectory,
+                intention: { action: "recover-after-foul", target: advantageDefenderTarget },
+                reactionDelayMs: 0,
+              },
+            ],
+          } : null),
           ownerBefore: owner,
-          ownerAfter: foul.restart === "none" ? owner : null,
+          ownerAfter: advantagePlayed ? owner : null,
           ownerAfterAt: "end",
-          restart: foul.restart === "none" ? null : foul.restart,
+          restart: advantagePlayed ? null : foul.restart,
         },
       ),
     );
@@ -9352,7 +9824,6 @@ function resolveDribble(
     // on -- the fouled side genuinely keeps the ball, this is a
     // CONTINUATION, not a stoppage. Only a real restart (penalty/
     // free-kick) is terminal/dead.
-    const advantagePlayed = foul.restart === "none";
     return {
       outcome: `FOUL/${foul.card.toUpperCase()}`,
       code: `CARD.${foul.card.toUpperCase()}`,
@@ -9360,7 +9831,7 @@ function resolveDribble(
       terminal: !advantagePlayed,
       possession: advantagePlayed ? "retained" : "dead",
       nextOwnerId: advantagePlayed ? owner.id : null,
-      ballEnd: advantagePlayed ? reaction.ballEnd : reaction.contactPoint,
+      ballEnd: advantagePlayed ? advantageMotion.position : reaction.contactPoint,
       restart: advantagePlayed ? null : foul.restart,
       restartTakingTeam: owner.team,
       reason: advantagePlayed ? "foul-advantage-played" : "foul",
@@ -10661,47 +11132,28 @@ function resolveHold(groups, availability, random, trace, interleaveOffBall = fa
     ),
   );
   if (shieldDuel.won) {
-    // Engagement Breaker v1 -- a real contest ends with the winner
-    // stepping away WITH the ball (a real escape line), and the loser
-    // left behind with a genuine gap -- not both bodies parked on the
-    // exact contact point forever (see contestSeparationPoints()'s own
-    // header for the full reported-bug rationale). Both moves are real,
-    // Pace-timed trajectories, not a flat-duration snap.
-    const { winnerPoint, loserPoint } = contestSeparationPoints(contactPoint, owner.team);
-    const escapeDurationMs = Math.max(
-      MOVEMENT_DURATIONS.hold,
-      Math.round(CONTACT_REACTION_DELAY_MS + timeToReach(owner.player, yardDistance(contactPoint, winnerPoint)) * 1000),
-    );
-    const ownerTrajectory = sampleContinuousTrajectory({
-      from: contactPoint, to: winnerPoint, player: owner.player,
-      totalMs: escapeDurationMs, reactionDelayMs: CONTACT_REACTION_DELAY_MS,
-      sampleCount: Math.max(6, Math.min(14, Math.ceil(escapeDurationMs / 140))),
-    });
-    // from: contactPoint, NOT pointOf(defender) -- the preceding
-    // P.HOLD.SHIELD event's own playerMoves already walked the defender
-    // to contactPoint (the "challenge" move); pointOf() would re-read
-    // their stale, pre-challenge roster position instead.
-    const defenderTrajectory = sampleContinuousTrajectory({
-      from: contactPoint, to: loserPoint, player: defender.player,
-      totalMs: escapeDurationMs, reactionDelayMs: CONTACT_REACTION_DELAY_MS,
-      sampleCount: Math.max(6, Math.min(14, Math.ceil(escapeDurationMs / 140))),
-    });
+    const retained = shieldRetentionMotion(owner, defender, groups.opponents, contactPoint, motionContext);
     trace.push(
       traceEvent(
         "P.HOLD.SHIELD.WON",
-        `${playerName(owner.player)} holds off ${playerName(defender.player)} and steps away with it`,
+        `${playerName(owner.player)} absorbs the challenge and keeps control`,
         {
           actor: owner,
           defender,
           movement: "hold",
           outcome: "success",
-          duration: escapeDurationMs,
-          playerMoves: [
-            { player: owner, from: contactPoint, to: winnerPoint, action: "escape", trajectory: ownerTrajectory },
-            { player: defender, from: contactPoint, to: loserPoint, action: "beaten", trajectory: defenderTrajectory },
-          ],
+          duration: retained.duration,
+          playerMoves: [{
+            player: owner,
+            from: contactPoint,
+            to: retained.position,
+            action: "shield-retain",
+            trajectory: retained.trajectory,
+            intention: { action: "shield-retain", target: retained.intentionTarget },
+            reactionDelayMs: 0,
+          }],
           ballFrom: contactPoint,
-          ballTo: winnerPoint,
+          ballTo: retained.position,
           contact: {
             point: contactPoint,
             actor: owner,
@@ -10720,16 +11172,9 @@ function resolveHold(groups, availability, random, trace, interleaveOffBall = fa
       terminal: false,
       possession: "retained",
       nextOwnerId: owner.id,
-      ballEnd: winnerPoint,
+      ballEnd: retained.position,
       restart: null,
       reason: "hold-shielded",
-      // Progression Contest v1 (2026-08-28) -- see planDefensiveRepositioning()'s
-      // own beatenPresserId comment: runConstructedPossession()'s generic
-      // post-action reshape (this resolver never interleaves its own --
-      // no offBallInterleaved field here) reads this back so the beaten
-      // defender recovers and a covering CB closes down, instead of
-      // waiting for an ordinary ADJUST beat.
-      beatenDefenderId: defender.id,
     };
   }
   // Engagement Breaker v1 -- a lost shield is a knock-on, not an
@@ -11585,6 +12030,232 @@ const MAX_AUTOMATIC_RESTARTS = 6;
 const THROW_IN_OUT_OF_PLAY_PAUSE_MS = 1000;
 const THROW_IN_OUTSIDE_PCT = (1.25 / 75) * 100;
 
+function stationaryRestartBallTrajectory(point, mode = "dead", durationMs = 420) {
+  if (mode === "place") {
+    return [
+      { progress: 0, position: { ...point, height: 0 }, velocity: { x: 0, y: 0 }, verticalVelocity: 0.65 / Math.max(1, durationMs * 0.45), mode: "dead" },
+      { progress: 0.45, position: { ...point, height: 0.65 }, velocity: { x: 0, y: 0 }, verticalVelocity: -0.65 / Math.max(1, durationMs * 0.55), mode: "dead" },
+      { progress: 1, position: { ...point, height: 0 }, velocity: { x: 0, y: 0 }, verticalVelocity: 0, mode: "dead" },
+    ];
+  }
+  if (mode === "collect") {
+    return [
+      { progress: 0, position: { ...point, height: 0 }, velocity: { x: 0, y: 0 }, verticalVelocity: 1.1 / Math.max(1, durationMs), mode: "held" },
+      { progress: 1, position: { ...point, height: 1.1 }, velocity: { x: 0, y: 0 }, verticalVelocity: 0, mode: "held" },
+    ];
+  }
+  return [
+    { progress: 0, position: { ...point, height: mode === "held" ? 1.1 : 0 }, velocity: { x: 0, y: 0 }, verticalVelocity: 0, mode },
+    { progress: 1, position: { ...point, height: mode === "held" ? 1.1 : 0 }, velocity: { x: 0, y: 0 }, verticalVelocity: 0, mode },
+  ];
+}
+
+function restartPreparationLabel(phase, taker) {
+  const name = playerName(taker.player);
+  switch (phase.code) {
+    case "RESTART.PLACE_BALL": return `${name} places the ball and checks its position`;
+    case "RESTART.SET_POSITION": return `${name} takes a few steps back from the ball`;
+    case "RESTART.SIGNAL": return `${name} looks into the area and signals with ${phase.signalArms === 2 ? "both arms" : "one arm"}`;
+    case "RESTART.SCAN": return `${name} looks up and waits for the movement`;
+    case "RESTART.APPROACH": return `${name} begins the run-up`;
+    case "RESTART.THROW_IN.COLLECT": return `${name} picks up the ball for the throw`;
+    case "RESTART.THROW_IN.HOLD": return `${name} holds the ball overhead and scans for a teammate`;
+    case "RESTART.QUICK": return `${name} chooses a quick restart`;
+    default: return `${name} prepares the restart`;
+  }
+}
+
+function appendRestartSupportMovement({
+  restart, phase, duration, roster, taker, takingTeam, attackingGoalY,
+  trace, motionContext,
+}) {
+  if (!(duration > 0) || !roster?.length) return [];
+  const intentions = planRestartSupportMovement({
+    restart,
+    roster,
+    takerId: taker.id,
+    takingTeam,
+    attackingGoalY,
+    phase,
+  });
+  const moves = [];
+  const evidence = [];
+  for (const intention of intentions) {
+    const entry = roster.find((candidate) => candidate.id === intention.playerId);
+    if (!entry) continue;
+    const isAttacker = entry.team === takingTeam;
+    const reaction = restartSupportReactionDelay(entry.player, {
+      isAttacker,
+      movementKind: intention.movementKind,
+    });
+    const live = livePlayerMotionStart(entry, motionContext, trace);
+    const target = {
+      ...intention.target,
+      zone: zoneFromPercent(intention.target.x, intention.target.y),
+    };
+    const motion = advanceMotion({
+      from: live.position,
+      intentionTarget: target,
+      player: entry.player,
+      elapsedMs: duration,
+      incomingVelocity: live.velocity,
+      reactionDelayMs: reaction.delayMs,
+      intention: intention.responsibility,
+      role: isAttacker ? "attacker" : "defender",
+      paceToArrival: true,
+      continuesAfter: phase.action === "restart-approach",
+    });
+    if (yardDistance(live.position, motion.position) <= 0.01) continue;
+    moves.push({
+      player: entry,
+      from: live.position,
+      to: motion.position,
+      trajectory: motion.trajectory,
+      action: intention.responsibility,
+      role: isAttacker ? "attacker" : "defender",
+      intention: { action: intention.responsibility, target },
+      teamJob: intention.responsibility,
+      coordinationThreatId: intention.subjectId ?? null,
+    });
+    Object.assign(entry, motion.position, {
+      zone: zoneFromPercent(motion.position.x, motion.position.y),
+    });
+    writeMotionRecord(motionContext, entry.id, {
+      position: motion.position,
+      velocity: motion.velocity,
+      intention: intention.responsibility,
+      intentionTarget: target,
+      role: isAttacker ? "attacker" : "defender",
+      simulationTimeMs: (motionContext.simulationTimeMs ?? 0) + duration,
+    });
+    applyBurstOffBallJob(
+      entry,
+      intention.responsibility,
+      yardDistance(live.position, motion.position),
+      duration,
+      motion,
+    );
+    evidence.push({
+      playerId: intention.playerId,
+      responsibility: intention.responsibility,
+      movementKind: intention.movementKind ?? null,
+      subjectId: intention.subjectId ?? null,
+      deliveryTarget: intention.deliveryTarget ?? null,
+      reactionDelayMs: reaction.delayMs,
+      attributeInfluence: reaction.values,
+    });
+  }
+  if (!moves.length) return moves;
+  const attackingMoves = moves.filter((move) => move.role === "attacker").length;
+  const defendingMoves = moves.length - attackingMoves;
+  trace.push(traceEvent(
+    "RESTART.MOVEMENT",
+    String(attackingMoves) + " restart runner" + (attackingMoves === 1 ? "" : "s")
+      + " move as " + String(defendingMoves) + " marker" + (defendingMoves === 1 ? "" : "s") + " track",
+    {
+      movement: "reposition",
+      outcome: "neutral",
+      duration,
+      overlapWithPrevious: true,
+      playerMoves: moves,
+      restart: restart.type,
+      metrics: {
+        restartMovement: evidence,
+      },
+    },
+  ));
+  return moves;
+}
+
+/**
+ * Turns a pure preparation plan into authoritative timeline motion. The
+ * kick/throw itself remains executeRestart()'s next event and normal resolver.
+ */
+function appendRestartPreparation({
+  restart, taker, trace, motionContext, random, attackingGoalY, attacking,
+  roster, takingTeam,
+}) {
+  const plan = planRestartPreparation({
+    restart,
+    taker,
+    attackingGoalY,
+    style: attacking?.style,
+    tempo: attacking?.tempo,
+    random,
+  });
+  const ball = { ...restart.ball, zone: restart.ball.zone ?? zoneFromPercent(restart.ball.x, restart.ball.y) };
+  for (const phase of plan.phases) {
+    const from = pointOf(taker);
+    let duration = Math.max(0, Number(phase.durationMs) || 0);
+    let playerMoves = [];
+    if (phase.target) {
+      const movement = realMoverTrajectory(taker, phase.target, {
+        from,
+        floorMs: phase.action === "restart-approach" ? 420 : 520,
+        action: phase.action,
+        reactionDelayMs: 0,
+        incomingVelocity: phase.action === "restart-approach"
+          ? { x: 0, y: 0 }
+          : motionContext.state?.players?.[taker.id]?.velocity ?? null,
+        paceToArrival: phase.action !== "restart-approach",
+      });
+      duration = movement.duration;
+      playerMoves = movement.playerMoves;
+    }
+    const held = phase.ballMode === "held" || phase.ballMode === "collect";
+    const event = traceEvent(phase.code, restartPreparationLabel(phase, taker), {
+      actor: taker,
+      movement: held ? "hold" : phase.target ? "reposition" : "hold",
+      outcome: "neutral",
+      duration,
+      playerMoves,
+      ballFrom: ball,
+      ballTo: ball,
+      ballTrajectory: stationaryRestartBallTrajectory(ball, phase.ballMode, duration),
+      ballResult: phase.ballMode === "place" ? "dead" : phase.ballMode,
+      ownerBefore: held || phase.code === "RESTART.PLACE_BALL" ? taker : null,
+      ownerAfter: held ? taker : null,
+      contact: phase.code === "RESTART.PLACE_BALL"
+        ? { point: ball, actor: taker, type: "placement", phase: "start" }
+        : null,
+      restart: restart.type,
+      metrics: { restartPreparation: { ...plan.evidence, phase: phase.action } },
+    });
+    trace.push(event);
+    if (playerMoves.length) {
+      const move = playerMoves[0];
+      Object.assign(taker, move.to, { zone: zoneFromPercent(move.to.x, move.to.y) });
+      const finalVelocity = move.trajectory?.at(-1)?.velocity ?? { x: 0, y: 0 };
+      writeMotionRecord(motionContext, taker.id, {
+        position: move.to,
+        velocity: finalVelocity,
+        intention: phase.action,
+        intentionTarget: phase.target,
+        simulationTimeMs: (motionContext.simulationTimeMs ?? 0) + duration,
+      });
+    } else if (phase.action === "scan" || phase.action === "signal-and-scan" || held) {
+      writeMotionRecord(motionContext, taker.id, {
+        position: pointOf(taker), velocity: { x: 0, y: 0 }, intention: null,
+        intentionTarget: pointOf(taker),
+        simulationTimeMs: (motionContext.simulationTimeMs ?? 0) + duration,
+      });
+    }
+    appendRestartSupportMovement({
+      restart,
+      phase,
+      duration,
+      roster,
+      taker,
+      takingTeam,
+      attackingGoalY,
+      trace,
+      motionContext,
+    });
+    motionContext.simulationTimeMs = (motionContext.simulationTimeMs ?? 0) + duration;
+  }
+  return plan;
+}
+
 function otherRosterTeam(team, simulatedRoster) {
   return [...new Set(simulatedRoster.map((entry) => entry.team).filter(Boolean))]
     .find((candidate) => candidate !== team) ?? null;
@@ -11729,7 +12400,18 @@ function executeAutomaticRestart({
     ...takerSpot,
     zone: zoneFromPercent(takerSpot.x, takerSpot.y),
   };
-  const nominated = { ...restart, ball: nominatedBall, takerId: placed.takerId };
+  const longThrow = type === "throw-in"
+    && qualifiesForLongThrow(taker.player)
+    && ["direct", "long-ball"].includes(attackingSettingsFor(takingTeam).style);
+  const nominated = {
+    ...restart,
+    ball: nominatedBall,
+    takerId: placed.takerId,
+    variant: longThrow
+      ? "long"
+      : placed.corner?.delivery?.target === "short" ? "short" : restart.variant,
+    corner: placed.corner ?? null,
+  };
   const concrete = simulatedRoster.map((entry) => {
     const point = placed.placements.get(entry.id) ?? pointOf(entry);
     return { ...entry, ...point, required: entry.id === placed.takerId };
@@ -11812,6 +12494,7 @@ function executeAutomaticRestart({
   commitAuthoritativeMoves(trace, simulatedRoster, motionContext, setupTraceStart);
   for (const entry of simulatedRoster) {
     entry.restartRole = placed.roles.get(entry.id) ?? null;
+    entry.restartSubjectId = placed.subjects?.get(entry.id) ?? null;
     const finalPoint = pointOf(entry);
     writeMotionRecord(motionContext, entry.id, {
       position: finalPoint,
@@ -11826,9 +12509,9 @@ function executeAutomaticRestart({
   motionContext.teamShapeJobs = {};
   motionContext.restartContext = {
     status: "restart",
-    direct: variant === "long",
+    direct: nominated.variant === "long",
     type: nominated.type,
-    variant,
+    variant: nominated.variant,
     style: attackingSettingsFor(takingTeam).style,
   };
   motionContext.teamPhase = updateTeamPhaseState(
@@ -11856,13 +12539,26 @@ function executeAutomaticRestart({
     lastTouch: { playerId: taker.id, team: takingTeam, bodyPart: "unknown", deliberate: false, restart: nominated.type },
   });
 
+  appendRestartPreparation({
+    restart: nominated,
+    taker,
+    trace,
+    motionContext,
+    random: seededRandom(hashString(
+      `match-lab:auto-restart-preparation:${seed}:${restartIndex}:${nominated.type}:${takingTeam}`,
+    )),
+    attackingGoalY: attackingGoalYForDirection(state.attackingDirection[takingTeam]),
+    attacking: attackingSettingsFor(takingTeam),
+    roster: simulatedRoster,
+    takingTeam,
+  });
   const restartGroups = freePlayGroups(taker.id, simulatedRoster, simulated.ballState);
   const openingStyle = attackingSettingsFor(takingTeam).style;
-  const directOpening = variant === "long"
+  const directOpening = nominated.variant === "long"
     || openingStyle === "direct" || openingStyle === "long-ball";
   motionContext.restartContext = {
     status: "restart-release", direct: directOpening,
-    type: nominated.type, variant, style: openingStyle,
+    type: nominated.type, variant: nominated.variant, style: openingStyle,
   };
   motionContext.teamPhase = updateTeamPhaseState(
     motionContext.teamPhase,
@@ -12042,6 +12738,8 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
     }),
     teamShapeJobs: {},
     shapeSnapshots: [],
+    coordination: createCoordinationState(seed),
+    coordinationSnapshots: [],
     simulationTimeMs: 0,
     restartContext: startsFromRestart
       ? { status: "restart", direct: false, type: state.pendingRestart.type }
@@ -12082,7 +12780,23 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       ownerRole: authoredOwner.role,
     }),
   };
-  let result = continuation?.result ?? null;
+  let result = continuation?.result ? { ...continuation.result } : null;
+  // Match chunks can end while a restart delivery or second ball is still
+  // loose. `simulated.ballPoint` is the authoritative sampled position at
+  // that boundary; the prior resolver's `result.ballEnd` may still name the
+  // later point it would have reached had the chunk continued. Resume the
+  // race from the sampled ball, including its live velocity, so the next
+  // chunk cannot begin by teleporting the ball to that stale future point.
+  if (continuation && !simulated.ownerId && result?.possession === "loose" && simulated.ballPoint) {
+    result = {
+      ...result,
+      ballEnd: { ...simulated.ballPoint },
+      ballVelocity: simulated.ballState?.velocity
+        ? { ...simulated.ballState.velocity }
+        : (result.ballVelocity ?? { x: 0, y: 0 }),
+      ballVelocityPhase: simulated.ballState?.phase === "loose" ? "rolling" : result.ballVelocityPhase,
+    };
+  }
   let actionsCount = 0;
   let endedByStoppage = false;
   let automaticRestartCount = 0;
@@ -12110,6 +12824,25 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       const openingStyle = attackingSettingsFor(restartGroups.owner.team).style;
       const directOpening = state.restartSetupDraft.variant === "long"
         || openingStyle === "direct" || openingStyle === "long-ball";
+      const authoredRestart = {
+        ...state.restartSetupDraft,
+        ball: simulated.ballPoint,
+        openingStyle,
+        kickoffInstruction,
+      };
+      appendRestartPreparation({
+        restart: authoredRestart,
+        taker: restartGroups.owner,
+        trace,
+        motionContext,
+        random: seededRandom(hashString(
+          `match-lab:restart-preparation:${state.pendingRestart.type}:${seed}`,
+        )),
+        attackingGoalY: restartAttackingGoalY,
+        attacking: attackingSettingsFor(restartGroups.owner.team),
+        roster: simulatedRoster,
+        takingTeam: restartGroups.owner.team,
+      });
       motionContext.restartContext = {
         status: "restart-release",
         direct: directOpening,
@@ -12132,12 +12865,7 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
         0,
       );
       result = executeRestart({
-        restart: {
-          ...state.restartSetupDraft,
-          ball: simulated.ballPoint,
-          openingStyle,
-          kickoffInstruction,
-        },
+        restart: authoredRestart,
         groups: restartGroups,
         resolvers: FREE_PLAY_RESOLVERS,
         random: restartRandom,
@@ -12256,6 +12984,15 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       JOINT_CANDIDATE_DEPS,
     );
     if (resumingLoose) candidates.splice(0, candidates.length, { type: "resume-loose", utility: 1 });
+    const decisionCoordination = resumingLoose ? null : updateLiveCoordination(
+      motionContext,
+      simulatedRoster,
+      groups.owner.id,
+      simulated.ballPoint,
+      motionContext.simulationTimeMs ?? 0,
+      { reason: "on-ball-decision" },
+    );
+    if (decisionCoordination) applyCoordinationCandidateBiases(candidates, decisionCoordination);
     if (motionContext.kickoffPlan?.team !== groups.owner.team) motionContext.kickoffPlan = null;
     applyKickoffInstructions(candidates, groups, state.attackingDirection[groups.owner.team], motionContext.kickoffPlan);
     // Joint Passer/Runner Candidate Generation v1 (Stage 3) -- the leading
@@ -12283,6 +13020,7 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
         groups.owner, attackingSettingsFor(groups.owner.team),
       ),
       selectedAction: decision?.type ?? null,
+      coordination: decisionCoordination?.evidence ?? null,
     };
     // A continuing loose-ball race has no new owner decision or choice cue.
     // Keep the summary aligned with the actual decisions in the replay.
@@ -12322,7 +13060,12 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
           : decision.type === "shoot"
             ? `${playerName(groups.owner.player)} chooses to shoot from ${optionMetrics.distanceToGoalMetres.toFixed(1)} m (${optionMetrics.shootingInstruction === "encourage" ? "Shoot more" : optionMetrics.shootingInstruction === "discourage" ? "Shoot less" : "Balanced"}) · ${optionMetrics.legalPassingOptions} legal pass option${optionMetrics.legalPassingOptions === 1 ? "" : "s"}`
             : `${playerName(groups.owner.player)} chooses to ${decision.type} · ${optionMetrics.legalPassingOptions} legal pass option${optionMetrics.legalPassingOptions === 1 ? "" : "s"}`,
-        { actor: groups.owner, outcome: "neutral", metrics: optionMetrics },
+        {
+          actor: groups.owner,
+          outcome: "neutral",
+          metrics: optionMetrics,
+          coordination: decisionCoordination?.evidence ?? null,
+        },
       ),
     );
     // Engagement Breaker v1 -- record what THIS decision was, for the
@@ -12366,6 +13109,12 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       // In particular, a controlled ball to a slow receiver's feet must not
       // be reselected as a driven pass after ACTION.CHOICE.
       plannedPassType: decision.joint?.passType || null,
+      // A joint candidate always has a planned point, including a genuine
+      // pass to the receiver's current feet. Preserve the candidate's own
+      // semantic intent so execution and diagnostics do not misclassify
+      // every explicit point as a pass into space.
+      plannedDeliveryIntent: decision.joint?.meetingPointKind
+        ?? (decision.moveTo ? "planned-space" : "current-position"),
       oneOnOneDecisionRandom: seededRandom(
         hashString(`match-lab:freeplay:one-on-one-decision:${seed}:${actionsCount}`),
       ),
@@ -12516,6 +13265,7 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       result.possession === "loose" &&
       result.ballEnd
     ) {
+      const looseReleasePoint = { ...result.ballEnd };
       const looseState = transitionBallState({
         previous: simulated.ballState,
         endpoint: result.ballEnd,
@@ -12589,6 +13339,8 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
         // whole "recovered" outcome below rather than being layered on
         // top of it.
         let genuinePitchExit = null;
+        let claimantHandoffs = null;
+        let rollPointAtElapsed = null;
         if (speedYps > CLAIM_MIN_ROLL_SPEED_YPS) {
           // A point far along the SAME real heading the ball actually
           // landed with -- pointAlongMovement() only needs a genuine
@@ -12652,6 +13404,7 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
           // wins it from someone who was merely closest at the instant it
           // came loose. Same friction model (ballRollPhysics.js), same
           // kinetics (timeToReach), same 40ms cadence, and no RNG at all.
+          const initialClaimantId = recoveredBy?.id ?? null;
           const claim = claimLooseBall({
             from: result.ballEnd,
             aim: aimPoint,
@@ -12661,7 +13414,17 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
             sampleMs: ROLL_SAMPLE_MS,
             clampPoint: clampToPitch,
           });
-          recordBallClaim(claim);
+          claimantHandoffs = evaluateLiveClaimantHandoffs({
+            roll: claim.roll,
+            candidates: simulatedRoster,
+            finalClaim: claim,
+            initialClaimantId,
+            velocities: Object.fromEntries(simulatedRoster.map((entry) => [
+              String(entry.id),
+              motionContext.state?.players?.[entry.id]?.velocity ?? { x: 0, y: 0 },
+            ])),
+          });
+          recordBallClaim({ ...claim, handoffs: claimantHandoffs });
           // A ball that crosses the line has no winner and no pickup. Any
           // other roll always ends with somebody reaching it, at worst as a
           // standing pickup once it has stopped -- which is exactly the
@@ -12670,16 +13433,14 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
           if (claimWinner) recoveredBy = claimWinner;
           const interceptMs = claim.interceptMs;
           if (genuineExit && interceptMs === null) {
-            const exitTrajectorySamples = Math.max(2, Math.min(16, Math.ceil(exitTimeMs / 120)));
-            const exitTrajectory = Array.from({ length: exitTrajectorySamples + 1 }, (_, index) => {
-              const progress = index / exitTrajectorySamples;
-              return {
-                progress,
-                position: index === exitTrajectorySamples
-                  ? { ...pitchExit.ballEnd }
-                  : pointAlongMovement(result.ballEnd, aimPoint, rollTraveledYards(speedYps, exitTimeMs * progress)),
-              };
+            const exitTrajectory = buildRollingBallTrajectory({
+              from: result.ballEnd,
+              aim: aimPoint,
+              launchSpeedYps: speedYps,
+              durationMs: exitTimeMs,
+              sampleMs: 120,
             });
+            exitTrajectory.at(-1).position = { ...pitchExit.ballEnd, height: 0 };
             genuinePitchExit = pushPitchExitRestart(trace, {
               actor: rollLastTouchEntry, ballFrom: result.ballEnd, exit: pitchExit, movement: "touch",
               ballTrajectory: exitTrajectory,
@@ -12698,21 +13459,51 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
               : rollStopDistanceYards(speedYps);
             recoveryPoint = clampToPitch(pointAlongMovement(result.ballEnd, aimPoint, realDistanceYards));
             recoveryDuration = Math.ceil(realDurationMs);
-            const trajectorySampleCount = Math.max(2, Math.min(16, Math.ceil(realDurationMs / 120)));
-            rollTrajectory = Array.from({ length: trajectorySampleCount + 1 }, (_, index) => {
-              const progress = index / trajectorySampleCount;
-              return {
-                progress,
-                position: index === trajectorySampleCount
-                  ? { ...recoveryPoint }
-                  : clampToPitch(pointAlongMovement(result.ballEnd, aimPoint, rollTraveledYards(speedYps, recoveryDuration * progress))),
-              };
+            rollTrajectory = buildRollingBallTrajectory({
+              from: result.ballEnd,
+              aim: aimPoint,
+              launchSpeedYps: speedYps,
+              durationMs: recoveryDuration,
+              sampleMs: 120,
+              clampPoint: clampToPitch,
             });
+            rollTrajectory.at(-1).position = { ...recoveryPoint, height: 0 };
+            rollPointAtElapsed = (elapsedMs) => clampToPitch(pointAlongMovement(
+              looseReleasePoint,
+              aimPoint,
+              rollTraveledYards(speedYps, Math.min(realDurationMs, Math.max(0, elapsedMs))),
+            ));
           }
         }
         if (genuinePitchExit) {
           result = genuinePitchExit;
         } else {
+        for (const transfer of claimantHandoffs?.transfers ?? []) {
+          const from = simulatedRoster.find((entry) => String(entry.id) === String(transfer.fromId));
+          const to = simulatedRoster.find((entry) => String(entry.id) === String(transfer.toId));
+          trace.push(traceEvent(
+            "LOOSE.CLAIM.TRANSFER",
+            `${from ? playerName(from.player) : transfer.fromId} leaves the chase to ${to ? playerName(to.player) : transfer.toId}`,
+            {
+              outcome: "neutral",
+              overlapWithPrevious: true,
+              overlapStartOffsetMs: transfer.atMs,
+              metrics: {
+                claimantTransfer: transfer,
+                initialClaimantId: claimantHandoffs.initialClaimantId,
+                finalClaimantId: claimantHandoffs.finalClaimantId,
+              },
+              coordination: {
+                timeMs: (motionContext.simulationTimeMs ?? 0) + transfer.atMs,
+                trigger: "loose-ball-live-replan",
+                candidates: [],
+                intentions: [],
+                pressureCandidates: [],
+                transfers: [{ ...transfer, type: "loose-ball-claimant" }],
+              },
+            },
+          ));
+        }
         trace.push(
           traceEvent(
             "LOOSE.RECOVERED",
@@ -12724,7 +13515,7 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
               movement: "scramble",
               outcome: "success",
               duration: recoveryDuration,
-              ballFrom: result.ballEnd,
+              ballFrom: looseReleasePoint,
               ballTo: recoveryPoint,
               ...(rollTrajectory ? { ballTrajectory: rollTrajectory } : {}),
               contact: {
@@ -12737,6 +13528,14 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
               ownerAfter: recoveredBy,
               ownerAfterAt: "end",
               contactTiming: "sequential",
+              coordination: claimantHandoffs ? {
+                timeMs: motionContext.simulationTimeMs ?? 0,
+                trigger: "loose-ball-claim",
+                candidates: [],
+                intentions: [],
+                pressureCandidates: [],
+                transfers: claimantHandoffs.transfers.map((entry) => ({ ...entry, type: "loose-ball-claimant" })),
+              } : null,
             },
           ),
         );
@@ -12758,7 +13557,7 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
         );
         reactOffBallContinuous(
           recoveryGroups,
-          recoveryPoint,
+          looseReleasePoint,
           recoveryPoint,
           recoveryDuration,
           trace,
@@ -12767,6 +13566,8 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
             excludedIds: [recoveredBy.id],
             overlapWithPrevious: true,
             chaseIntention: true,
+            coordinationFlags: claimantHandoffs ? { claimantHandoffs } : {},
+            ballPointAtElapsed: rollPointAtElapsed,
           },
         );
         result = {
@@ -12825,18 +13626,24 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
             // Author the convergence explicitly; silently teleporting the
             // new owner here broke both playback continuity and the premise
             // that players react to the independent ball.
+            const convergence = realMoverTrajectory(movedEntry, result.ballEnd, {
+              from: pointOf(movedEntry),
+              floorMs: MOVEMENT_DURATIONS.reposition,
+              action: "control-converge",
+              reactionDelayMs: 0,
+              incomingVelocity: motionContext.state?.players?.[movedEntry.id]?.velocity ?? null,
+              paceToArrival: true,
+            });
             trace.push(
               traceEvent(
                 "CONTROL.CONVERGE",
                 `${playerName(movedEntry.player)} reaches the ball`,
                 {
                   actor: movedEntry,
-                  mover: movedEntry,
-                  moveFrom: pointOf(movedEntry),
-                  moveTo: result.ballEnd,
+                  ...convergence,
                   movement: "interception",
                   outcome: "success",
-                  overlapWithPrevious: true,
+                  contactTiming: "sequential",
                 },
               ),
             );
@@ -13210,6 +14017,8 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
     teamPhase: motionContext.teamPhase,
     phaseTransitions: motionContext.teamPhase?.transitions ?? [],
     shapeSnapshots: motionContext.shapeSnapshots,
+    coordinationSnapshots: motionContext.coordinationSnapshots ?? [],
+    coordinationHistory: motionContext.coordination?.history ?? [],
     shapeMetrics: {
       before: initialShapeMetrics,
       after: Object.fromEntries(teamIds.map((team) => [
@@ -13378,6 +14187,7 @@ const elements = {
   roleMapNote: document.querySelector("#labRoleMapNote"),
   applySetupButton: document.querySelector("#labApplySetupButton"),
   applyTacticsButton: document.querySelector("#labApplyTacticsButton"),
+  resumeMatchButton: document.querySelector("#labResumeMatchButton"),
   matchMinute: document.querySelector("#labMatchMinute"),
   liveCommentary: document.querySelector("#labLiveCommentary"),
   homePossession: document.querySelector("#labHomePossession"),
@@ -13389,7 +14199,11 @@ const elements = {
   tacticsRequestStatus: document.querySelector("#labTacticsRequestStatus"),
   matchStatsToggle: document.querySelector("#labMatchStatsToggle"),
   matchStatsPanel: document.querySelector("#labMatchStatsPanel"),
+  playerStatsTab: document.querySelector("#labPlayerStatsTab"),
+  teamStatsTab: document.querySelector("#labTeamStatsTab"),
   statsScope: document.querySelector("#labStatsScope"),
+  statsScopeLabel: document.querySelector("#labStatsScopeLabel"),
+  statsNameHeading: document.querySelector("#labStatsNameHeading"),
   heatmapGrid: document.querySelector("#labHeatmapGrid"),
   playerStatsBody: document.querySelector("#labPlayerStatsBody"),
   tacticsStatus: document.querySelector("#labTacticsStatus"),
@@ -15893,6 +16707,58 @@ function groupTraceRows(visible = []) {
   return rows;
 }
 
+function coordinationDiagnosticMarkup(evidence) {
+  if (!evidence) return "";
+  const candidateRows = (evidence.candidates ?? []).map((candidate) => {
+    const utility = candidate.utility == null ? "ineligible" : Number(candidate.utility).toFixed(1);
+    const tactics = (candidate.tacticalContributions ?? [])
+      .map((entry) => `${entry.label} ${entry.value >= 0 ? "+" : ""}${Number(entry.value).toFixed(1)}`)
+      .join(", ");
+    return `<li><strong>${escapeMatchText(candidate.family)}</strong>: ${escapeMatchText(utility)}${tactics ? ` <small>${escapeMatchText(tactics)}</small>` : ""}</li>`;
+  }).join("");
+  const roleRows = (evidence.intentions ?? []).map((intent) =>
+    `<li>${escapeMatchText(intent.playerId)}: <strong>${escapeMatchText(intent.responsibility)}</strong> <small>${escapeMatchText(intent.relationship || "")}</small></li>`).join("");
+  const pressureRows = (evidence.pressureCandidates ?? []).slice(0, 4).map((candidate) =>
+    `<li>${escapeMatchText(candidate.id)}: ${Math.round(Number(candidate.etaMs) || 0)} ms, angle ${Math.round(Number(candidate.approachAngle) || 0)} degrees</li>`).join("");
+  const transferRows = (evidence.transfers ?? []).map((transfer) =>
+    `<li>${escapeMatchText(transfer.type)}: ${escapeMatchText(transfer.fromId)} to ${escapeMatchText(transfer.toId)}; ${escapeMatchText(transfer.reason)}</li>`).join("");
+  const threatRows = (evidence.threats ?? []).map((threat) =>
+    `<li>#${threat.rank} ${escapeMatchText(threat.playerId)}: ${escapeMatchText(threat.responsibility)}, danger ${Number(threat.danger).toFixed(1)}</li>`).join("");
+  const attributeRows = Object.entries(evidence.participantAttributes ?? {}).map(([playerId, detail]) => {
+    const values = Object.entries(detail.inputs ?? {}).map(([label, value]) => `${label} ${value}`).join(", ");
+    return `<li>${escapeMatchText(playerId)} (${escapeMatchText(detail.responsibility)}): ${escapeMatchText(values)}</li>`;
+  }).join("");
+  const worldRows = Object.entries(evidence.world?.players ?? {}).map(([playerId, snapshot]) =>
+    `<li>${escapeMatchText(playerId)}: (${Number(snapshot.position?.x).toFixed(1)}, ${Number(snapshot.position?.y).toFixed(1)}), velocity (${Number(snapshot.velocity?.x || 0).toFixed(4)}, ${Number(snapshot.velocity?.y || 0).toFixed(4)})</li>`).join("");
+  const line = evidence.defensiveLine;
+  const lineMarkup = line
+    ? `<p><strong>Defensive line:</strong> ${Number(line.depthYards).toFixed(1)} yd from goal · ${line.pressureControlled ? "pressure controlled" : "passer has time"}${line.offsideTrapStep ? " · coordinated step" : line.safetyDropYards ? ` · ${Number(line.safetyDropYards).toFixed(1)} yd safety drop` : ""}</p>`
+    : "";
+  const keeper = evidence.goalkeeper;
+  const keeperMarkup = keeper
+    ? `<p><strong>Goalkeeper angle:</strong> ${escapeMatchText(keeper.action)} · depth ${Number(keeper.desiredDepthYards).toFixed(1)} yd · cone ${Number(keeper.coneWidthAtTargetYards).toFixed(1)} yd · coverage ${Math.round(Number(keeper.estimatedCoverageRatio) * 100)}%</p>`
+    : "";
+  const selected = evidence.selectedAttack?.family ?? "none";
+  const defence = evidence.selectedDefense?.family ?? "none";
+  return `<details class="match-lab-trace-attribution match-lab-coordination-diagnostics"><summary>Coordination</summary>`
+    + `<p><strong>${escapeMatchText(selected)}</strong> against <strong>${escapeMatchText(defence)}</strong></p>`
+    + (candidateRows ? `<h5>Pattern candidates</h5><ul>${candidateRows}</ul>` : "")
+    + (roleRows ? `<h5>Reserved responsibilities</h5><ul>${roleRows}</ul>` : "")
+    + (threatRows ? `<h5>Ranked threats</h5><ul>${threatRows}</ul>` : "")
+    + (pressureRows ? `<h5>Pressure arrival</h5><ul>${pressureRows}</ul>` : "")
+    + (transferRows ? `<h5>Transfers</h5><ul>${transferRows}</ul>` : "")
+    + lineMarkup
+    + keeperMarkup
+    + (attributeRows ? `<h5>Material attribute inputs</h5><ul>${attributeRows}</ul>` : "")
+    + (worldRows ? `<h5>World snapshot</h5><ul>${worldRows}</ul>` : "")
+    + ((evidence.reservationConflicts ?? []).length
+      ? `<p><strong>Reservation conflict:</strong> ${escapeMatchText(JSON.stringify(evidence.reservationConflicts))}</p>` : "")
+    + (evidence.aborted ? `<p><strong>Aborted:</strong> ${escapeMatchText(evidence.aborted.reason)}</p>` : "")
+    + (evidence.completed ? `<p><strong>Completed:</strong> ${escapeMatchText(evidence.completed.reason)}</p>` : "")
+    + (evidence.fallbackReason ? `<p><strong>Fallback:</strong> ${escapeMatchText(evidence.fallbackReason)}</p>` : "")
+    + `</details>`;
+}
+
 function renderTrace(upToIndex) {
   const trace = state.lastTrace || [];
   const visible = trace.slice(0, upToIndex);
@@ -15908,6 +16774,7 @@ function renderTrace(upToIndex) {
     let disclosure = attribution
       ? `<details class="match-lab-trace-attribution"><summary>Attribute influence</summary><ul>${attribution}</ul></details>`
       : "";
+    disclosure += coordinationDiagnosticMarkup(step.coordination ?? step.metrics?.coordination ?? null);
     const interval = state.lastPlan?.intervals?.find(
       (candidate) => candidate.eventIndex === index,
     );
@@ -15988,6 +16855,7 @@ function clearStepVisualEffects() {
     node.removeAttribute("data-height");
     node.removeAttribute("data-cosmetic");
     node.removeAttribute("data-contest");
+    node.removeAttribute("data-signal-arms");
     node.removeAttribute("data-net-impact");
     node.removeAttribute("data-impact-side");
     node.removeAttribute("data-impact-power");
@@ -16087,6 +16955,13 @@ function applyStepAnimation(event, { animate }) {
   clearStepEffects();
   if (event.ballFrom) recordTouch(event.ballFrom);
   const duration = event.duration ?? DEFAULT_DURATION;
+  if (event.code === "RESTART.SIGNAL" && event.actorId) {
+    const signalNode = markerNode(event.actorId);
+    if (signalNode) {
+      signalNode.dataset.signalArms = String(event.metrics?.restartPreparation?.signalArms ?? 1);
+      activeEffectNodes.push(signalNode);
+    }
+  }
   // Set unconditionally, before any branch below -- animateBallAlongCurve()
   // drives the ball's position directly (rAF, not a CSS transition) and
   // never touches this property itself, so without this line a held/OVER
@@ -16404,6 +17279,13 @@ function applyPlaybackCue(event, cue = null) {
     cue?.audioMilestone && Number.isFinite(cue.audioTimeMs),
   );
   if (!hasDeferredTerminalAudio) playEvent(event, buildSoundContext(event));
+  if (event.code === "RESTART.SIGNAL" && event.actorId) {
+    const signalNode = markerNode(event.actorId);
+    if (signalNode) {
+      signalNode.dataset.signalArms = String(event.metrics?.restartPreparation?.signalArms ?? 1);
+      activeEffectNodes.push(signalNode);
+    }
+  }
   for (const id of [
     event.actorId,
     event.targetId,
@@ -16580,7 +17462,11 @@ function renderPlaybackFrame(snapshot) {
           : "false";
       ballNode.style.setProperty(
         "--ball-lift",
-        `${Math.min(12, Math.max(0, snapshot.ball.height || 0) * 2)}px`,
+        `${Math.min(26, Math.max(0, snapshot.ball.height || 0) * 4)}px`,
+      );
+      ballNode.style.setProperty(
+        "--ball-flight-scale",
+        String(Math.min(1.24, 1 + Math.max(0, snapshot.ball.height || 0) * 0.04)),
       );
     }
   }
@@ -16750,10 +17636,28 @@ let matchScore = { home: 0, away: 0 };
 let matchTelemetry = null;
 let pendingTacticsTeam = null;
 let pausedMatch = null;
+let pausedTacticsConfirmed = false;
+let matchStatsView = "player";
 let lastTelemetryRenderMs = -Infinity;
 const matchStatus = document.querySelector("#labMatchStatus");
 const startMatchButton = document.querySelector("#labStartMatch");
 const stopMatchButton = document.querySelector("#labStopMatch");
+function renderPausedTacticsActions() {
+  if (!elements.resumeMatchButton) return;
+  elements.resumeMatchButton.hidden = !pausedMatch;
+  elements.resumeMatchButton.disabled = !pausedMatch || !pausedTacticsConfirmed;
+  elements.resumeMatchButton.textContent = pausedMatch
+    ? `Resume match from ${Math.max(0, Math.ceil(pausedMatch.elapsedMs / 60000))}'`
+    : "Resume match";
+}
+
+function markPausedTacticsDirty() {
+  if (!pausedMatch) return;
+  pausedTacticsConfirmed = false;
+  renderPausedTacticsActions();
+  if (elements.tacticsStatus) elements.tacticsStatus.textContent = "Tactical draft changed. Confirm changes before resuming.";
+}
+
 function stopMatchSession() {
   matchAutoPlay = false;
   matchSession?.stop();
@@ -16761,6 +17665,8 @@ function stopMatchSession() {
   activeMatchChunk = null;
   pendingTacticsTeam = null;
   pausedMatch = null;
+  pausedTacticsConfirmed = false;
+  renderPausedTacticsActions();
   if (startMatchButton) startMatchButton.disabled = false;
   if (stopMatchButton) stopMatchButton.disabled = true;
   elements.pitch.style.visibility = "visible";
@@ -16792,12 +17698,14 @@ function openRequestedTactics() {
     continuation: activeMatchChunk.continuation,
     nextIndex: (activeMatchChunk.index ?? 0) + 1,
   };
+  pausedTacticsConfirmed = false;
+  renderPausedTacticsActions();
   matchAutoPlay = false;
   matchSession?.stop();
   matchSession = null;
   setTacticsDraftTeam(pendingTacticsTeam);
-  if (elements.tacticsRequestStatus) elements.tacticsRequestStatus.textContent = "Play is stopped. Confirm changes to resume.";
-  if (elements.tacticsStatus) elements.tacticsStatus.textContent = `${pendingTacticsTeam === "home" ? "Home" : "Away"} changes will take effect when play resumes.`;
+  if (elements.tacticsRequestStatus) elements.tacticsRequestStatus.textContent = "Play is stopped. Confirm changes, then resume the game.";
+  if (elements.tacticsStatus) elements.tacticsStatus.textContent = `${pendingTacticsTeam === "home" ? "Home" : "Away"} changes will take effect after confirmation.`;
   showMainWorkspace("tactics");
   renderMatchSetupPanel();
   return true;
@@ -16844,21 +17752,52 @@ function renderMatchTelemetry(force = false) {
     elements.liveCommentary.textContent = matchTelemetry.nowMs - line.timeMs <= 15000 ? line.text : "Play continues.";
   }
   if (elements.matchStatsPanel?.hidden) return;
+  const stats = matchStatsView === "team"
+    ? [statsForTeam(matchTelemetry, "home"), statsForTeam(matchTelemetry, "away")]
+    : Object.values(matchTelemetry.players);
   if (elements.playerStatsBody) {
-    elements.playerStatsBody.innerHTML = Object.values(matchTelemetry.players).map((player) => {
-      const accuracy = player.passesTotal ? Math.round(player.passesSuccessful / player.passesTotal * 100) : 0;
-      return `<tr data-team="${player.team}"><td>${escapeMatchText(player.name)}</td><td>${(player.distanceYards * 0.0009144).toFixed(2)} km</td><td>${player.passesSuccessful}/${player.passesTotal}</td><td>${accuracy}%</td><td>${player.keyPasses}</td><td>${player.shotsOnTarget}</td><td>${player.shotsMissed}</td></tr>`;
+    elements.playerStatsBody.innerHTML = stats.map((entry) => {
+      const accuracy = entry.passesTotal ? Math.round(entry.passesSuccessful / entry.passesTotal * 100) : 0;
+      return `<tr data-team="${entry.team}"><td>${escapeMatchText(entry.name)}</td><td>${(entry.distanceYards * 0.0009144).toFixed(2)} km</td><td>${entry.passesSuccessful}/${entry.passesTotal}</td><td>${accuracy}%</td><td>${entry.keyPasses}</td><td>${entry.shotsOnTarget}</td><td>${entry.shotsMissed}</td></tr>`;
     }).join("");
   }
-  const heat = heatForScope(matchTelemetry, elements.statsScope?.value || "team:home");
+  const defaultScope = matchStatsView === "team" ? "team:home" : `player:${stats[0]?.id ?? ""}`;
+  const heat = heatForScope(matchTelemetry, elements.statsScope?.value || defaultScope);
   const peak = Math.max(1, ...heat);
   if (elements.heatmapGrid) elements.heatmapGrid.innerHTML = heat.map((value) => `<span style="--heat:${(value / peak * 0.82).toFixed(3)}" class="match-heat-cell"></span>`).join("");
 }
 
 function populateStatsScope() {
-  if (!elements.statsScope || !matchTelemetry) return;
-  elements.statsScope.innerHTML = `<option value="team:home">Home team</option><option value="team:away">Away team</option>`
-    + Object.values(matchTelemetry.players).map((player) => `<option value="player:${player.id}">${escapeMatchText(player.name)} (${player.team})</option>`).join("");
+  const playerView = matchStatsView === "player";
+  elements.playerStatsTab?.setAttribute("aria-selected", String(playerView));
+  elements.teamStatsTab?.setAttribute("aria-selected", String(!playerView));
+  elements.playerStatsTab?.classList.toggle("is-selected", playerView);
+  elements.teamStatsTab?.classList.toggle("is-selected", !playerView);
+  if (elements.statsScopeLabel) elements.statsScopeLabel.textContent = playerView ? "Player heat map" : "Team heat map";
+  if (elements.statsNameHeading) elements.statsNameHeading.textContent = playerView ? "Player" : "Team";
+  if (!elements.statsScope) return;
+  if (!matchTelemetry) {
+    elements.statsScope.innerHTML = '<option value="">No match data</option>';
+    return;
+  }
+  const previous = elements.statsScope.value;
+  if (!playerView) {
+    elements.statsScope.innerHTML = '<option value="team:home">Home team</option><option value="team:away">Away team</option>';
+  } else {
+    const teamOptions = (team) => Object.values(matchTelemetry.players)
+      .filter((player) => player.team === team)
+      .map((player) => `<option value="player:${escapeMatchText(player.id)}">${escapeMatchText(player.name)}</option>`)
+      .join("");
+    elements.statsScope.innerHTML = `<optgroup label="Home players">${teamOptions("home")}</optgroup><optgroup label="Away players">${teamOptions("away")}</optgroup>`;
+  }
+  const validPrevious = Array.from(elements.statsScope.options ?? []).some((option) => option.value === previous);
+  if (validPrevious) elements.statsScope.value = previous;
+}
+
+function setMatchStatsView(view) {
+  matchStatsView = view === "team" ? "team" : "player";
+  populateStatsScope();
+  renderMatchTelemetry(true);
 }
 
 function playNextMatchChunk() {
@@ -17012,6 +17951,8 @@ function buildLastRun(seed, runOutput) {
     teamPhase: runOutput.teamPhase ?? null,
     phaseTransitions: runOutput.phaseTransitions ?? [],
     shapeSnapshots: runOutput.shapeSnapshots ?? [],
+    coordinationSnapshots: runOutput.coordinationSnapshots ?? [],
+    coordinationHistory: runOutput.coordinationHistory ?? [],
     shapeMetrics: runOutput.shapeMetrics ?? null,
     trace: runOutput.trace,
     // The possession's own simulated positions at rest (Pass 1) -- the
@@ -17263,6 +18204,7 @@ elements.attackingDirectionSelect.addEventListener("change", () => {
   const draft = setupDraft();
   draft.home.attackingDirection = home;
   draft.away.attackingDirection = home === "up" ? "down" : "up";
+  markPausedTacticsDirty();
   reassignSetupTeam("home");
   reassignSetupTeam("away");
   renderMatchSetupPanel();
@@ -17287,6 +18229,7 @@ function updateMarkingStrictnessDisplay(team) {
 }
 function setMarkingStrictness(team, level) {
   setupDraft()[team].marking.strictness = clamp(1, 5, Math.round(level));
+  markPausedTacticsDirty();
   updateMarkingStrictnessDisplay(team);
 }
 elements.markingSchemeSelects.forEach((select) => {
@@ -17294,6 +18237,7 @@ elements.markingSchemeSelects.forEach((select) => {
   select.value = state.marking[team].scheme;
   select.addEventListener("change", () => {
     setupDraft()[team].marking.scheme = select.value === "zonal" ? "zonal" : "man";
+    markPausedTacticsDirty();
   });
 });
 elements.markingBars.forEach((bar) => {
@@ -17334,6 +18278,7 @@ function updateAttackingDirectnessDisplay(team) {
 }
 function setAttackingDirectness(team, level) {
   setupDraft()[team].attacking.directness = clamp(1, 5, Math.round(level));
+  markPausedTacticsDirty();
   updateAttackingDirectnessDisplay(team);
 }
 const ATTACKING_STYLES = new Set(["possession", "direct", "long-ball", "wing"]);
@@ -17342,6 +18287,7 @@ elements.attackingStyleSelects.forEach((select) => {
   select.value = state.attacking[team].style;
   select.addEventListener("change", () => {
     setupDraft()[team].attacking.style = ATTACKING_STYLES.has(select.value) ? select.value : "possession";
+    markPausedTacticsDirty();
   });
 });
 elements.attackingBars.forEach((bar) => {
@@ -17367,6 +18313,7 @@ elements.teamShootingSelects.forEach((select) => {
   select.addEventListener("change", () => {
     setupDraft()[team].attacking.shooting = ["discourage", "balanced", "encourage"].includes(select.value)
       ? select.value : "balanced";
+    markPausedTacticsDirty();
     renderSlotEditor();
   });
 });
@@ -17376,6 +18323,7 @@ elements.teamTempoSelects.forEach((select) => {
   select.addEventListener("change", () => {
     setupDraft()[team].attacking.tempo = ["slow", "balanced", "quick"].includes(select.value)
       ? select.value : "balanced";
+    markPausedTacticsDirty();
     renderSlotEditor();
   });
 });
@@ -17390,6 +18338,7 @@ function setTeamInstruction(team, section, field, value) {
   } else if (section === "marking") {
     setupDraft()[team].marking = normalizeTeamDefending(setupDraft()[team].marking);
   }
+  markPausedTacticsDirty();
   return true;
 }
 
@@ -18498,6 +19447,7 @@ function legalRestartAnchor(entry, restart, team) {
 function placeCornerParticipants(restart, teams, { takerOverrides = {}, cornerPlans = {} } = {}) {
   const placements = new Map();
   const roles = new Map();
+  const subjects = new Map();
   const takingTeam = restart.takingTeam;
   const defendingTeam = restart.defendingTeam
     ?? Object.keys(teams).find((team) => team !== takingTeam);
@@ -18532,6 +19482,7 @@ function placeCornerParticipants(restart, teams, { takerOverrides = {}, cornerPl
   for (const spot of [...attack.placements, ...defence.placements]) {
     placements.set(spot.id, { x: spot.x, y: spot.y });
     roles.set(spot.id, spot.role);
+    if (spot.marks != null) subjects.set(spot.id, spot.marks);
   }
   // The goalkeeper's corner position is goalkeeping, not a role the manager
   // assigns, so it keeps the existing goal-anchored spot from the restart
@@ -18545,7 +19496,7 @@ function placeCornerParticipants(restart, teams, { takerOverrides = {}, cornerPl
     roles.set(defendingKeeper.id, anchoredKeeper.restartRole ?? "keeper");
   }
   return {
-    placements, roles, wallIds: [],
+    placements, roles, subjects, wallIds: [],
     takerId: attack.takerId ?? null,
     corner: {
       swing: attack.swing,
@@ -18559,6 +19510,7 @@ function placeCornerParticipants(restart, teams, { takerOverrides = {}, cornerPl
 function placeRestartParticipants(restart, teams, { takerOverrides = {}, cornerPlans = {} } = {}) {
   const placements = new Map();
   const roles = new Map();
+  const subjects = new Map();
   const takerIds = {};
   const wallIds = [];
   // A corner is not a fixed seven-role template any more. It is a manager
@@ -18631,7 +19583,7 @@ function placeRestartParticipants(restart, teams, { takerOverrides = {}, cornerP
       roles.set(entry.id, null);
     }
   }
-  return { placements, roles, wallIds, takerId: takerIds[restart.takingTeam] ?? null };
+  return { placements, roles, subjects, wallIds, takerId: takerIds[restart.takingTeam] ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -18722,7 +19674,7 @@ async function applySetup() {
   const cornerPlans = Object.fromEntries(["home", "away"]
     .map((team) => [team, draft[team]?.cornerPlan ?? null])
     .filter(([, plan]) => plan));
-  const { placements, roles, wallIds, takerId, corner } = placeRestartParticipants(
+  const { placements, roles, subjects, wallIds, takerId, corner } = placeRestartParticipants(
     restart, prepared, { takerOverrides, cornerPlans },
   );
   // Carried onto the live state so the delivery and swing the plan produced
@@ -18734,7 +19686,12 @@ async function applySetup() {
     renderSetupStatus("Could not nominate a restart taker from the authored XI.", "error");
     return false;
   }
-  const nominated = { ...restart, takerId };
+  const nominated = {
+    ...restart,
+    takerId,
+    variant: corner?.delivery?.target === "short" ? "short" : restart.variant,
+    corner: corner ?? null,
+  };
   const restartCheck = validateGeneratedRestartSetup(nominated);
   if (!restartCheck.valid) {
     renderSetupStatus(`Restart layout illegal — ${restartCheck.errors[0]}`, "error");
@@ -18748,6 +19705,7 @@ async function applySetup() {
       ...entry,
       x: placed.x, y: placed.y, zone: zoneFromPercent(placed.x, placed.y),
       restartRole: roles.get(entry.id) ?? null,
+      restartSubjectId: subjects?.get(entry.id) ?? null,
     };
   });
   // Validate the concrete players Apply Setup will actually commit, not
@@ -18869,6 +19827,7 @@ for (const [tab, team] of [[elements.setupHomeTab, "home"], [elements.setupAwayT
 
 elements.formationSelect?.addEventListener("change", (event) => {
   activeSetupTeam().formation = event.target.value;
+  markPausedTacticsDirty();
   state.selectedSetupSlotId = null;
   reassignSetupTeam(state.setupTeamTab);
   renderMatchSetupPanel();
@@ -18876,6 +19835,7 @@ elements.formationSelect?.addEventListener("change", (event) => {
 
 elements.formationStyleSelect?.addEventListener("change", (event) => {
   activeSetupTeam().style = event.target.value;
+  markPausedTacticsDirty();
   state.selectedSetupSlotId = null;
   reassignSetupTeam(state.setupTeamTab);
   renderMatchSetupPanel();
@@ -18994,15 +19954,47 @@ const finishTacticsBoardDrag = (event, cancelled = false) => {
       formationSwapTarget(drag),
     );
     suppressTacticsBoardClick = result.changed;
+    if (result.changed) markPausedTacticsDirty();
     if (elements.tacticsStatus && result.changed) {
       elements.tacticsStatus.textContent = result.kind === "swap"
         ? "Players swapped in the tactical draft. Confirm to apply."
         : "Formation position moved in the tactical draft. Confirm to apply.";
     }
-  }
+  } else if (!cancelled && drag.phaseMapKey && drag.moved) markPausedTacticsDirty();
   tacticsBoardDrag = null;
   renderTacticsBoard();
   renderSlotEditor();
+};
+
+const COORDINATION_RESPONSIBILITY_PHRASE = {
+  "immediate-outlet": "shows as the immediate outlet",
+  "close-support": "supports the ball at close range",
+  "central-depth-runner": "attacks central depth",
+  "curved-channel-runner": "curves a run into the channel",
+  overlap: "overlaps outside",
+  underlap: "underlaps into the inside lane",
+  "third-man-runner": "continues as the third runner",
+  "weak-side-runner": "attacks from the weak side",
+  "trailing-arrival": "arrives behind the first wave",
+  "recycle-outlet": "drops behind the ball to recycle",
+  "switch-receiver": "holds the weak side for the switch",
+  "circulation-support": "connects the circulation",
+  "near-post-runner": "attacks the near-post lane",
+  "central-box-target": "occupies the central finishing lane",
+  "far-post-runner": "arrives at the far post",
+  "cutback-option": "shows behind the box runs",
+  "edge-of-box-arrival": "holds the edge for a rebound",
+  "rest-defence": "holds the rest-defence position",
+  "primary-pressure": "owns the pressure on the ball",
+  "inside-cover": "covers behind the pressure",
+  "depth-protector": "protects the space in behind",
+  "runner-tracker": "tracks the assigned runner",
+  "far-side-balance": "holds the far-side balance",
+  "recovery-screen": "recovers into the screen",
+  "defensive-line-controller": "controls the defensive line",
+  "defensive-line-member": "aligns with the defensive line",
+  "shape-recovery": "leaves the chase and recovers shape",
+  "loose-ball-claimant": "chases the loose ball",
 };
 elements.tacticsBoard?.addEventListener("pointerup", finishTacticsBoardDrag);
 elements.tacticsBoard?.addEventListener("pointercancel", (event) => finishTacticsBoardDrag(event, true));
@@ -19014,6 +20006,7 @@ const applySlotInstruction = (patch) => {
     draft[state.setupTeamTab], state.selectedSetupSlotId, patch,
   );
   draft[state.setupTeamTab].squadKey = activeSetupTeam().squadKey;
+  markPausedTacticsDirty();
   renderTacticsBoard();
   renderSlotEditor();
 };
@@ -19281,9 +20274,11 @@ function applyTacticalDraftToMatch() {
 }
 
 function resumeMatchAfterTactics() {
-  if (!pausedMatch) return;
+  if (!pausedMatch || !pausedTacticsConfirmed) return;
   const resume = pausedMatch;
   pausedMatch = null;
+  pausedTacticsConfirmed = false;
+  renderPausedTacticsActions();
   pendingTacticsTeam = null;
   activeMatchChunk = null;
   matchAutoPlay = true;
@@ -19313,11 +20308,19 @@ elements.applyTacticsButton?.addEventListener("click", async () => {
   elements.applyTacticsButton.disabled = true;
   try {
     applyTacticalDraftToMatch();
-    if (elements.tacticsStatus) elements.tacticsStatus.textContent = "Changes confirmed.";
-    resumeMatchAfterTactics();
+    pausedTacticsConfirmed = true;
+    renderPausedTacticsActions();
+    if (elements.tacticsStatus) {
+      elements.tacticsStatus.textContent = `Changes confirmed. Resume from ${Math.max(0, Math.ceil(pausedMatch.elapsedMs / 60000))}'.`;
+    }
   } finally {
     elements.applyTacticsButton.disabled = false;
   }
+});
+elements.resumeMatchButton?.addEventListener("click", () => {
+  if (!pausedMatch || !pausedTacticsConfirmed) return;
+  elements.resumeMatchButton.disabled = true;
+  resumeMatchAfterTactics();
 });
 
 function showMainWorkspace(workspace) {
@@ -19332,7 +20335,8 @@ function showMainWorkspace(workspace) {
 }
 elements.matchTab?.addEventListener("click", () => {
   if (pausedMatch) {
-    if (elements.tacticsStatus) elements.tacticsStatus.textContent = "Confirm tactical changes before returning to the live match.";
+    if (pausedTacticsConfirmed) resumeMatchAfterTactics();
+    else if (elements.tacticsStatus) elements.tacticsStatus.textContent = "Confirm tactical changes before returning to the live match.";
     return;
   }
   showMainWorkspace("match");
@@ -19349,9 +20353,13 @@ elements.matchStatsToggle?.addEventListener("click", () => {
   if (elements.matchStatsPanel) elements.matchStatsPanel.hidden = !expanded;
   renderMatchTelemetry(true);
 });
+elements.playerStatsTab?.addEventListener("click", () => setMatchStatsView("player"));
+elements.teamStatsTab?.addEventListener("click", () => setMatchStatsView("team"));
 elements.statsScope?.addEventListener("change", () => renderMatchTelemetry(true));
 
 renderMatchSetupPanel();
+populateStatsScope();
+renderPausedTacticsActions();
 showMainWorkspace("match");
 
 

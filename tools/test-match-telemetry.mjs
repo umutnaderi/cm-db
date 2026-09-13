@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createMatchTelemetry, observeMatchFrame, observeMatchEvent, lastTenMinutePossession, heatForScope } from "../src/lib/matchTelemetry.js";
+import { createMatchTelemetry, observeMatchFrame, observeMatchEvent, lastTenMinutePossession, heatForScope, statsForTeam } from "../src/lib/matchTelemetry.js";
 
 const roster = [
   { id: "h1", team: "home", player: { name: "Home One" } },
@@ -29,4 +29,11 @@ observeMatchEvent(telemetry, { trace, eventIndex: 2, chunkIndex: 1, matchTimeMs:
 assert.deepEqual({ total: telemetry.players.h1.passesTotal, successful: telemetry.players.h1.passesSuccessful, key: telemetry.players.h1.keyPasses }, { total: 1, successful: 1, key: 1 });
 assert.equal(telemetry.players.h2.shotsOnTarget, 1);
 assert(telemetry.commentary.length >= 2);
-console.log("PASS match telemetry: distance, possession, events, commentary and heat retained");
+const homeTeam = statsForTeam(telemetry, "home");
+assert.equal(homeTeam.passesTotal, 1);
+assert.equal(homeTeam.passesSuccessful, 1);
+assert.equal(homeTeam.keyPasses, 1);
+assert.equal(homeTeam.shotsOnTarget, 1);
+assert.equal(homeTeam.shotsMissed, 0);
+assert.equal(homeTeam.distanceYards, telemetry.players.h1.distanceYards + telemetry.players.h2.distanceYards);
+console.log("PASS match telemetry: player and team stats, possession, commentary and heat retained");

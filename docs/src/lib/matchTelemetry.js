@@ -180,4 +180,28 @@ export function heatForScope(telemetry, scope) {
   return heat;
 }
 
+export function statsForTeam(telemetry, team) {
+  const totals = {
+    id: `team:${team}`,
+    team,
+    name: team === "away" ? "Away team" : "Home team",
+    distanceYards: 0,
+    passesSuccessful: 0,
+    passesTotal: 0,
+    keyPasses: 0,
+    shotsOnTarget: 0,
+    shotsMissed: 0,
+  };
+  for (const player of Object.values(telemetry?.players ?? {})) {
+    if (player.team !== team) continue;
+    totals.distanceYards += Number(player.distanceYards) || 0;
+    totals.passesSuccessful += Number(player.passesSuccessful) || 0;
+    totals.passesTotal += Number(player.passesTotal) || 0;
+    totals.keyPasses += Number(player.keyPasses) || 0;
+    totals.shotsOnTarget += Number(player.shotsOnTarget) || 0;
+    totals.shotsMissed += Number(player.shotsMissed) || 0;
+  }
+  return totals;
+}
+
 export { HEAT_COLUMNS, HEAT_ROWS };

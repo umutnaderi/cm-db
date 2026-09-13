@@ -16,6 +16,7 @@ import {
 } from "../src/lib/spatialDecision.js";
 import {
   MEETING_POINT_KINDS, REJECTION_REASONS, GROUND_FAMILY_MAX_YARDS,
+  CONTROLLED_TO_FEET_MAX_YARDS,
   TO_FEET_DRIVEN_MIN_MOBILITY,
   RUNNER_LATE_TOLERANCE_MS, RUNNING_INTENTION_SPEED_FRACTION,
   generateMeetingPoints, evaluateJointCandidate, generateJointCandidates,
@@ -169,7 +170,7 @@ console.log("\n=== 3: faster and better-reading runners reach options slower one
 console.log("\n=== 3b: delivery weight adapts to the receiver without erasing a real run ===");
 {
   const passer = at("passer", 50, 20, STRONG_PASSER);
-  const target = { x: 50, y: 45 };
+  const target = { x: 50, y: 40 };
   const pace9 = player("Pace 9 Receiver", { Pace: 9, Acceleration: 13 });
   const pace17 = player("Pace 17 Receiver", { Pace: 17, Acceleration: 13 });
   const slowFeet = resolveDeliveryType({
@@ -196,9 +197,18 @@ console.log("\n=== 3b: delivery weight adapts to the receiver without erasing a 
     quickFeet.passType === "driven-ground" && quickFeet.receiverAdjusted === false);
   check("receiver adaptation never slows a genuine pass into space after the run was approved",
     slowRun.passType === "driven-ground" && slowRun.receiverAdjusted === false);
-  check("the controlled feet option still applies across the reported roughly 42-yard lane",
-    slowFeetAt42Yards.distanceYards > 40 && slowFeetAt42Yards.passType === "ground"
-      && slowFeetAt42Yards.receiverAdjusted === true);
+  check("controlled feet adaptation is bounded to ordinary passing range",
+    CONTROLLED_TO_FEET_MAX_YARDS < 30);
+  check("a roughly 42-yard pass to a slow receiver remains aerial rather than being downgraded to ground",
+    slowFeetAt42Yards.distanceYards > 40
+      && ["lofted", "driven-aerial"].includes(slowFeetAt42Yards.passType)
+      && slowFeetAt42Yards.receiverAdjusted === false);
+  const runAt30Yards = resolveDeliveryType({
+    passer: passer.player, receiver: pace17, from: passer, to: { x: 50, y: 45 },
+    opponents: [], deps: DEPS, meetingPointKind: "forward-lead",
+  });
+  check("an upper-medium pass into space uses a driven aerial trajectory",
+    runAt30Yards.distanceYards >= 30 && runAt30Yards.passType === "driven-aerial");
   const safeFeet = {
     runnerId: "slow", meetingPointKind: "current-position", utility: 0,
     viable: true, receiverMobility: slowFeet.receiverMobility,
@@ -289,17 +299,17 @@ console.log("\n=== 6: long deliveries choose a supported pass type, not a ground
   check("it becomes a driven aerial ball", strong.passType === "driven-aerial");
   const weak = resolveDeliveryType({ passer: WEAK_PASSER, from, to, opponents: [], deps: DEPS });
   check("a weaker passer's long ball is lofted rather than driven", weak.passType === "lofted");
-  check("the strong passer's ball is recorded as an upgrade, not a silent substitution",
-    strong.upgraded === true);
-  check("the weak passer needed no upgrade -- selectPassType() already refused to keep that one on the ground",
+  check("the primary selector itself now chooses the strong passer's aerial family",
+    strong.upgraded === false);
+  check("the weak passer also receives its aerial family directly",
     weak.upgraded === false);
   const shortBall = resolveDeliveryType({
     passer: STRONG_PASSER, from, to: { x: 50, y: 18 }, opponents: [], deps: DEPS,
   });
   check("a short pass is untouched and stays on the ground",
     shortBall.passType === "ground" && shortBall.upgraded === false);
-  check("long-range upgrades only fire beyond the ground-family ceiling",
-    GROUND_FAMILY_MAX_YARDS >= 35);
+  check("the ground-family credibility ceiling ends at 35 yards",
+    GROUND_FAMILY_MAX_YARDS === 35);
 }
 
 // ---------------------------------------------------------------------------
@@ -608,12 +618,17 @@ console.log("\n=== 12-14: the real Free Play path and the possession loop ===");
   }
   check("found a real opening pass to both receivers with the same seed and geometry",
     Boolean(comparisonSeed));
-  check(`the Pace 9 plan reaches the resolver as a controlled ground pass (found: ${slowOpeningPass?.label ?? "none"})`,
-    /a ground pass/.test(slowOpeningPass?.label || "")
-      && !/driven ground/.test(slowOpeningPass?.label || ""));
+  check(`the 42-yard Pace 9 plan stays airborne instead of using the short-range receiver downgrade (found: ${slowOpeningPass?.label ?? "none"})`,
+    /a (?:driven aerial|lofted) pass/.test(slowOpeningPass?.label || ""));
   check(`the Pace 9 pass remains aimed at the receiver's kick-time feet (found: ${JSON.stringify(slowOpeningPass?.intendedPoint ?? null)})`,
     slowOpeningPass?.intendedPoint?.x === 50 && slowOpeningPass?.intendedPoint?.y === 55
       && !/space ahead/.test(slowOpeningPass?.label || ""));
+  check("the real pass trace explains its delivery type, intent, distance, height and speed",
+    slowOpeningPass?.metrics?.passFlight?.passType === "driven-aerial"
+      && slowOpeningPass.metrics.passFlight.deliveryIntent === "current-position"
+      && slowOpeningPass.metrics.passFlight.distanceYards > 40
+      && slowOpeningPass.metrics.passFlight.peakHeightYards > 0
+      && slowOpeningPass.metrics.passFlight.speedYardsPerSecond > 0);
   check(`the same geometry with Pace 17 reaches the resolver as a driven lead delivery (found: ${quickOpeningPass?.label ?? "none"})`,
     /a driven (?:ground|aerial) pass/.test(quickOpeningPass?.label || "")
       && Boolean(quickOpeningPass?.intendedPoint)

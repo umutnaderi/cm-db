@@ -109,9 +109,11 @@ function interleavedKeyframes(track) {
   }
   return count;
 }
-function sharpReversals(track, minimumLegYards = 0.05, cosineLimit = -0.85) {
+function sharpReversals(track, minimumLegYards = 0.05, cosineLimit = -0.85, excludedActions = new Set()) {
   let count = 0;
   for (let index = 2; index < track.length; index += 1) {
+    if ([track[index - 2], track[index - 1], track[index]].some((frame) =>
+      excludedActions.has(frame.action) || String(frame.action).startsWith("restart-"))) continue;
     const a = { x: track[index - 1].position.x - track[index - 2].position.x, y: track[index - 1].position.y - track[index - 2].position.y };
     const b = { x: track[index].position.x - track[index - 1].position.x, y: track[index].position.y - track[index - 1].position.y };
     const la = Math.hypot(a.x, a.y);
@@ -358,7 +360,13 @@ console.log("\n=== 7: a real 11-vs-11 possession produces no alternating tracks 
       tracks += 1;
       keyframes += track.length;
       interleaved += interleavedKeyframes(track);
-      const trackReversals = sharpReversals(track);
+      // Retreating from a placed ball and reversing into the run-up is the
+      // explicit, intended set-piece choreography. This metric guards
+      // unplanned open-play twitching, while the restart tests separately
+      // validate the preparation trajectory's speed and continuity.
+      const trackReversals = sharpReversals(
+        track, 0.05, -0.85, new Set(["set-position", "restart-approach"]),
+      );
       reversals += trackReversals;
       if (trackReversals > 0) tracksWithReversals.push(trackReversals);
     }

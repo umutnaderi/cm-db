@@ -87,15 +87,19 @@ const PASS_TYPE_PROFILE = {
   // TARGET itself realistic -- this only fixes how a throw at any legal
   // target actually looks once selected.
   throw: { speedYardsPerSecond: 14, peakHeightYards: (distanceYards) => clamp(0.8, 3, distanceYards * 0.06), accuracyMultiplier: 1.1 },
+  // A specialist long throw uses a run-up and more shoulder force, while
+  // remaining slower than a lofted kick and visibly more arced.
+  "long-throw": { speedYardsPerSecond: 15.25, peakHeightYards: (distanceYards) => clamp(1.4, 4.2, distanceYards * 0.085), accuracyMultiplier: 1.2 },
 };
 
 const GROUND_MAX_YARDS = 15;
-const DRIVEN_GROUND_MAX_YARDS = 35;
+const CONTROLLED_DRIVEN_MAX_YARDS = 30;
+const EXCEPTIONAL_DRIVEN_GROUND_MAX_YARDS = 35;
 const DRIVEN_GROUND_MIN_OBSTRUCTION_CLEARANCE = 0.5;
 const LONG_DRIVEN_AERIAL_MAX_OBSTRUCTION = 0.6;
 const LONG_DRIVEN_AERIAL_MIN_POWER = 13;
-const LONG_GROUND_MAX_OBSTRUCTION = 0.15;
-const LONG_GROUND_MIN_POWER = 15;
+const EXCEPTIONAL_GROUND_MAX_OBSTRUCTION = 0.12;
+const EXCEPTIONAL_GROUND_MIN_POWER = 17;
 
 function powerBlend(passer) {
   return (
@@ -108,15 +112,26 @@ function powerBlend(passer) {
 // Deterministic -- the passer's own skill and the geometry decide this,
 // not a dice roll. See MATCH_LAB_PLAN.md for the full threshold table and
 // the reasoning behind each one.
-export function selectPassType({ passer, from, to, opponents = [] }) {
+export function selectPassType({
+  passer, from, to, opponents = [], deliveryIntent = "current-position",
+}) {
   const distanceYards = yardDistance(from, to);
   if (distanceYards <= GROUND_MAX_YARDS) return "ground";
   const obstruction = laneObstruction(from, to, opponents);
-  if (distanceYards <= DRIVEN_GROUND_MAX_YARDS) {
+  if (distanceYards < CONTROLLED_DRIVEN_MAX_YARDS) {
     return obstruction < DRIVEN_GROUND_MIN_OBSTRUCTION_CLEARANCE ? "driven-ground" : "lofted";
   }
   const power = powerBlend(passer);
-  if (obstruction < LONG_GROUND_MAX_OBSTRUCTION && power >= LONG_GROUND_MIN_POWER) return "driven-ground";
+  const intoSpace = deliveryIntent !== "current-position" && deliveryIntent !== "to-feet";
+  // A firm low diagonal remains possible over upper-medium range, but only
+  // to a stationary feet target, through an exceptionally clear lane, from
+  // a passer with the technique and power to keep it skimming accurately.
+  // This used to remain the default clear-lane answer beyond 35 yards,
+  // which is why visually long passes were repeatedly drilled on the turf.
+  if (!intoSpace
+    && distanceYards <= EXCEPTIONAL_DRIVEN_GROUND_MAX_YARDS
+    && obstruction < EXCEPTIONAL_GROUND_MAX_OBSTRUCTION
+    && power >= EXCEPTIONAL_GROUND_MIN_POWER) return "driven-ground";
   if (obstruction < LONG_DRIVEN_AERIAL_MAX_OBSTRUCTION && power >= LONG_DRIVEN_AERIAL_MIN_POWER) return "driven-aerial";
   return "lofted";
 }

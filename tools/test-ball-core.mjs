@@ -7,6 +7,9 @@ import {
   transitionBallState,
 } from "../src/lib/matchBallCore.js";
 import { buildMatchLabPlaybackPlan, sampleMatchLabPlaybackPlan } from "../src/lib/matchLabPlayback.js";
+import {
+  buildRollingBallTrajectory, rollStopDurationMs,
+} from "../src/lib/ballRollPhysics.js";
 
 let failures = 0;
 function check(label, condition) {
@@ -51,6 +54,25 @@ check("a keeper catch changes ball state to held and stops ground velocity", con
 const movingLoose = { ...loose, position: { x: 50, y: 50, zone: 4 }, velocity: { x: 0.05, y: 0 } };
 const projected = predictBallPosition(movingLoose, 400);
 check("players can project a rolling ball from velocity plus turf friction", projected.x > 55 && projected.x < 70);
+
+const rollFrom = { x: 20, y: 50, zone: 4 };
+const rollAim = { x: 90, y: 50, zone: 5 };
+const beforeNaturalStop = buildRollingBallTrajectory({
+  from: rollFrom, aim: rollAim, launchSpeedYps: 12, durationMs: 900, sampleMs: 100,
+});
+const speeds = beforeNaturalStop.map((sample) => Math.hypot(sample.velocity.x, sample.velocity.y));
+check("a freely rolling ball loses momentum continuously", speeds.every((speed, index) =>
+  index === 0 || speed <= speeds[index - 1] + 1e-12));
+check("a roll cannot become stationary before friction has stopped it",
+  speeds.at(-1) > 0 && beforeNaturalStop.every((sample, index) =>
+    index === 0 || sample.position.x > beforeNaturalStop[index - 1].position.x));
+const naturalStop = buildRollingBallTrajectory({
+  from: rollFrom, aim: rollAim, launchSpeedYps: 12,
+  durationMs: rollStopDurationMs(12), sampleMs: 100,
+});
+check("turf friction reaches zero only at the natural stopping point",
+  Math.hypot(naturalStop.at(-1).velocity.x, naturalStop.at(-1).velocity.y) < 1e-12
+    && Math.hypot(naturalStop.at(-2).velocity.x, naturalStop.at(-2).velocity.y) > 0);
 
 const near = { id: "near", x: 50, y: 51, player: { Pace: 8, Anticipation: 8 } };
 const far = { id: "far", x: 50, y: 80, player: { Pace: 20, Anticipation: 20 } };

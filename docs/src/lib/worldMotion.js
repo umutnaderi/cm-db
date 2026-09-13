@@ -38,7 +38,7 @@
 // that says whether an authored move was physically honest.
 
 import { PITCH_LENGTH_YARDS, PITCH_WIDTH_YARDS } from "./pitchGeometry.js";
-import { reachIn, speedAtElapsed, timeToReach, topSpeed, timeToTopSpeed, turnRetention,
+import { decelerationRate, reachIn, speedAfterBraking, speedAtElapsed, timeToReach, topSpeed, timeToTopSpeed, turnRetention,
   diveReachYards, diveLaunchSpeedYps, DIVE_COMMIT_SECONDS } from "./playerKinetics.js";
 import {
   CONTACT_REACTION_DELAY_MS, movementDistanceYards, sampleContinuousTrajectory,
@@ -189,6 +189,133 @@ export const CHASE_INTENTIONS = Object.freeze(new Set([
   "respect-held-ball",
 ]));
 
+const HARD_REVERSAL_DEGREES = 105;
+
+function brakeBeforeHardReversal({
+  from, intentionTarget, player, windowMs, incomingVelocity, incomingSpeedYps,
+  reactionDelayMs, sampleCount, intention, gait, role, paceToArrival, continuesAfter,
+  turnAngleDegrees,
+}) {
+  if (turnAngleDegrees < HARD_REVERSAL_DEGREES || incomingSpeedYps < 0.1 || windowMs <= 0) return null;
+  const reactionMs = Math.min(windowMs, Math.max(0, Number(reactionDelayMs) || 0));
+  const brakeRate = decelerationRate(player);
+  const brakeSeconds = brakeRate > 0 ? incomingSpeedYps / brakeRate : 0;
+  const turnPhaseMs = Math.min(windowMs, reactionMs + brakeSeconds * 1000);
+  const speedX = (Number(incomingVelocity?.x) || 0) * (PITCH_WIDTH_YARDS / 100) * 1000;
+  const speedY = (Number(incomingVelocity?.y) || 0) * (PITCH_LENGTH_YARDS / 100) * 1000;
+  const headingLength = Math.hypot(speedX, speedY) || 1;
+  const heading = { x: speedX / headingLength, y: speedY / headingLength };
+  const brakingSamples = Math.max(2, Math.round(sampleCount * turnPhaseMs / windowMs));
+  const trajectory = [];
+  for (let index = 0; index <= brakingSamples; index += 1) {
+    const elapsedMs = turnPhaseMs * index / brakingSamples;
+    const reactionSeconds = Math.min(elapsedMs, reactionMs) / 1000;
+    const activeBrakeSeconds = Math.max(0, elapsedMs - reactionMs) / 1000;
+    const boundedBrakeSeconds = Math.min(brakeSeconds, activeBrakeSeconds);
+    const distanceYards = incomingSpeedYps * reactionSeconds
+      + incomingSpeedYps * boundedBrakeSeconds
+      - 0.5 * brakeRate * boundedBrakeSeconds * boundedBrakeSeconds;
+    const speedYps = activeBrakeSeconds > 0
+      ? speedAfterBraking(player, incomingSpeedYps, boundedBrakeSeconds)
+      : incomingSpeedYps;
+    trajectory.push({
+      progress: windowMs ? elapsedMs / windowMs : 0,
+      position: {
+        x: Math.max(0, Math.min(100, from.x + distanceYards * heading.x / (PITCH_WIDTH_YARDS / 100))),
+        y: Math.max(0, Math.min(100, from.y + distanceYards * heading.y / (PITCH_LENGTH_YARDS / 100))),
+      },
+      velocity: velocityAlong(
+        from,
+        { x: from.x + heading.x / (PITCH_WIDTH_YARDS / 100), y: from.y + heading.y / (PITCH_LENGTH_YARDS / 100) },
+        speedYps,
+      ),
+    });
+  }
+  let position = { ...trajectory.at(-1).position, zone: from?.zone ?? null };
+  let velocity = { ...trajectory.at(-1).velocity };
+  let reachedTarget = false;
+  let consumedMs = turnPhaseMs;
+  if (turnPhaseMs < windowMs - 0.5 && speedYpsFromVelocity(velocity) < 0.12) {
+    // A planted turn still needs a change of facing. Give it a short lateral
+    // footwork beat so playback describes an arc through the turn instead of
+    // drawing two collinear legs that meet in an exact 180-degree cusp.
+    const pivotMs = Math.min(windowMs - consumedMs, 180);
+    const targetDx = (intentionTarget.x - position.x) * (PITCH_WIDTH_YARDS / 100);
+    const targetDy = (intentionTarget.y - position.y) * (PITCH_LENGTH_YARDS / 100);
+    const targetLength = Math.hypot(targetDx, targetDy) || 1;
+    const targetHeading = { x: targetDx / targetLength, y: targetDy / targetLength };
+    const cross = heading.x * targetHeading.y - heading.y * targetHeading.x;
+    const side = cross < 0 ? -1 : 1;
+    const lateral = { x: -heading.y * side, y: heading.x * side };
+    const pivotYards = Math.min(0.18, topSpeed(player) * pivotMs / 1000 * 0.2);
+    const pivotStart = { ...position };
+    for (let index = 1; index <= 2; index += 1) {
+      const fraction = index / 2;
+      const pivotPosition = {
+        x: Math.max(0, Math.min(100, pivotStart.x + pivotYards * fraction * lateral.x / (PITCH_WIDTH_YARDS / 100))),
+        y: Math.max(0, Math.min(100, pivotStart.y + pivotYards * fraction * lateral.y / (PITCH_LENGTH_YARDS / 100))),
+      };
+      trajectory.push({
+        progress: (consumedMs + pivotMs * fraction) / windowMs,
+        position: pivotPosition,
+        velocity: velocityAlong(pivotStart, pivotPosition, pivotMs > 0 ? pivotYards / (pivotMs / 1000) : 0),
+      });
+      position = { ...pivotPosition, zone: from?.zone ?? null };
+    }
+    velocity = { ...trajectory.at(-1).velocity };
+    consumedMs += pivotMs;
+  }
+  if (consumedMs < windowMs - 0.5) {
+    const remainderMs = windowMs - consumedMs;
+    const resumed = advanceMotion({
+      from: position,
+      intentionTarget,
+      player,
+      elapsedMs: remainderMs,
+      incomingVelocity: null,
+      reactionDelayMs: 0,
+      sampleCount: Math.max(2, sampleCount - brakingSamples),
+      intention,
+      gait,
+      role,
+      paceToArrival,
+      continuesAfter,
+    });
+    for (const sample of resumed.trajectory.slice(1)) {
+      trajectory.push({
+        ...sample,
+        progress: (consumedMs + sample.progress * remainderMs) / windowMs,
+      });
+    }
+    position = resumed.position;
+    velocity = resumed.velocity;
+    reachedTarget = resumed.reachedTarget;
+  }
+  const distanceYards = movementDistanceYards(from, position);
+  return {
+    position,
+    velocity,
+    trajectory,
+    distanceYards,
+    remainingYards: Math.max(0, movementDistanceYards(position, intentionTarget)),
+    reachedTarget,
+    entrySpeedYps: incomingSpeedYps,
+    incomingSpeedYps,
+    turnAngleDegrees,
+    requestedDistanceYards: movementDistanceYards(from, intentionTarget),
+    availableDurationMs: windowMs,
+    reactionDelayMs,
+    accelerationYps2: topSpeed(player) / timeToTopSpeed(player),
+    withinPhysicalLimit: true,
+    exitSpeedYps: speedYpsFromVelocity(velocity),
+    intention,
+    intentionTarget: intentionTarget ? { ...intentionTarget } : null,
+    gait,
+    role,
+    brakingForReversal: true,
+  };
+}
+
 export function advanceMotion({
   from, intentionTarget, player, elapsedMs,
   incomingVelocity = null, reactionDelayMs = 0, sampleCount = 12,
@@ -204,6 +331,12 @@ export function advanceMotion({
   const vy = (incomingVelocity?.y || 0) * PITCH_LENGTH_YARDS;
   const denominator = Math.hypot(dx, dy) * Math.hypot(vx, vy);
   const turnAngleDegrees = denominator ? Math.acos(Math.max(-1, Math.min(1, (dx * vx + dy * vy) / denominator))) * 180 / Math.PI : 0;
+  const reversal = brakeBeforeHardReversal({
+    from, intentionTarget, player, windowMs, incomingVelocity, incomingSpeedYps,
+    reactionDelayMs, sampleCount, intention, gait, role, paceToArrival, continuesAfter,
+    turnAngleDegrees,
+  });
+  if (reversal) return reversal;
   const initialSpeedYps = incomingSpeedYps * turnRetention(player, turnAngleDegrees);
   const totalYards = movementDistanceYards(from, intentionTarget);
   const usableSeconds = Math.max(0, (windowMs - Math.max(0, reactionDelayMs)) / 1000);

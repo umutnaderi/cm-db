@@ -353,6 +353,25 @@ console.log("\n=== 3: one global pass reserves complementary possession and defe
     })));
 }
 
+console.log("\n=== 3b: coordinated line jobs preserve a shared authoritative depth ===");
+{
+  const setup = createTeamSetup({ team: "away", formation: "4-4-2", style: "Balanced", attackingDirection: "up" });
+  const entries = rosterFromSetup(setup, { kickoff: true });
+  const centreBacks = entries.filter((entry) => entry.positionalSlot === "DC");
+  const basePlans = centreBacks.map((entry, index) => ({
+    id: entry.id,
+    action: index === 0 ? "coordinate-defensive-line-controller" : "coordinate-defensive-line-member",
+    intentionTarget: { x: entry.x, y: 42 },
+  }));
+  const planned = coordinateTeamShape({
+    entries, ballPoint: { x: 50, y: 58 }, possessionTeam: "home", ownerId: null,
+    attackingDirection: "up", phase: "defensive-block", basePlans,
+  });
+  const aligned = planned.assignments.filter((entry) => centreBacks.some((defender) => defender.id === entry.id));
+  check("controller and member keep one line depth after formation blending",
+    aligned.length === centreBacks.length && aligned.every((entry) => Math.abs(entry.intentionTarget.y - 42) < 1e-9));
+}
+
 console.log("\n=== 4: deterministic saved kickoff reference fixtures ===");
 {
   const fixturesDir = join(__dirname, "kickoff-fixtures");

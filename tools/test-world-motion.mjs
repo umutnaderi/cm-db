@@ -53,6 +53,7 @@ const {
 const { movementDistanceYards, sampleContinuousTrajectory } = await import("../src/lib/matchMovementTiming.js");
 const { topSpeed } = await import("../src/lib/playerKinetics.js");
 const { simulateCarryTouches } = await import("../src/lib/spatialDecision.js");
+const { PITCH_LENGTH_YARDS, PITCH_WIDTH_YARDS } = await import("../src/lib/pitchGeometry.js");
 
 let failures = 0;
 function check(label, condition) {
@@ -392,6 +393,37 @@ console.log("\n=== 9: routine carry touches group without losing any event ===")
   });
   check("a move that exceeded its physical limit is flagged loudly",
     overrunMarkup.includes("match-lab-move-overrun") && overrunMarkup.includes("Exceeds physical limit"));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== 10: a hard retarget brakes and turns through footwork rather than snapping sideways ===");
+{
+  const from = { x: 50, y: 50 };
+  const target = { x: 30, y: 50 };
+  const incomingVelocity = velocityAlong(from, { x: 70, y: 50 }, 7);
+  const shortTurn = advanceMotion({
+    from, intentionTarget: target, player: DEEP, elapsedMs: 400,
+    incomingVelocity, intention: "support-run",
+  });
+  check("the hard reversal is identified as a braking turn", shortTurn.brakingForReversal === true);
+  check("the player first absorbs existing momentum instead of instantly travelling toward the new target",
+    shortTurn.position.x > from.x && speedYpsFromVelocity(shortTurn.velocity) < 7);
+
+  const fullTurn = advanceMotion({
+    from, intentionTarget: target, player: DEEP, elapsedMs: 1600,
+    incomingVelocity, intention: "support-run",
+  });
+  let exactCusp = false;
+  for (let index = 2; index < fullTurn.trajectory.length; index += 1) {
+    const previous = fullTurn.trajectory[index - 2].position;
+    const pivot = fullTurn.trajectory[index - 1].position;
+    const next = fullTurn.trajectory[index].position;
+    const a = { x: (pivot.x - previous.x) * PITCH_WIDTH_YARDS, y: (pivot.y - previous.y) * PITCH_LENGTH_YARDS };
+    const b = { x: (next.x - pivot.x) * PITCH_WIDTH_YARDS, y: (next.y - pivot.y) * PITCH_LENGTH_YARDS };
+    const denominator = Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y);
+    if (denominator && (a.x * b.x + a.y * b.y) / denominator < -0.95) exactCusp = true;
+  }
+  check("the completed change of direction contains no exact 180-degree playback cusp", !exactCusp);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} CHECK(S) FAILED`}`);

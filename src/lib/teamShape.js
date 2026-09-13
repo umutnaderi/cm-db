@@ -49,6 +49,10 @@ const SPECIAL_BASE_ACTIONS = new Set([
   "attack-far", "edge-rebound", "check-away", "in-behind",
 ]);
 
+function isSpecialBaseAction(action) {
+  return SPECIAL_BASE_ACTIONS.has(action) || String(action || "").startsWith("coordinate-");
+}
+
 const REST_DEFENCE_JOBS = new Set([
   "rest-defence", "defensive-line-holder", "cover-defender", "passing-lane-screen",
 ]);
@@ -465,7 +469,12 @@ function teamJobTarget(entry, job, shapeTarget, { ballPoint, attackingDirection 
 
 function applyBasePlan(target, basePlan, marking) {
   if (!basePlan?.intentionTarget) return target;
-  if (SPECIAL_BASE_ACTIONS.has(basePlan.action)) return blendPoint(target, basePlan.intentionTarget, 0.68);
+  if (basePlan.action === "coordinate-loose-ball-claimant") return clonePoint(basePlan.intentionTarget);
+  if (["coordinate-defensive-line-controller", "coordinate-defensive-line-member"].includes(basePlan.action)) {
+    const blended = blendPoint(target, basePlan.intentionTarget, 0.68);
+    return { ...blended, y: basePlan.intentionTarget.y };
+  }
+  if (isSpecialBaseAction(basePlan.action)) return blendPoint(target, basePlan.intentionTarget, 0.68);
   if (basePlan.action === "mark" && marking?.scheme === "man") {
     const strictness = clamp(1, 5, Number(marking.strictness ?? marking.tightness) || 3);
     return blendPoint(target, basePlan.intentionTarget, 0.18 + strictness * 0.07);
@@ -625,18 +634,22 @@ export function coordinateTeamShape({
   // shape holder shades toward that anchor, rather than leaving a hole.
   const vacancies = assignments.filter((assignment) => {
     const base = baseById.get(String(assignment.id));
-    return SPECIAL_BASE_ACTIONS.has(base?.action)
+    return isSpecialBaseAction(base?.action)
       && yardDistance(assignment.shapeTarget, assignment.intentionTarget) > 8;
   });
   for (const vacancy of vacancies) {
     const holders = assignments.filter((assignment) => assignment.id !== vacancy.id
-      && !SPECIAL_BASE_ACTIONS.has(baseById.get(String(assignment.id))?.action)
+      && !isSpecialBaseAction(baseById.get(String(assignment.id))?.action)
       && assignment.teamJob !== "ball-owner" && assignment.teamJob !== "primary-presser");
     const holder = stableSort(holders, (assignment) => yardDistance(assignment.shapeTarget, vacancy.shapeTarget))[0];
     if (holder) holder.intentionTarget = blendPoint(holder.intentionTarget, vacancy.shapeTarget, 0.15);
   }
 
-  separateTargets(assignments);
+  // Restart release and first build-up targets must dissolve the compact
+  // restart cluster. Keep a small margin above the five-yard telemetry
+  // radius so floating-point conversion cannot leave the same pair counted
+  // as clustered after the shape has supposedly opened.
+  separateTargets(assignments, phase === "restart-release" || phase === "build-up" ? 5.1 : 4.25);
   annotateTacticalRegions(assignments);
   const jobs = Object.fromEntries(assignments.map((assignment) => [assignment.id, assignment.teamJob]));
   return {

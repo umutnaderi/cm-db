@@ -70,6 +70,7 @@
     "audit:parity": "node tools/measure-possession-parity.mjs",
     "test:motion-integrity-diagnostics": "node tools/test-motion-integrity-diagnostics.mjs",
     "report:pass-delivery-mix": "node tools/report-pass-delivery-mix.mjs",
+    "test:directness-progression": "node tools/test-directness-progression.mjs",
     "audit:tactical-influence": "node tools/measure-tactical-influence.mjs",
     "test:coordination": "node tools/test-coordination-coordinator.mjs",
     "test:keeper-angle": "node tools/test-keeper-angle.mjs",

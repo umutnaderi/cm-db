@@ -622,6 +622,88 @@ exist.
 
 ---
 
+## Directness v2 — an instruction with no surface area (built 2026-09-14)
+
+Not originally a stage. Stage 1c's measurement turned directness from a noisy
+verdict into a trustworthy `none`, which made it worth diagnosing properly.
+
+### The diagnosis
+
+`directness` had exactly one real mechanism: `skippedSimplePenalty()`, which
+fires only on a punt, an own-half through ball, or a pass of **35 yards or
+more**. `tools/report-pass-delivery-mix.mjs` measured how often that is —
+**8 of 359 sampled passes**, about 2%.
+
+The instruction was never mis-tuned. It had no surface area. No amount of
+adjusting `DIRECTNESS_SKIP_PENALTY` could have made a five-setting control
+visible when its only mechanism reaches one decision in fifty.
+
+### The fix
+
+Every progression utility already computes `progressionYards()`. Directness now
+scales that existing term, so it reaches every pass, cross, through ball and
+carry rather than the long ones alone. This is not a new mechanic layered on
+top — it is the instruction finally reaching the quantity it was always about.
+
+`DIRECTNESS_PROGRESSION_WEIGHT` is **centred on directness 2**, because that is
+`DEFAULT_TEAM_ATTACKING.directness`. A default side's arithmetic is unchanged,
+so every tuned default and every recorded replay that never touched the
+Attacking UI keeps its exact behaviour. The parity sweep confirms this
+end-to-end: the overall digest is byte-identical across the change.
+
+Because the progression term is signed, this cuts both ways by construction,
+which is the football of it — a patient side is content to go backwards and
+rates the same twenty yards lower; a direct side hates going backwards and
+rates them higher.
+
+### Measured
+
+`attacking.directness` 1 vs 5: **none → visible**, and on four metrics that
+agree with one another rather than one that happened to move.
+
+| Metric | direct (5) | patient (1) | d | p |
+| --- | ---: | ---: | ---: | ---: |
+| pass share | 0.701 | 0.773 | -0.600 | 0.0002 |
+| shots selected | 0.450 | 0.175 | 0.513 | 0.0008 |
+| carry share | 0.041 | 0.017 | 0.459 | 0.0010 |
+| pressure at decision | 0.325 | 0.280 | 0.400 | 0.0065 |
+
+A direct side passes less, carries more, shoots two and a half times as often
+and decides under more pressure because it is further up the pitch. That is a
+coherent picture, and several agreeing metrics is much stronger evidence than
+a single one.
+
+`npm run test:directness-progression` — 28 assertions.
+
+---
+
+## Current Stage 0 baseline (2026-09-14, advanced sampling)
+
+80 possessions per arm. **Comparable only with other post-2026-09-14 sweeps.**
+
+| Input | Verdict |
+| --- | --- |
+| `attacking.tempo` | **strong** |
+| `attacking.directness` | **visible** |
+| `attacking.style` | **visible** |
+| `attacking.dribbling` | weak |
+| `attacking.shooting` | **none** |
+| `attacking.passIntoSpace` | **none** |
+| `marking.pressing` | **none** |
+| role | **none** |
+
+Four of eight reach at least `weak`. `marking.pressing` reads `none` here
+where the old sampling gave `weak`; both sides shift together in the advanced
+picture, so the pressing contrast has less room to express itself. That is the
+sampling changing, not the engine.
+
+The four `none` rows are now the work queue, and Directness v2 is the worked
+example of how to approach them: **measure the mechanism's surface area before
+touching its constants.** An instruction that reaches 2% of decisions is not a
+tuning problem.
+
+---
+
 ## Stage 2 — Role personality (planned)
 
 > Implement Realism Roadmap Stage 2: give the 57 tactical roles a decision

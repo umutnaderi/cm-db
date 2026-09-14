@@ -2744,6 +2744,48 @@ function clampDirectness(directness) {
   return clamp(1, 5, Math.round(Number(directness) || DEFAULT_ATTACKING_SETTINGS.directness));
 }
 
+// ---------------------------------------------------------------------------
+// Directness v2 (Realism Roadmap, 2026-09-14) -- directness scales what
+// forward progress is WORTH, at every distance.
+//
+// skippedSimplePenalty() above was, until now, the only real mechanism
+// directness had, and it fires on exactly one shape of decision: a punt, an
+// own-half through ball, or a pass of 35 yards or more. The Stage 0 sweep
+// found directness invisible, and tools/report-pass-delivery-mix.mjs says why
+// -- 8 of 359 sampled passes were 35 yards or longer. A five-setting
+// instruction whose only mechanism reaches roughly two per cent of decisions
+// is not mis-tuned; it has no surface area.
+//
+// Every progression utility already computes progressionYards(). Scaling that
+// existing term is therefore not a new mechanic layered on top -- it is the
+// instruction finally reaching the quantity it was always about, on every
+// pass, cross, through ball and carry rather than on the long ones alone.
+//
+// The multiplier is centred on directness 2 because that is
+// DEFAULT_TEAM_ATTACKING.directness: a default side's play is arithmetically
+// unchanged, so every tuned default and every recorded replay that never
+// touched the Attacking UI keeps its exact behaviour, and only a manager who
+// actually moved the bar sees a difference.
+//
+// Because the term is signed, this cuts both ways by construction, which is
+// the football of it: a patient side is happy to go backwards and rates the
+// same twenty yards lower, a direct side hates going backwards and rates them
+// higher. Neither ever deletes a legal option -- see this file's own header.
+const DIRECTNESS_PROGRESSION_WEIGHT = { 1: 0.7, 2: 1.0, 3: 1.25, 4: 1.55, 5: 1.9 };
+
+/**
+ * Progression multiplier for this side, relative to the default directness.
+ *
+ * Returns exactly 1 when no settings bag was supplied, keeping every direct
+ * call to passUtility()/throughBallUtility()/crossUtility()/carryUtility()
+ * that predates this feature -- this file's own regression suite included --
+ * on its original score. Same gating convention as the style-affinity blocks.
+ */
+export function directnessProgressionWeight(attackingSettings) {
+  if (!attackingSettings) return 1;
+  return DIRECTNESS_PROGRESSION_WEIGHT[normalizeAttackingSettings(attackingSettings).directness] ?? 1;
+}
+
 export function normalizeAttackingSettings(attackingSettings) {
   return normalizeTeamAttacking({
     ...attackingSettings,
@@ -2844,7 +2886,8 @@ export function passUtility(owner, teammate, opponents, attackingDirection, cont
   // separate flat "backward" penalty used to also apply on top of that,
   // double-counting the exact same signal (removed 2026-08-19, alongside
   // pressureRelief above; see that comment for the full reasoning).
-  utility += clamp(-1, 1, progression / 30) * w.progression;
+  utility += clamp(-1, 1, progression / 30) * w.progression
+    * directnessProgressionWeight(context.attackingSettings);
   utility -= receiverPressure * w.pressure;
   // Distance term (2026-08-25 fix): the old (d-15)/35 fully saturated by
   // 50 yd, so a 55-yard ball and a 90-yard one scored IDENTICALLY on
@@ -2906,7 +2949,8 @@ export function crossUtility(owner, teammate, opponents, attackingDirection, con
   const resultDistance = distanceToGoalYards(teammate, attackingDirection);
   const wideness = clamp(0, 1, Math.abs(toYardPoint(owner).x - PITCH_WIDTH_YARDS / 2) / (PITCH_WIDTH_YARDS / 2));
   let utility = 0;
-  utility += clamp(-1, 1, progression / 30) * 1.0;
+  utility += clamp(-1, 1, progression / 30) * 1.0
+    * directnessProgressionWeight(context.attackingSettings);
   utility -= receiverPressure * 0.7;
   utility += clamp(0, 1, 1 - resultDistance / 40) * 0.6;
   utility += wideness * 0.5;
@@ -2955,7 +2999,8 @@ export function throughBallUtility(owner, targetPoint, opponents, attackingDirec
   // claimable() gate) -- a small positive base, not zero, matching
   // holdUtility()'s same "start from a real, non-neutral baseline" shape.
   let utility = 0.15;
-  utility += clamp(-1, 1, progression / 30) * w.progression;
+  utility += clamp(-1, 1, progression / 30) * w.progression
+    * directnessProgressionWeight(context.attackingSettings);
   utility -= targetPressure * w.pressure;
   utility -= lane * w.lane;
   if (distanceYards >= AMBITIOUS_MIN_DISTANCE_YARDS) {
@@ -3127,6 +3172,7 @@ export function carryUtility(owner, destination, opponents, attackingDirection, 
   const carrySeconds = distance / 6.5;
   const pressureRelief = Math.max(0, originPressure - destinationPressure);
   let utility = clamp(-1, 1, gained / 15) * 1.05
+      * directnessProgressionWeight(context.attackingSettings)
     + pressureRelief * 0.8
     - destinationPressure * 1.3
     - obstruction * 1.15

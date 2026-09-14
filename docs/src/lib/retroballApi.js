@@ -115,6 +115,7 @@ function waitWithSignal(promise, signal) {
  * @property {Array<{
  *   key: string,
  *   name: string,
+ *   sourceDatabaseSlug: string,
  *   sourceTraitId: number,
  *   sourceName: string,
  *   sourceBitIndex: number,

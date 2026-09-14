@@ -4318,10 +4318,24 @@ const EXPOSED_GOAL_SHOT_RANGE_METRES = 50;
 const AMBITIOUS_SHOT_KEEPER_ADVANCE_YARDS = 18;
 const AMBITIOUS_SHOT_KEEPER_EXPOSURE = 0.65;
 
+// Shooting instruction (magnitude revised 2026-09-14).
+//
+// Unlike directness, this instruction always reached the right decision --
+// it is applied straight to shootUtility. It was simply too quiet to hear:
+// +/-0.25, scaled down to as little as +/-0.11 at close range, on a utility
+// scale where a single term like progression carries 1.4. The Stage 0 sweep
+// read it as invisible, and the sampled shot rate barely moved between
+// "shoot on sight" and "work it into the box", which are supposed to be two
+// different footballing instructions.
+//
+// Widened to a range a player can actually see. It stays a bias on a legal
+// option and never a gate: an encouraged side shoots more often from further
+// out, a discouraged one works the ball closer, and neither is prevented
+// from doing the other.
 const SHOOTING_INSTRUCTION_BIAS = Object.freeze({
-  discourage: -0.25,
+  discourage: -0.7,
   balanced: 0,
-  encourage: 0.25,
+  encourage: 0.7,
 });
 
 export function longRangeShotConfidence(player) {

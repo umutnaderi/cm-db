@@ -76,6 +76,7 @@
     "test:directness-progression": "node tools/test-directness-progression.mjs",
     "test:keeper-depth": "node tools/test-keeper-depth.mjs",
     "test:team-height": "node tools/test-team-height.mjs",
+    "test:ball-tracking": "node tools/test-ball-tracking.mjs",
     "measure:team-height": "node tools/measure-team-height.mjs",
     "study:cm0304": "node tools/study-cm0304-engine.mjs",
     "diagnose:stillness": "node tools/diagnose-off-ball-stillness.mjs",

@@ -212,6 +212,21 @@ function roleOffsets(entry) {
   }
 }
 
+// Per-band ball tracking. The goalkeeper barely tracks at all here because
+// keeperPositioningPoint() owns his depth; this only keeps his shape reference
+// from drifting away from the ball entirely.
+const BALL_TRACKING = Object.freeze({
+  GK: Object.freeze({ lateral: 0.10, vertical: 0.10 }),
+  // Chosen to sit UNDER the clamp at full pitch length, or the bands could
+  // not differentiate: at 0.52 and 0.44 both the back line and the midfield
+  // pinned to the same clamped twenty yards and slid identically.
+  D: Object.freeze({ lateral: 0.30, vertical: 0.40 }),
+  M: Object.freeze({ lateral: 0.34, vertical: 0.32 }),
+  F: Object.freeze({ lateral: 0.26, vertical: 0.22 }),
+});
+const BALL_TRACKING_MAX_LATERAL_YARDS = 10;
+const BALL_TRACKING_MAX_VERTICAL_YARDS = 20;
+
 /** Formation-relative target before any temporary active job is overlaid. */
 export function phaseAdjustedShapeTarget(entry, {
   ballPoint, attackingDirection, phase = "progression", inPossession = false,
@@ -225,9 +240,36 @@ export function phaseAdjustedShapeTarget(entry, {
   const ballYards = toYardPoint(ballPoint ?? anchor);
   const band = bandOf(entry);
   const defensivePhase = phase === "defensive-block" || phase === "defensive-transition";
-  const lateralFraction = defensivePhase ? 0.28 : 0.18;
-  const lateralShift = clamp(-7, 7, (ballYards.x - PITCH_WIDTH_YARDS / 2) * lateralFraction);
-  const verticalShift = clamp(-9, 9, (ballYards.y - PITCH_LENGTH_YARDS / 2) * 0.12);
+  // Ball tracking (2026-09-14) -- how strongly a player's shape target follows
+  // the ball up and across the pitch.
+  //
+  // Reported as "players freeze except the ball chaser" and measured:
+  // continuous stillness of two seconds or more happened at a mean 37 yards
+  // from the ball and clustered on the back line. The decisive number was that
+  // during those freezes a player sat 0.89 yards from their own assigned
+  // target -- against 0.87 during a brief pause. They were not stuck. They were
+  // standing still because they were already where the engine wanted them.
+  //
+  // The cause was here. Vertical tracking was a flat 0.12 clamped to nine
+  // yards, so a ball travelling twenty yards up the pitch moved a defender's
+  // target by 2.4, and no ball position anywhere could move it more than nine.
+  // A real back four tracks the ball's vertical movement close to one-for-one
+  // in open play -- that is what holding a line relative to the ball means --
+  // and a side whose block cannot slide further than nine yards is not a block.
+  //
+  // Now per band and per phase, because the units genuinely differ: a back line
+  // slides hardest, forwards hold their height most, and a side in possession
+  // is occupying space rather than sliding with the ball.
+  const bandTracking = BALL_TRACKING[band] ?? BALL_TRACKING.M;
+  const phaseScale = defensivePhase ? 1.15 : (inPossession ? 0.85 : 1);
+  const lateralShift = clamp(
+    -BALL_TRACKING_MAX_LATERAL_YARDS, BALL_TRACKING_MAX_LATERAL_YARDS,
+    (ballYards.x - PITCH_WIDTH_YARDS / 2) * bandTracking.lateral * phaseScale,
+  );
+  const verticalShift = clamp(
+    -BALL_TRACKING_MAX_VERTICAL_YARDS, BALL_TRACKING_MAX_VERTICAL_YARDS,
+    (ballYards.y - PITCH_LENGTH_YARDS / 2) * bandTracking.vertical * phaseScale,
+  );
   const phaseDepth = PHASE_BAND_DEPTH_YARDS[phase]?.[band] ?? 0;
   const role = roleOffsets(entry);
   const dutyDepth = band === "GK" ? 0 : (DUTY_DEPTH_YARDS[entry.duty] ?? 0);

@@ -760,6 +760,7 @@ function playerTraitsFromRows(rows: QueryRow[]) {
   return rows.map((row) => ({
     key: row.trait_key,
     name: row.display_name,
+    sourceDatabaseSlug: row.source_database_slug,
     sourceTraitId: row.source_trait_id,
     sourceName: row.source_trait_name,
     sourceBitIndex: row.source_bit_index,
@@ -1986,6 +1987,7 @@ export default {
             const traitResult = await db.execute({
               sql: `
                 SELECT
+                  traits.database_slug AS source_database_slug,
                   traits.trait_key,
                   definitions.display_name,
                   traits.source_trait_id,

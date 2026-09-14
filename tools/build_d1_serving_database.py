@@ -169,35 +169,37 @@ def build_database(
                 SELECT * FROM source.player_trait_import
             """,
             "clubs": """
-                SELECT DISTINCT c.*
-                FROM source.clubs c
-                WHERE EXISTS (
-                  SELECT 1
+                WITH selected_clubs AS MATERIALIZED (
+                  SELECT DISTINCT p.database_slug, p.club_id, p.club_name
                   FROM source.player_search p
                   JOIN selected_players s
                     ON s.database_slug = p.database_slug
                    AND s.source_person_id = p.source_person_id
-                  WHERE p.database_slug = c.database_slug
-                    AND (
-                      cast(c.source_club_id AS TEXT) = p.club_id
-                      OR (p.club_name <> '' AND c.name = p.club_name)
-                    )
+                )
+                SELECT DISTINCT c.*
+                FROM source.clubs c
+                JOIN selected_clubs selected
+                  ON selected.database_slug = c.database_slug
+                 AND (
+                   cast(c.source_club_id AS TEXT) = selected.club_id
+                   OR (selected.club_name <> '' AND c.name = selected.club_name)
                 )
             """,
             "nations": """
-                SELECT DISTINCT n.*
-                FROM source.nations n
-                WHERE EXISTS (
-                  SELECT 1
+                WITH selected_nations AS MATERIALIZED (
+                  SELECT DISTINCT p.database_slug, p.nation_id, p.nation_name
                   FROM source.player_search p
                   JOIN selected_players s
                     ON s.database_slug = p.database_slug
                    AND s.source_person_id = p.source_person_id
-                  WHERE p.database_slug = n.database_slug
-                    AND (
-                      n.name = p.nation_name
-                      OR n.source_nation_id = p.nation_id
-                    )
+                )
+                SELECT DISTINCT n.*
+                FROM source.nations n
+                JOIN selected_nations selected
+                  ON selected.database_slug = n.database_slug
+                 AND (
+                   n.name = selected.nation_name
+                   OR n.source_nation_id = selected.nation_id
                 )
             """,
             "person_history": """

@@ -687,11 +687,16 @@ function renderTraits(profile) {
     <section class="profile-section player-traits-section" aria-label="Player preferred moves">
       <h3>Player traits</h3>
       <div class="player-trait-list">
-        ${traits.map((trait) => `
-          <span class="player-trait" title="${escapeHtml(
-            `FM2005 PPM ${trait.sourceTraitId} · ${trait.mappingVersion}`,
-          )}">${escapeHtml(trait.name)}</span>
-        `).join("")}
+        ${traits.map((trait) => {
+          const sourceDetails = [
+            trait.sourceDatabaseSlug,
+            Number.isFinite(Number(trait.sourceTraitId))
+              ? `source trait ${trait.sourceTraitId}`
+              : "",
+            trait.mappingVersion,
+          ].filter(Boolean).join(" · ");
+          return `<span class="player-trait" title="${escapeHtml(sourceDetails)}">${escapeHtml(trait.name)}</span>`;
+        }).join("")}
       </div>
     </section>`;
 }

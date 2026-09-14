@@ -92,6 +92,49 @@ for (let index = 0; index < POSSESSIONS; index += 1) {
     }
   }
 
+  // Per-player timeline of assigned intention targets, so a freeze can be
+  // compared against what the engine actually wanted at that instant.
+  const wanted = new Map();
+  {
+    let clock = 0;
+    for (const event of run.trace) {
+      for (const move of event.playerMoves || []) {
+        const id = String(move.playerId ?? move.player?.id);
+        const target = move.intentionTarget ?? move.to;
+        if (!target) continue;
+        if (!wanted.has(id)) wanted.set(id, []);
+        wanted.get(id).push({ atMs: clock, target });
+      }
+      if (!event.overlapWithPrevious) clock += Number(event.duration) || 0;
+    }
+  }
+  // Every authored move with the wall-clock window it covers, so a freeze can
+  // be asked the last open question: were they given a move at all?
+  const movesAt = new Map();
+  {
+    let clock = 0;
+    for (const event of run.trace) {
+      const dur = Number(event.duration) || 0;
+      for (const move of event.playerMoves || []) {
+        const id = String(move.playerId ?? move.player?.id);
+        if (!movesAt.has(id)) movesAt.set(id, []);
+        movesAt.get(id).push({ from: clock, to: clock + dur,
+          yards: move.from && move.to ? yards(move.from, move.to) : 0 });
+      }
+      if (!event.overlapWithPrevious) clock += dur;
+    }
+  }
+  const movesDuring = (id, startMs, endMs) => (movesAt.get(String(id)) || [])
+    .filter((m) => m.to >= startMs && m.from <= endMs);
+
+  const wantedAt = (id, atMs) => {
+    const rows = wanted.get(String(id));
+    if (!rows || !rows.length) return null;
+    let best = rows[0];
+    for (const row of rows) { if (row.atMs <= atMs) best = row; else break; }
+    return best.target;
+  };
+
   // --- what the renderer SHOWED ---
   let plan;
   try {
@@ -115,19 +158,33 @@ for (let index = 0; index < POSSESSIONS; index += 1) {
       // 0.08 yards per 100ms is 0.8 yd/s -- below a walk. Anything under this
       // is standing still however the numbers wobble.
       if (yards(before, now) < 0.08) {
-        const held = openRun.get(entry.id) ?? { ms: 0, ballDistance: 0, samples: 0, slot: entry.positionalSlot };
+        const held = openRun.get(entry.id) ?? { ms: 0, ballDistance: 0, targetGap: 0, samples: 0, slot: entry.positionalSlot };
         held.ms += 100;
         held.ballDistance += yards(now, frame.ball);
+        const target = wantedAt(entry.id, t);
+        held.targetGap += target ? yards(now, target) : 0;
         held.samples += 1;
+        held.startMs = held.startMs ?? t;
+        held.endMs = t;
+        held.id = entry.id;
         openRun.set(entry.id, held);
       } else if (openRun.has(entry.id)) {
-        stillRuns.push(openRun.get(entry.id));
+        const done = openRun.get(entry.id);
+        const during = movesDuring(done.id, done.startMs ?? 0, done.endMs ?? 0);
+        done.moveCount = during.length;
+        done.movedYards = during.reduce((a, x) => a + x.yards, 0);
+        stillRuns.push(done);
         openRun.delete(entry.id);
       }
     }
     previous = frame;
   }
-  for (const held of openRun.values()) stillRuns.push(held);
+  for (const held of openRun.values()) {
+    const during = movesDuring(held.id, held.startMs ?? 0, held.endMs ?? 0);
+    held.moveCount = during.length;
+    held.movedYards = during.reduce((a, x) => a + x.yards, 0);
+    stillRuns.push(held);
+  }
 }
 
 console.log("Authored off-ball movement, by job\n");
@@ -163,6 +220,21 @@ if (long.length) {
   const shortOnes = stillRuns.filter((r) => r.ms < 1000);
   const meanBallShort = shortOnes.length
     ? shortOnes.reduce((sum, r) => sum + r.ballDistance / Math.max(1, r.samples), 0) / shortOnes.length : 0;
+  const meanGap = long.reduce((sum, r) => sum + r.targetGap / Math.max(1, r.samples), 0) / long.length;
+  const shortGap = shortOnes.length
+    ? shortOnes.reduce((sum, r) => sum + r.targetGap / Math.max(1, r.samples), 0) / shortOnes.length : 0;
+  const none = long.filter((r) => (r.moveCount ?? 0) === 0).length;
+  const meanMoves = long.reduce((s2, r) => s2 + (r.moveCount ?? 0), 0) / Math.max(1, long.length);
+  const meanYards = long.reduce((s2, r) => s2 + (r.movedYards ?? 0), 0) / Math.max(1, long.length);
+  console.log(`
+  During 2s+ freezes -- were they given a move at all?`);
+  console.log(`    freezes with NO authored move:  ${none} of ${long.length} (${((none / long.length) * 100).toFixed(0)}%)`);
+  console.log(`    mean authored moves per freeze: ${meanMoves.toFixed(1)}`);
+  console.log(`    mean authored yards per freeze: ${meanYards.toFixed(2)}`);
+  console.log(`
+  THE DECISIVE ONE -- distance to their own assigned target:`);
+  console.log(`    during a 2s+ freeze:   ${meanGap.toFixed(2)} yd`);
+  console.log(`    during a sub-1s pause: ${shortGap.toFixed(2)} yd`);
   console.log(`
   mean distance from the ball during a 2s+ freeze: ${meanBall.toFixed(1)} yd`);
   console.log(`  mean distance from the ball during a sub-1s pause:  ${meanBallShort.toFixed(1)} yd`);

@@ -82,6 +82,7 @@ const playerTraitSourceAvailable = Boolean(source.prepare(`
 const playerTraitStatement = playerTraitSourceAvailable
   ? source.prepare(`
       SELECT
+        traits.database_slug AS source_database_slug,
         traits.trait_key,
         definitions.display_name,
         traits.source_trait_id,
@@ -103,6 +104,7 @@ function playerTraits(database, personId) {
   return playerTraitStatement.all(database, personId).map((row) => ({
     key: row.trait_key,
     name: row.display_name,
+    sourceDatabaseSlug: row.source_database_slug,
     sourceTraitId: row.source_trait_id,
     sourceName: row.source_trait_name,
     sourceBitIndex: row.source_bit_index,

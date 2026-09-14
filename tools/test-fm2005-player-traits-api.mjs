@@ -14,7 +14,10 @@ assert.deepEqual(
   [9, 10, 15, 37, 46],
 );
 assert.ok(result.profile.traits.every((trait) =>
-  trait.key && trait.name && trait.mappingVersion === "fm2005-ppm-v1"
+  trait.key
+  && trait.name
+  && trait.sourceDatabaseSlug === DATABASE
+  && trait.mappingVersion === "fm2005-ppm-v1"
 ));
 console.log("PASS -- Roberto Carlos exposes five source-backed traits");
 

@@ -770,7 +770,118 @@ against it.
 
 ---
 
-## Off-ball stillness — diagnosed, not fixed (2026-09-14)
+## Ball tracking v2 (built 2026-09-14) — and what the stillness hunt actually found
+
+Chasing the reported freezing produced **three wrong hypotheses in a row**, and
+the record of that is more useful than the fix.
+
+| Hypothesis | Verdict |
+| --- | --- |
+| Team height would give distant players a reason to move | **Wrong.** At the default height the correction sits in its deadband. Stillness unchanged. |
+| Shape targets are quantised by ball zone | **Wrong.** `phaseAdjustedShapeTarget` is already continuous in ball position; the zone only selects *authored* WIB/WOB anchors. |
+| Players are stuck, not reaching their targets | **Wrong, and decisively so.** |
+
+The measurement that settled it: during a 2s+ freeze a player sat **0.89 yards
+from their own assigned target**, against **0.87** during a sub-second pause.
+Identical. **Players were standing still because they were already where the
+engine wanted them.** There was never a convergence bug.
+
+### The real defect
+
+`verticalShift` was a flat `(ballY - 60) * 0.12`, clamped to **±9 yards**, for
+every player in every phase. A ball travelling twenty yards up the pitch moved
+a defender's target by 2.4 yards, and no ball position anywhere on the pitch
+could move it more than nine. A side whose back line cannot slide further than
+nine yards is not a block.
+
+Tracking is now per band and per phase. Measured slide as the ball crosses the
+pitch, defending:
+
+| Unit | Target range | Slide |
+| --- | --- | ---: |
+| Back line | 21 → 58 yd | 36.8 |
+| Midfield | 36 → 66 yd | 29.4 |
+| Forwards | 52 → 73 yd | 20.2 |
+| Goalkeeper | 2.4 → 10.6 yd | 8.2 |
+
+A back line that sits at 21 yards against a deep ball and 58 against a high
+one is a block that slides. The bands differ on purpose — holding a line
+relative to the ball is most of a defence's job, while forwards are the
+reference the block is measured against rather than the part that chases it.
+
+One tuning note worth keeping: the first coefficients (0.52 / 0.44) were too
+large and **both** the back line and midfield pinned to the clamp and slid
+identically. The band distinction only exists below the clamp.
+
+### Measured effect on the reported problem
+
+| | Before | After |
+| --- | ---: | ---: |
+| Still stretches of 1s+ | 31% | 29% |
+| Still stretches of 2s+ | 10% | 9% |
+| Total still time | 3676s | **3202s** |
+| 2s+ freezes on centre-backs | 110 | **88** |
+
+**Real but modest — about 13% less still time and a fifth fewer back-line
+freezes.** It is not the transformation the reported symptom implies, and the
+remaining cause is now identified rather than guessed at: **23% of 2s+ freezes
+receive no authored move at all.** Those players are not in the reacting set
+for that beat. That is the next thing to fix, and it is a question about who
+`reactOffBallContinuous` includes, not about targets.
+
+`npm run test:ball-tracking` — 13 assertions.
+
+---
+
+## Shooting instruction — a magnitude fix (2026-09-14)
+
+Measured invisible by Stage 0, but a different problem from directness.
+`SHOOTING_INSTRUCTION_BIAS` was already applied straight to `shootUtility`, so
+it always reached the right decision — it was simply too quiet to hear:
+**±0.25**, scaled down to as little as ±0.11 at close range, on a utility scale
+where a single term like progression carries **1.4**.
+
+Widened to **±0.7**. It stays a bias on a legal option and never a gate.
+
+---
+
+## Pass into space — diagnosed, attempted, reverted (2026-09-14)
+
+Same shape of problem as directness, and worse. `passIntoSpace` was read in
+**exactly one place in the whole engine** — a `+4` contribution inside
+`coordinationCoordinator` — and touched nothing about where a pass is actually
+aimed. An instruction whose entire name is about aiming into space had no path
+into the to-feet-versus-into-space choice.
+
+The seam is clear: `passRunCandidates.js` already makes that choice, with
+`meetingPointKind === "current-position"` as the pass to feet and every other
+kind a ball into space. Biasing those candidates where the settings bag is in
+scope is the obvious fix.
+
+**It was implemented and then reverted, because it broke physics.**
+`test-possession-runner.mjs` caught it immediately:
+
+```
+seed 24: Contact 50 exceeds the actor's contact reach
+(P.THROUGH.RECEIVE: actor timeline-b, point 71.44,57.80, body 72.23,56.62, reach 1.5)
+```
+
+The bias let a marginal through ball win on the bias alone and then resolve to
+a contact point the runner could not physically reach. Gating on
+`joint.viable` did **not** fix it — viable candidates were still being pushed
+past their own reach.
+
+The principle it violates is worth stating, because it applies to every
+instruction on this roadmap: **an instruction may reorder options the engine
+says are possible; it may never make an impossible one win.** Whatever
+eventually gives `passIntoSpace` its surface area has to respect that, which
+means biasing the *selection among already-viable* deliveries rather than the
+score that decides viability. That is a larger change than it first looks and
+was not worth shipping half-validated.
+
+---
+
+## Off-ball stillness — the original diagnosis (2026-09-14)
 
 Reported as *"players freeze except the ball chaser"*.
 `tools/diagnose-off-ball-stillness.mjs` separates the two possible causes.

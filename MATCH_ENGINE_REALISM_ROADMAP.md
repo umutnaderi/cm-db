@@ -677,7 +677,33 @@ a single one.
 
 ---
 
-## Current Stage 0 baseline (2026-09-14, advanced sampling)
+## Current Stage 0 baseline (2026-09-14, after ball tracking + shooting)
+
+80 possessions per arm, advanced sampling. **5 of 8 inputs now reach at least
+`weak`,** up from 4.
+
+| Input | Verdict | Change |
+| --- | --- | --- |
+| `attacking.tempo` | **strong** | — |
+| `attacking.directness` | **visible** | — |
+| `attacking.style` | **visible** | — |
+| `attacking.shooting` | weak | **none → weak** |
+| `marking.pressing` | weak | **none → weak** |
+| `attacking.dribbling` | **none** | **weak → none** |
+| `attacking.passIntoSpace` | **none** | — |
+| role | **none** | — |
+
+Two of those changes were not aimed at. `marking.pressing` improved without
+being touched — a block that genuinely slides with the ball makes a pressing
+instruction matter more, which is the right kind of side effect. And
+`attacking.dribbling` **regressed** from weak to none (`passShare` d -0.283,
+p 0.083 — it sits just the wrong side of the line rather than collapsing).
+Ball tracking changed the picture every decision is taken in, so some drift
+either way was expected; dribbling is now on the list.
+
+### The previous baseline, for comparison
+
+## Previous Stage 0 baseline (2026-09-14, advanced sampling)
 
 80 possessions per arm. **Comparable only with other post-2026-09-14 sweeps.**
 
@@ -842,6 +868,21 @@ it always reached the right decision — it was simply too quiet to hear:
 where a single term like progression carries **1.4**.
 
 Widened to **±0.7**. It stays a bias on a legal option and never a gate.
+
+**Measured: none → weak, and the honest reading needs both sweeps.**
+
+| Sweep | shots: encourage | discourage | d | p | verdict |
+| --- | ---: | ---: | ---: | ---: | --- |
+| intermediate tracking | 0.412 | 0.138 | 0.585 | 0.0005 | visible |
+| final tracking | 0.338 | 0.150 | 0.404 | 0.0192 | weak |
+
+Both are a real and large behavioural difference — roughly two to three times
+as many shots on "shoot on sight" as on "work it into the box", which is what
+those instructions are supposed to mean. But the *verdict* moved a band
+between two sweeps that differed only in the ball-tracking coefficients, which
+is `shotsSelected` still being the noisiest metric in the set even after the
+advanced-sampling fix. **Call it weak and treat any future shooting verdict as
+provisional until the shot sample is larger.**
 
 ---
 

@@ -68,6 +68,8 @@
     "test:first-time-play": "node tools/test-first-time-play.mjs",
     "test:first-time-integration": "node tools/test-first-time-integration.mjs",
     "audit:parity": "node tools/measure-possession-parity.mjs",
+    "test:motion-integrity-diagnostics": "node tools/test-motion-integrity-diagnostics.mjs",
+    "report:pass-delivery-mix": "node tools/report-pass-delivery-mix.mjs",
     "audit:tactical-influence": "node tools/measure-tactical-influence.mjs",
     "test:coordination": "node tools/test-coordination-coordinator.mjs",
     "test:keeper-angle": "node tools/test-keeper-angle.mjs",

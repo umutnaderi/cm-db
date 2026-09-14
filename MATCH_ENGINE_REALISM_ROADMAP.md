@@ -704,6 +704,104 @@ tuning problem.
 
 ---
 
+## Keeper Depth v2 (built 2026-09-14) — and an open diagnosis
+
+Reported off a browser round: *"unnecessary rushing out leaves the goal open"*
+and *"he is not on his line"* even while the trace says he holds it.
+
+`tools/diagnose-keeper-and-stillness.mjs` measures it. Sampled over ~7,700
+frames, split by how far the ball is from the keeper's **own** goal — an
+aggregate over both keepers hides the question, because a keeper whose team is
+attacking *should* be sweeping high:
+
+| Ball from own goal | keeper off his line | beyond 12yd |
+| --- | ---: | ---: |
+| inside 18yd (under threat) | 6.0 | 22% |
+| **18–35yd (shot range)** | **11.0** | **49%** |
+| 35–60yd (midfield) | 8.1 | 13% |
+| 60yd+ (team attacking) | 9.8 | 12% |
+
+### What was fixed
+
+**The depth curve had the wrong shape.** `advance = clamp(2, 12, distance *
+0.15)` is monotonic in ball distance, and real keeper depth is not: out to
+narrow a one-on-one, *home* for a twenty-yard shot, out again to sweep. The
+old formula left a keeper three yards off his line against a one-on-one and
+twelve yards off it whenever the ball was merely far away. It is now a curve
+through those three regimes.
+
+**Sweep depth is now a property of the block, not the ball.** This is the
+"team height" idea applied where it was cheapest: depth is capped against the
+keeper's own deepest outfielder, so a deep block pins him to his line and a
+high line is what buys the room to sweep. `goalkeeperSweeping` scales it.
+
+**The sweep gate allowed a negative required margin.** `margin > 0.15 -
+boldness * 0.3` evaluates to **-0.135** for an elite keeper — he would leave
+his line for a ball the attacker reaches *first*. The requirement is now
+positive at every boldness and is charged for depth, because a sweep thirty
+yards out is a different bet from one on the six-yard line.
+
+`npm run test:keeper-depth` — 22 assertions.
+
+One existing assertion in `test-keeper-awareness.mjs` moved its constant from
+12.01 to 15.01 yards. The assertion's intent — a realistic cap, no wandering
+into midfield — is unchanged; the number was tuned to the linear formula that
+no longer exists.
+
+### What is NOT fixed, and an honest caveat about the measurement
+
+The engine **asks** for the right position and the keeper does not get there.
+Instrumented against what `keeperPositioningPoint()` returns at the same
+instant: with the ball 18–35 yards out the engine asks for **4.1** yards and
+the keeper is at **11.0**.
+
+Two hypotheses were tested and both were wrong: the sweep gate (sweeps only
+fell 46 → 44 and the median did not move) and the 0.22 attacker approach
+fraction (identical output — that code path does not run in these
+possessions). A change to the keeper's approach fraction was written and then
+**reverted**, because it could not be shown to do anything.
+
+**Caveat on the gap itself.** The diagnostic computes the "asked" position
+from the ball's position *at that rendered frame*, while the engine computes
+it at decision time. During a long pass flight those differ, so some of the
+seven-yard gap is the measurement rather than the engine. The gap should be
+re-measured against the target the engine actually held before anyone tunes
+against it.
+
+---
+
+## Team height (planned)
+
+Requested directly, and the right organising idea for several symptoms at
+once: **declare a team's height — the distance from the deepest outfielder to
+the highest — and make the side hold it.**
+
+Why it is worth doing properly rather than as another offset:
+
+- **It is how real teams stay compact.** A block with a declared height moves
+  as one unit; gaps that open get closed because closing them is what holding
+  the height means.
+- **It prices stamina honestly.** A low height means the team moves together
+  and covers less ground individually. A high one means large gaps, and
+  players spending real distance closing them — which `motionEffort.js`
+  already converts into genuine drain. The instruction would then cost
+  something, which is what makes it a decision rather than a free choice.
+- **It subsumes the keeper fix above.** Keeper Depth v2 caps sweeping against
+  the deepest defender; that is team height applied to one player. The general
+  form replaces the special case.
+- **It is a candidate answer to "players freeze except the ball chaser".**
+  Measured, 12.9 of 20 outfielders are in motion during live play — about a
+  third standing still at any instant. A team holding a height has a reason to
+  move when the ball moves, whether or not it is near them.
+
+Open design questions to settle before building: whether height is authored
+(a slider) or derived from the existing defensive-line and engagement-line
+instructions; whether it is a target with a tolerance band or a hard
+constraint; and how it interacts with `teamShape.js`'s existing
+`defensiveLineHeightYards`, which already measures the thing.
+
+---
+
 ## Stage 2 — Role personality (planned)
 
 > Implement Realism Roadmap Stage 2: give the 57 tactical roles a decision

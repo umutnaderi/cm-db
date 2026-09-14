@@ -131,10 +131,20 @@ console.log("=== spatialDecision.js: keeperPositioningPoint -- narrows the angle
   // The keeper's advance off their own goal line is capped, never
   // wandering out past a realistic distance even for a ball at the
   // opposite end of the pitch (near y:100, far from the own goal at y:0).
+  //
+  // The bound was 12.01 while keeperPositioningPoint() was linear in ball
+  // distance (advance = 0.15 * distance, capped at 12). Keeper Depth v2
+  // replaced that curve, and a keeper whose team is camped in the opposition
+  // box genuinely does hold around the edge of his own area rather than 12
+  // yards out. The ASSERTION'S INTENT -- a realistic cap, no wandering into
+  // midfield -- is unchanged and is what this still tests; only the constant
+  // moves, and only because the model under it did. Note this call supplies no
+  // defenders, so the defensive-line cap (which would pin him far closer
+  // behind a real deep block) is deliberately not in play here.
   const veryFarBall = { x: 50, y: 98 };
   const veryFarPoint = keeperPositioningPoint(veryFarBall, "down");
   const advanceYards = toYardPoint(veryFarPoint).y; // distance FROM the own goal line at y:0
-  check("advance off the goal line stays within a realistic bound even for a ball at the far end", advanceYards <= 12.01);
+  check("advance off the goal line stays within a realistic bound even for a ball at the far end", advanceYards <= 15.01);
 
   // Colinearity -- the keeper's positioning point lies on (or extremely
   // close to) the straight line from the ball to their own goal center,

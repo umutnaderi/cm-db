@@ -11,6 +11,24 @@ const goal = (direction) => ({ x: 50, y: direction === "up" ? 100 : 0 });
 // A nearby defender only supplies cover while still goal-side of the ball;
 // a beaten pursuer cannot justify leaving the keeper on his line. That
 // pursuer may still pressure the finish, so shot isolation is a separate fact.
+// Keeper Sweep v2 (2026-09-14) -- reported directly off a browser round as
+// "unnecessary rushing out leaves the goal open", and measured: over 24
+// sampled possessions the engine ordered 46 sweeps, roughly two per
+// possession, where a real keeper sweeps once or twice a MATCH.
+//
+// The old gate was `margin > 0.15 - boldness * 0.3`. For an elite keeper
+// (Bravery and Decisions near 20, so boldness near 0.95) that evaluates to
+// -0.135: a NEGATIVE required margin, meaning he would leave his line for a
+// ball the attacker reaches first. A sweep is only ever justified when the
+// keeper is clearly favourite, so the requirement is now positive at every
+// boldness, and it grows with how far from goal the sweep would take him --
+// thirty yards out is a different bet from six, and the old gate priced them
+// the same.
+const KEEPER_SWEEP_BASE_MARGIN_SECONDS = 0.45;
+const KEEPER_SWEEP_BOLDNESS_RELIEF_SECONDS = 0.2;
+const KEEPER_SWEEP_DEPTH_PENALTY_SECONDS = 0.55;
+const KEEPER_SWEEP_MAX_DEPTH_YARDS = 30;
+
 export const KEEPER_CLOSE_DOWN_MAX_GOAL_DISTANCE_YARDS = 24;
 export const KEEPER_CLOSE_DOWN_MIN_GOAL_ANGLE_DEGREES = 16;
 export const KEEPER_CLOSE_DOWN_DEFENDER_RECOVERY_YARDS = 9;
@@ -175,13 +193,19 @@ export function planKeeperResponse({ keeper, ball, attacker = null, defenders = 
     for (let ms = 200; ms <= 3000; ms += 100) {
       const point = { x: ball.x + ballVelocity.x * ms, y: ball.y + ballVelocity.y * ms };
       const pointDepth = depth(point, defendingDirection);
-      if (pointDepth < 0 || pointDepth > 30 || point.x < 0 || point.x > 100) continue;
+      if (pointDepth < 0 || pointDepth > KEEPER_SWEEP_MAX_DEPTH_YARDS || point.x < 0 || point.x > 100) continue;
       const ownEta = reactionDelayMs / 1000 + timeToReach(keeper.player,
         Math.max(0, movementDistanceYards(keeper, point) - 1), ownSpeed);
       const attackerEta = attacker ? movementDistanceYards(attacker, point) / attackSpeed : Infinity;
       const margin = attackerEta - ownEta + errorSeconds;
-      if (ownEta <= ms / 1000 + errorSeconds
-        && margin > 0.15 - boldness * 0.3 + sweepMarginBias) {
+      // Required margin: always positive, relieved by boldness, and charged
+      // for depth so a sweep thirty yards from goal has to be a far surer
+      // thing than one on the edge of the six-yard box.
+      const requiredMargin = KEEPER_SWEEP_BASE_MARGIN_SECONDS
+        - boldness * KEEPER_SWEEP_BOLDNESS_RELIEF_SECONDS
+        + (pointDepth / KEEPER_SWEEP_MAX_DEPTH_YARDS) * KEEPER_SWEEP_DEPTH_PENALTY_SECONDS
+        + sweepMarginBias;
+      if (ownEta <= ms / 1000 + errorSeconds && margin > requiredMargin) {
         return { ...base, action: "keeper-sweep", target: point, perceivedMarginSeconds: margin };
       }
     }

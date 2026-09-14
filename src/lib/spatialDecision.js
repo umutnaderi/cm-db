@@ -641,21 +641,101 @@ export function shootingLaneOpenness(point, opponents, attackingDirection) {
 // starting point as Directional Carry Planning.
 // ---------------------------------------------------------------------------
 
-const KEEPER_MIN_ADVANCE_YARDS = 2;
-const KEEPER_MAX_ADVANCE_YARDS = 12;
+const KEEPER_MIN_ADVANCE_YARDS = 0.6;
+const KEEPER_MAX_ADVANCE_YARDS = 17;
+
+// Keeper Depth v2 (2026-09-14) -- reported directly off a browser round:
+// "unnecessary rushing out leaves the goal open" and "he is not on his line"
+// even while the trace says he holds it. Measured before the change, over
+// 8,170 sampled frames: the keeper sat a MEDIAN 9.4 yards off his own goal
+// line and was outside his six-yard box 87.3% of the time.
+//
+// The cause was the old `clamp(2, 12, distanceToGoal * 0.15)`. Linear in ball
+// distance is the wrong shape twice over.
+//
+// Real keeper depth is NOT monotonic in how far away the ball is:
+//
+//   * ball at six yards (a one-on-one) -- come out and narrow the angle;
+//   * ball at eighteen to twenty -- stay home, that is shooting range and
+//     every yard off the line is a yard of goal to chip or curl into;
+//   * ball in midfield and beyond -- push up and sweep behind the line.
+//
+// The old formula had the near-goal case backwards (3 yards out against a
+// one-on-one) and the far case unconditional (12 yards out whenever the ball
+// was 80 yards away, whatever the defence was doing).
+//
+// The second half of the fix is the one the "team height" idea is really
+// about: how far a keeper may sweep is not a property of the ball, it is a
+// property of the BLOCK. A deep block pins its keeper to his line; a high
+// line is what buys him the space to sweep into. Depth is therefore capped
+// against the keeper's own deepest outfielder, so the two move as one unit.
+const KEEPER_DEPTH_BY_BALL_DISTANCE = Object.freeze([
+  [6, 4.5], [12, 3.4], [20, 2.4], [30, 4.4],
+  [45, 6.6], [60, 8.4], [80, 11], [110, 14],
+]);
+
+// A keeper sweeps BEHIND his defence, never level with it. Whatever the ball
+// is doing, he stays at least this far behind his own deepest outfielder.
+const KEEPER_BEHIND_LINE_MIN_YARDS = 6;
+
+const KEEPER_SWEEPING_DEPTH_SCALE = Object.freeze({
+  cautious: 0.75, balanced: 1, aggressive: 1.3,
+});
+
+/** Linear interpolation across the depth curve, flat outside its ends. */
+function keeperDepthForBallDistance(distanceYards) {
+  const points = KEEPER_DEPTH_BY_BALL_DISTANCE;
+  if (distanceYards <= points[0][0]) return points[0][1];
+  const last = points[points.length - 1];
+  if (distanceYards >= last[0]) return last[1];
+  for (let index = 1; index < points.length; index += 1) {
+    const [x1, y1] = points[index];
+    if (distanceYards <= x1) {
+      const [x0, y0] = points[index - 1];
+      return y0 + ((y1 - y0) * (distanceYards - x0)) / (x1 - x0);
+    }
+  }
+  return last[1];
+}
+
+/** How far up the pitch a point sits from the keeper's own goal line. */
+export function yardsFromOwnGoalLine(point, keeperAttackingDirection) {
+  const y = toYardPoint(point).y;
+  return keeperAttackingDirection === "up" ? PITCH_LENGTH_YARDS - y : y;
+}
 
 // `keeperAttackingDirection` is the direction the KEEPER'S OWN team
 // attacks (state.attackingDirection[keeper.team] for their side) -- their
 // own goal is therefore the OPPOSITE end, same convention
 // clearanceDanger() already uses.
-export function keeperPositioningPoint(ballPoint, keeperAttackingDirection) {
+//
+// `defenders` and `sweeping` are optional and additive, the same convention
+// every other context field in this file uses: a caller that omits them gets
+// the ball-distance curve alone, with no line cap and no instruction scaling.
+export function keeperPositioningPoint(ballPoint, keeperAttackingDirection, {
+  defenders = null,
+  sweeping = "balanced",
+} = {}) {
   const ownGoalDirection = keeperAttackingDirection === "up" ? "down" : "up";
   const goal = attackingGoalYardPoint(ownGoalDirection);
   const ballYard = toYardPoint(ballPoint);
   const dx = ballYard.x - goal.x;
   const dy = ballYard.y - goal.y;
   const distanceToGoal = Math.hypot(dx, dy) || 1;
-  const advance = clamp(KEEPER_MIN_ADVANCE_YARDS, KEEPER_MAX_ADVANCE_YARDS, distanceToGoal * 0.15);
+  let advance = keeperDepthForBallDistance(distanceToGoal)
+    * (KEEPER_SWEEPING_DEPTH_SCALE[sweeping] ?? 1);
+  if (Array.isArray(defenders) && defenders.length) {
+    // The deepest outfielder IS the line for this purpose -- not an average,
+    // because it is the man closest to goal who decides how much room there
+    // is behind him.
+    const lineDepth = Math.min(...defenders
+      .filter((entry) => entry && entry.role !== "keeper")
+      .map((entry) => yardsFromOwnGoalLine(entry, keeperAttackingDirection)));
+    if (Number.isFinite(lineDepth)) {
+      advance = Math.min(advance, Math.max(0, lineDepth - KEEPER_BEHIND_LINE_MIN_YARDS));
+    }
+  }
+  advance = clamp(KEEPER_MIN_ADVANCE_YARDS, KEEPER_MAX_ADVANCE_YARDS, advance);
   const ratio = advance / distanceToGoal;
   const rawYard = { x: goal.x + dx * ratio, y: goal.y + dy * ratio };
   const clampedYard = { x: clamp(0, PITCH_WIDTH_YARDS, rawYard.x), y: clamp(0, PITCH_LENGTH_YARDS, rawYard.y) };

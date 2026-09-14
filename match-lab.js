@@ -3784,6 +3784,18 @@ function contestSeparationPoints(
 // etc reads wherever a player's possession has actually progressed them
 // to, never their stale authored starting spot (see that function's own
 // header comment).
+// Keeper Depth v2 -- the keeper's own back line and his sweeping instruction,
+// gathered in one place so every keeperPositioningPoint() call site asks the
+// same question. Without the line a keeper sweeps on ball distance alone,
+// which is what let him stand nine yards off his line behind a deep block.
+function keeperDepthContext(keeper, roster = []) {
+  return {
+    defenders: (roster || []).filter((entry) => entry
+      && entry.team === keeper.team && entry.role !== "keeper"),
+    sweeping: keeper?.goalkeeperSweeping ?? "balanced",
+  };
+}
+
 function freePlayGroups(
   ownerId = state.ball.ownerId,
   roster = state.roster,
@@ -4743,7 +4755,8 @@ function buildLiveJobTargets(groups, ballOwnerPoint, motionContext, flightDestin
   }
   if (groups.keeper) {
     jobs[groups.keeper.id] = {
-      point: keeperPositioningPoint(ballOwnerPoint, state.attackingDirection[groups.keeper.team]),
+      point: keeperPositioningPoint(ballOwnerPoint, state.attackingDirection[groups.keeper.team],
+        keeperDepthContext(groups.keeper, [...groups.teammates, ...groups.opponents, groups.owner])),
       mayChase: false,
     };
     if (flight) {
@@ -8250,7 +8263,8 @@ function coordinateTargetProposals({
       attackerVelocity: snapshots.owner
         ? motionContext?.state?.players?.[snapshots.owner.id]?.velocity ?? null
         : null,
-      holdTarget: keeperPositioningPoint(ballPoint, state.attackingDirection[keeper.team]),
+      holdTarget: keeperPositioningPoint(ballPoint, state.attackingDirection[keeper.team],
+        keeperDepthContext(keeper, [...snapshots.teammates ?? [], ...snapshots.opponents ?? [], snapshots.owner])),
       random: seededRandom(hashString(`keeper-read:${motionContext?.seed ?? 0}:${keeper.id}:${Math.floor(simulationTimeMs / 500)}`)),
     });
     Object.assign(proposal, {
@@ -8444,6 +8458,7 @@ function reactOffBall(
     const ideal = keeperPositioningPoint(
       ballPoint,
       state.attackingDirection[keeper.team],
+      keeperDepthContext(keeper, [...snapshots.teammates ?? [], ...snapshots.opponents ?? [], snapshots.owner]),
     );
     const blended = partialPoint(keeper, ideal, fraction);
     proposals.push({
@@ -8909,6 +8924,7 @@ function reactOffBallContinuous(
     const ideal = keeperPositioningPoint(
       ballTo,
       state.attackingDirection[keeper.team],
+      keeperDepthContext(keeper, [...snapshots.teammates ?? [], ...snapshots.opponents ?? [], snapshots.owner]),
     );
     targets.push({
       id: keeper.id,

@@ -1,5 +1,11 @@
 const DEFAULT_API_BASE = "https://retroball-api.umutnaderi.workers.dev";
 
+function isLocalHost() {
+  if (typeof globalThis.location === "undefined") return true;
+  const host = String(globalThis.location.hostname || "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
+}
+
 function configuredApiBase() {
   const metaValue =
     typeof document === "undefined"
@@ -10,7 +16,20 @@ function configuredApiBase() {
       ? globalThis.RETROBALL_API_URL.trim()
       : "";
 
-  return (metaValue || globalValue || DEFAULT_API_BASE).replace(/\/+$/, "");
+  const configured = (metaValue || globalValue || "").trim();
+  // A relative base like "/local-api" is the DEV SERVER's path (server.js
+  // serves it; nothing else does). It reaches the page through the checked-in
+  // source HTML, and only tools/build-pages.mjs rewrites it -- so the GitHub
+  // Pages bundle is correct while any other host that serves the repo as-is
+  // ships a pointer at a route that does not exist there. That is exactly what
+  // broke database.html on Vercel: "/local-api/api/databases" 404s.
+  //
+  // Honour it only where it can actually work. Anywhere else, fall through to
+  // the real API rather than shipping a guaranteed 404.
+  if (configured.startsWith("/") && !isLocalHost()) {
+    return DEFAULT_API_BASE.replace(/\/+$/, "");
+  }
+  return (configured || DEFAULT_API_BASE).replace(/\/+$/, "");
 }
 
 export const API_BASE = configuredApiBase();
@@ -102,6 +121,19 @@ function waitWithSignal(promise, signal) {
  */
 
 /**
+ * @typedef {Object} PlayerTrait
+ * @property {string} key
+ * @property {string} name
+ * @property {string} sourceDatabaseSlug
+ * @property {number} sourceTraitId
+ * @property {string} sourceName
+ * @property {number} sourceBitIndex
+ * @property {number} sourceValue
+ * @property {number} mappingConfidence
+ * @property {string} mappingVersion
+ */
+
+/**
  * @typedef {Object} PlayerProfile
  * @property {string} source_person_id
  * @property {string | null} source_player_id
@@ -112,17 +144,7 @@ function waitWithSignal(promise, signal) {
  * @property {PlayerRating[]} attributes
  * @property {PlayerRating[]} hiddenAttributes
  * @property {PlayerRating[]} foot
- * @property {Array<{
- *   key: string,
- *   name: string,
- *   sourceDatabaseSlug: string,
- *   sourceTraitId: number,
- *   sourceName: string,
- *   sourceBitIndex: number,
- *   sourceValue: number,
- *   mappingConfidence: number,
- *   mappingVersion: string
- * }>} traits
+ * @property {PlayerTrait[]} traits
  * @property {Record<string, string | number | null> | null} clubColors
  * @property {Record<string, unknown>} profile
  */
@@ -367,6 +389,13 @@ export async function saveDraftSquad(squad, options = {}) {
   });
 }
 
+/**
+ * Returns the immutable player material Match Lab consumes: attributes and
+ * normalized traits, keyed by database/source-person identity.
+ * @returns {Promise<{items: Array<PlayerSearchRow & {
+ *   attributes: PlayerRating[], hiddenAttributes: PlayerRating[], traits: PlayerTrait[]
+ * }>}>>}
+ */
 export async function getPlayerMetrics(players, options = {}) {
   const identities = (Array.isArray(players) ? players : [])
     .map((player) => ({

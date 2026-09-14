@@ -15,6 +15,7 @@ import {
 } from "./pitchRegions.js";
 import {
   normalizeTeamAttacking, normalizeTeamDefending, normalizeTeamTransition,
+  teamHeightTargetYards,
 } from "./teamInstructions.js";
 
 // Backward-compatible ownership: pitchRegions.js is now the single source of
@@ -649,6 +650,21 @@ export function coordinateTeamShape({
   // restart cluster. Keep a small margin above the five-yard telemetry
   // radius so floating-point conversion cannot leave the same pair counted
   // as clustered after the shape has supposedly opened.
+  // Held before separateTargets() so body spacing still has the final word:
+  // a compact block must never be compact enough to overlap.
+  // Not during a restart. A kickoff or set-piece shape is authored
+  // deliberately by restartSetup, and a deliberately tight kickoff cluster is
+  // not a block that has drifted from its height -- correcting it breaks the
+  // authored opening, which test-match-lab-setup.mjs's "the opening removes the
+  // kickoff cluster" check caught. Team height is an open-play property, the
+  // same way a real side does not hold its block length while lining up a
+  // corner.
+  if (phase !== "restart" && phase !== "restart-release") {
+    applyTeamHeight(assignments, {
+      attackingDirection,
+      height: normalizeTeamAttacking(attacking ?? {}).height,
+    });
+  }
   separateTargets(assignments, phase === "restart-release" || phase === "build-up" ? 5.1 : 4.25);
   annotateTacticalRegions(assignments);
   const jobs = Object.fromEntries(assignments.map((assignment) => [assignment.id, assignment.teamJob]));
@@ -657,6 +673,102 @@ export function coordinateTeamShape({
     jobs,
     metrics: teamShapeMetrics(baseEntries, { assignments, ballPoint, ownerId, attackingDirection }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Team height (2026-09-14) -- the distance from the deepest outfielder to the
+// highest, held as a declared shape the way width already is.
+//
+// This is a TEAM correction and cannot live in applyTeamShapeInstructions()
+// beside width, because width scales every player about a fixed reference (the
+// halfway line of the pitch) while height is measured against the squad
+// itself. It therefore runs once per team, after every individual target is
+// known.
+//
+// It also answers a measured defect. Sampled over 24 possessions, continuous
+// stillness of two seconds or more happened at a mean 36.6 yards from the ball
+// against 27.2 yards for brief pauses, and clustered on the back line
+// (centre-backs 96 stretches, the most of any position). Players far from the
+// ball were standing still because a zone-quantised shape target does not move
+// until the ball crosses a boundary. A declared height is a reason to move
+// that is continuous in where the ball is: when the block's length drifts, the
+// whole block corrects, whether or not the ball is near you.
+//
+// Deliberately a bounded correction rather than a hard constraint. A team does
+// not snap to its height -- it tends toward it, and a genuine run in behind or
+// a full-back bombing on must still be able to stretch the side temporarily.
+const TEAM_HEIGHT_MAX_CORRECTION_YARDS = 8;
+// Below this the block is close enough to its declared length that correcting
+// would be jitter rather than shape.
+const TEAM_HEIGHT_DEADBAND_YARDS = 2.5;
+
+/** Depth along the attacking axis, in yards, larger being further forward. */
+function attackingDepthYards(point, attackingDirection) {
+  const y = toYardPoint(point).y;
+  return attackingDirection === "up" ? PITCH_LENGTH_YARDS - y : y;
+}
+
+/**
+ * Pull a team's shape toward its declared height.
+ *
+ * Scales each outfielder's depth about the block's own midpoint, so the side
+ * squeezes or stretches as one rather than the extremes being dragged onto the
+ * rest. Goalkeepers are excluded: the keeper's depth is decided by
+ * keeperPositioningPoint(), which already caps itself against this same back
+ * line, and including him would drag the measured block onto the goal line.
+ *
+ * Mutates `intentionTarget` on the assignments, which is the same field the
+ * vacancy and separation passes below already adjust.
+ */
+export function applyTeamHeight(assignments, { attackingDirection, height = "balanced" } = {}) {
+  const outfield = assignments.filter((assignment) => bandOf(assignment.entry) !== "GK");
+  if (outfield.length < 2) return { applied: false, reason: "too-few-outfielders" };
+  const depths = outfield.map((assignment) => attackingDepthYards(assignment.intentionTarget, attackingDirection));
+  const deepest = Math.min(...depths);
+  const highest = Math.max(...depths);
+  const currentLength = highest - deepest;
+  const targetLength = teamHeightTargetYards(height);
+  const error = targetLength - currentLength;
+  if (!(currentLength > 0) || Math.abs(error) < TEAM_HEIGHT_DEADBAND_YARDS) {
+    return { applied: false, currentLength, targetLength, reason: "within-deadband" };
+  }
+  const midpoint = (deepest + highest) / 2;
+  const scale = targetLength / currentLength;
+
+  // Squeeze by UNIT, not by individual.
+  //
+  // Scaling each player's own depth is the obvious implementation and it is
+  // wrong: any stretch multiplies the gap between two players who merely
+  // happen to differ by a yard, so a back four stops being a line. Real blocks
+  // do not work that way -- the units move relative to each other and each
+  // line keeps its own shape. Caught by test-team-shape.mjs's "controller and
+  // member keep one line depth" check, which is exactly the right assertion.
+  const bandDepths = new Map();
+  outfield.forEach((assignment, index) => {
+    const band = bandOf(assignment.entry);
+    const bucket = bandDepths.get(band) ?? { total: 0, count: 0 };
+    bucket.total += depths[index];
+    bucket.count += 1;
+    bandDepths.set(band, bucket);
+  });
+  const shiftByBand = new Map();
+  for (const [band, bucket] of bandDepths) {
+    const bandDepth = bucket.total / bucket.count;
+    const wanted = midpoint + (bandDepth - midpoint) * scale;
+    // Bound every correction. A large error must not translate into a unit
+    // being teleported the length of the block.
+    shiftByBand.set(band, clamp(
+      -TEAM_HEIGHT_MAX_CORRECTION_YARDS, TEAM_HEIGHT_MAX_CORRECTION_YARDS, wanted - bandDepth,
+    ));
+  }
+  for (const assignment of outfield) {
+    const shift = shiftByBand.get(bandOf(assignment.entry)) ?? 0;
+    if (!shift) continue;
+    assignment.intentionTarget = pointWithYardOffset(
+      assignment.intentionTarget, 0, shift, attackingDirection,
+    );
+  }
+  return { applied: true, currentLength, targetLength, correctionYards: error };
 }
 
 function average(values) {

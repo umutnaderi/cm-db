@@ -770,7 +770,94 @@ against it.
 
 ---
 
-## Team height (planned)
+## Off-ball stillness — diagnosed, not fixed (2026-09-14)
+
+Reported as *"players freeze except the ball chaser"*.
+`tools/diagnose-off-ball-stillness.mjs` separates the two possible causes.
+
+**It is not the job assignment.** The engine authors 2–4 yards of movement per
+off-ball job and only **10.2%** of authored moves go nowhere. Players are
+being given somewhere to go.
+
+**It is who gets a move at all, and when.** Rendered stillness runs to a
+**24.7-second** continuous freeze, with 27% of still stretches lasting a second
+or more and 5% over three seconds. And the freezes are not random:
+
+| | mean distance from ball |
+| --- | ---: |
+| freezes of 2s or more | **36.6 yd** |
+| pauses under 1s | 27.2 yd |
+
+By position, 2s+ freezes: **DC 96**, FC 56, DR 46, ML 37, MR 36, MC 36, DL 31.
+
+So players far from the ball freeze, and the back line freezes most. The
+likely mechanism is that a shape target is quantised by ball **zone**: a
+player whose ball-zone has not changed has a static target and no reason to
+move until the ball crosses a boundary.
+
+**Team height was the hypothesised fix and it did not work.** Measured before
+and after, stillness was unchanged (1s+ 27% → 31%, total still time 3249s →
+3611s). The reason is now obvious in hindsight: at the default height the
+correction sits inside its deadband, so by design it does nothing to a default
+side. A fix has to make the *target itself* continuous in the ball's position,
+which is a change to `phaseAdjustedShapeTarget`'s zone quantisation, not
+another instruction layered on top.
+
+---
+
+## Team height (built 2026-09-14)
+
+Requested directly: *"declare a team height, the length from the last
+outfielder behind to the outfielder at the top"*, settable by the manager.
+
+`TEAM_HEIGHTS` is `compact` / `balanced` / `stretched`, sitting beside `width`
+in the attacking instructions and exposed on the tactics board as **Team
+height** for each side.
+
+`applyTeamHeight()` in `teamShape.js` runs once per team after every
+individual target is known — it cannot live beside `width` in
+`applyTeamShapeInstructions()`, because width scales about a fixed pitch
+reference while height is measured against the squad itself.
+
+Three things learned building it:
+
+**Squeeze by unit, not by individual.** Scaling each player's own depth
+multiplies the gap between two players who merely differ by a yard, so a back
+four stops being a line. `test-team-shape.mjs`'s "controller and member keep
+one line depth" check caught exactly this. Corrections are now computed per
+band, so lines keep their own shape and the units move relative to each other.
+
+**Not during restarts.** A kickoff cluster is authored deliberately and is not
+a block that has drifted. Correcting it broke the authored opening.
+
+**Calibrate against the engine, not a textbook.** The measured natural block
+here is ~50 yards across all phases, not the 30–40 metres quoted for a settled
+defensive block — that figure describes one phase. `balanced` is therefore set
+*at* the natural length, so a manager who never touches the control changes
+nothing, and the other two settings span a range the block can actually reach.
+
+### Measured, 30 possessions per arm
+
+| Height | target | median block | yards covered per player |
+| --- | ---: | ---: | ---: |
+| compact | 40 | 49.1 | 54.9 |
+| balanced | 50 | 52.5 | 55.0 |
+| stretched | 62 | 55.8 | **66.8** |
+
+**Claim 1 — the declared height governs the block length: holds.**
+
+**Claim 2 — height costs stamina: holds in one direction only.** Stretching
+costs **21.7% more ground per player**, which flows straight into drain
+because `motionEffort.js` already prices distance actually covered — the cost
+emerges from the movement rather than being asserted. But **compacting does
+not save anything** (54.9 against balanced's 55.0). The original expectation
+was that a compact side moving together would spend less; measured, holding a
+block tighter than its natural shape takes about as much work as the shape
+costs anyway. Worth knowing before anyone tunes on the assumption.
+
+---
+
+## Team height — original design notes
 
 Requested directly, and the right organising idea for several symptoms at
 once: **declare a team's height — the distance from the deepest outfielder to

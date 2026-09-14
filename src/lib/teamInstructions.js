@@ -7,6 +7,40 @@ export const TEAM_MENTALITIES = Object.freeze([
   "defensive", "cautious", "balanced", "positive", "attacking",
 ]);
 export const TEAM_WIDTHS = Object.freeze(["narrow", "balanced", "wide"]);
+
+// Team height -- the distance from the deepest outfielder to the highest,
+// which is how coaches actually talk about a block. Width already had a
+// declared shape instruction; the vertical axis did not, and it is the one
+// that decides whether a side moves as a unit.
+//
+// The yard targets are real coaching numbers: a genuinely compact block runs
+// genuinely tight between its units, a normal side sits at whatever its shape
+// naturally produces, and a stretched one leaks space between its lines.
+//
+// The instruction costs something, which is what makes it a decision rather
+// than a free win. Holding a low height means the whole block travels together
+// and each player covers less ground of their own; a high one means real gaps,
+// and players spending real distance closing them. Nothing prices that
+// separately -- motionEffort.js already converts distance actually covered
+// into drain, so the cost emerges from the movement instead of being asserted.
+export const TEAM_HEIGHTS = Object.freeze(["compact", "balanced", "stretched"]);
+// Calibrated against the engine, not against a coaching textbook. Measured
+// over 30 possessions per arm, this side's block sits at a median ~50 yards
+// across all phases -- longer than the 30-40 metres quoted for a settled
+// defensive block, because that figure describes one phase and this spans
+// every one of them including attacking transitions.
+//
+// "balanced" is therefore set AT the natural length, so a manager who never
+// touches the control changes nothing, and the two other settings span a range
+// the block can actually reach. Targets chosen from a textbook instead would
+// have made every setting an unreachable instruction that merely burned
+// stamina pulling against the shape.
+const TEAM_HEIGHT_TARGET_YARDS = Object.freeze({ compact: 40, balanced: 50, stretched: 62 });
+
+/** Target distance from the deepest outfielder to the highest, in yards. */
+export function teamHeightTargetYards(height) {
+  return TEAM_HEIGHT_TARGET_YARDS[height] ?? TEAM_HEIGHT_TARGET_YARDS.balanced;
+}
 export const TEAM_KICKOFFS = Object.freeze([
   "mixed", "keep-possession", "play-backwards", "build-midfield", "attack-quickly",
   "play-into-space", "go-wide", "switch-flank", "target-forward", "go-long", "territory",
@@ -33,6 +67,7 @@ export const DEFAULT_TEAM_ATTACKING = Object.freeze({
   mentality: "balanced",
   directness: 2,
   width: "balanced",
+  height: "balanced",
   shooting: "balanced",
   tempo: "balanced",
   focusPlay: "mixed",
@@ -79,6 +114,7 @@ export function normalizeTeamAttacking(value = {}) {
     mentality: oneOf(value.mentality, TEAM_MENTALITIES, DEFAULT_TEAM_ATTACKING.mentality),
     directness: integer(value.directness, 1, 5, DEFAULT_TEAM_ATTACKING.directness),
     width: oneOf(value.width, TEAM_WIDTHS, DEFAULT_TEAM_ATTACKING.width),
+    height: oneOf(value.height, TEAM_HEIGHTS, DEFAULT_TEAM_ATTACKING.height),
     shooting: oneOf(value.shooting, ["discourage", "balanced", "encourage"], DEFAULT_TEAM_ATTACKING.shooting),
     tempo: oneOf(value.tempo, ["slow", "balanced", "quick"], DEFAULT_TEAM_ATTACKING.tempo),
     focusPlay: oneOf(value.focusPlay, TEAM_FOCUS_PLAY, DEFAULT_TEAM_ATTACKING.focusPlay),

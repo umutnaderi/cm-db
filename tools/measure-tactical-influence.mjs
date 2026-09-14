@@ -26,6 +26,7 @@ import { dirname } from "node:path";
 import { auditMetrics } from "../src/lib/influenceAudit.js";
 import { findHistoricalSquad } from "../src/data/historicalSquads.js";
 import { specAliases } from "../src/lib/historicalSquadResolver.js";
+import { zoneFromPercent } from "../src/lib/replayHarness.js";
 
 const {
   state, runConstructedPossession, applySetup, setupDraft, reassignSetupTeam, pointOf,
@@ -44,6 +45,10 @@ const POSSESSIONS = Math.max(4, Number(flag("possessions", 80)) || 80);
 // far more information per second of CPU than a few long dependent ones, and
 // a dozen actions is also closer to what a real possession actually is.
 const MAX_ACTIONS = Math.max(3, Number(flag("actions", 12)) || 12);
+// How far up the pitch the advanced half of the sample starts, in percent of
+// pitch length. 22% of 120 yards is about 26 yards -- a settled attacking
+// phase rather than a counter already in the box.
+const ADVANCE_SHIFT_PERCENT = 22;
 const ONLY = flag("only", "").split(",").map((entry) => entry.trim()).filter(Boolean);
 const JSON_OUT = flag("json", "");
 
@@ -134,6 +139,32 @@ function possessionSample(run) {
   return Object.fromEntries(Object.entries(sample).filter(([, value]) => Number.isFinite(value)));
 }
 
+/**
+ * Push both teams up the pitch, preserving relative shape.
+ *
+ * The original sweep started every possession from the authored formation,
+ * which put almost every sample in the middle third and produced roughly 0.13
+ * shots per possession -- about ten shots per arm. Measured across the first
+ * three sweeps, `meanShotDistanceYards` for the same tactical input came back
+ * at d = 0.742, then 0.061, then 0.207: the metric was reporting sampling
+ * noise, and any verdict resting on it was worthless.
+ *
+ * Shifting BOTH sides together keeps the defensive structure coherent -- it is
+ * the picture of a possession that has already progressed, not a team teleported
+ * past its opponents. Half the sample stays at the formation start so build-up
+ * behaviour is still represented.
+ */
+function advanceFormation(roster, attackingTeam, shiftPercent) {
+  const forward = state.attackingDirection[attackingTeam] === "up" ? -1 : 1;
+  for (const entry of roster) {
+    // The defending keeper stays on their line; a keeper dragged up the pitch
+    // by a shape shift is not a picture that occurs.
+    if (entry.role === "keeper") continue;
+    entry.y = Math.max(2, Math.min(98, entry.y + forward * shiftPercent));
+    entry.zone = zoneFromPercent(entry.x, entry.y);
+  }
+}
+
 function collectSamples(applyArm) {
   const samples = {};
   for (let index = 0; index < POSSESSIONS; index += 1) {
@@ -145,6 +176,10 @@ function collectSamples(applyArm) {
     state.pendingRestart = null;
     state.restartSetupDraft = null;
     applyArm();
+    // Alternate build-up and advanced pictures so the sweep carries enough
+    // shots for the shot metrics to mean anything. Deterministic on index, so
+    // both arms see exactly the same sequence of pictures.
+    if (index % 2 === 1) advanceFormation(state.roster, "home", ADVANCE_SHIFT_PERCENT);
     const owner = state.roster.find((entry) => entry.id === STARTERS[index % STARTERS.length]);
     state.ball = { ...pointOf(owner), ownerId: owner.id };
     const run = runConstructedPossession(index, { maxActions: MAX_ACTIONS });

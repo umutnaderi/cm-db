@@ -18,6 +18,7 @@ neither supersedes the other.
 | 0 | Tactical influence audit | **Built** (2026-09-13) |
 | 1a | First-time play decision model | **Built** (2026-09-13) |
 | 1b | First-time play engine integration | **Built** (2026-09-13) — pass/layoff only |
+| 1c | First-time target choice through the shared utilities | **Built** (2026-09-14) |
 | 2 | Role personality | Planned |
 | 3 | Coordination families into complete patterns | Planned |
 | 4a | Facing as independent state | Planned |
@@ -506,6 +507,118 @@ do, ahead of any new kinds.
 > Finish by reporting files changed, the RNG contract decision and its
 > reasoning, before/after Stage 0 separation, the first-time share
 > distribution, cost delta, test results, and remaining risks.
+
+---
+
+## Stage 1c — First-time target choice through the shared utilities (built)
+
+> Fix the regression Stage 1b's own measurement found: a forced first-time
+> delivery bypasses `generateFreePlayCandidates()`, so roughly an eighth of
+> all actions are chosen by a parallel preference function that reads four
+> tactical inputs and ignores the rest.
+>
+> Do not widen `firstTimePreference01()` to cover the missing inputs. That
+> builds the second tactical system properly instead of removing it, and it
+> has to be kept in sync by hand forever after. Make the shared utilities
+> decide **which target**, and leave the first-time model deciding only what
+> it uniquely knows: whether the contact is physically makeable, whether this
+> player can make it, and whether they want to release at all.
+>
+> Measure with Stage 0 before and after, and report what actually moved.
+
+### Delivered (2026-09-14)
+
+`maybeReleaseFirstTime()` now builds a synthetic `groups` with the receiver on
+the ball at the contact point — the passer included as a teammate, which is
+what makes a genuine one-two available — and ranks every first-time target
+through `generateFreePlayCandidates()`.
+
+Three decisions worth recording:
+
+**Rank, not raw utility.** The utilities are retuned regularly and their
+absolute scale is not a contract. "Did the tactical system rate this target
+above the alternatives" survives any retuning, which is the entire point of
+not having a second system.
+
+**A target the shared system never offered is refused outright,** rather than
+floored. Those are different statements: `FIRST_TIME_TACTICAL_FLOOR` keeps a
+low-ranked but genuinely offered option unlikely instead of impossible, while
+a target the tactics never put forward is simply not a ball they want played.
+
+**No joint candidate generation.** A joint meeting point times a runner onto
+a ball; a first-time release is struck now, from a contact already happening.
+There is nothing to time, and skipping it keeps the cost off the hot path.
+
+`engagementHistory` and `congestionTracker` are threaded through
+`availability` so the first-time ranking sees the same anti-pass-loop history
+the owner's own decision does — without them it could have rebuilt the
+low-value loop that logic exists to prevent.
+
+### Measured
+
+| Input | Baseline | After 1b | After 1c |
+| --- | --- | --- | --- |
+| `attacking.tempo` | strong 0.825 | **visible 0.748** | **strong 1.064** |
+| `attacking.style` | strong 0.897 | strong 0.954 | strong 0.855 |
+| `attacking.directness` | visible 0.742 | weak 0.313 | none 0.288 |
+| role | weak -0.203 | none -0.321 | none -0.286 |
+
+**Tempo is fixed and then some** — past its own pre-first-time baseline.
+Style held strong throughout. Release mix also improved: layoff share fell
+from 76% to 63% as the tactical ranking pulled choices toward forward passes.
+
+**Directness never had a solid verdict to lose.** Tracking its two metrics
+across all three sweeps makes that plain:
+
+| Sweep | `meanShotDistanceYards` | `meanPassDistanceYards` |
+| --- | --- | --- |
+| baseline | d 0.742, p 0.030 | d 0.338, p 0.041 |
+| after 1b | d 0.061, p 0.844 | d 0.264, p 0.090 |
+| after 1c | d 0.207, p 0.447 | d 0.288, p 0.059 |
+
+The pass-distance effect is stable at 0.26–0.34 across every sweep. The shot
+metric swings 0.742 → 0.061 → 0.207 for the same input, which is not an
+effect changing — it is a metric with ten shots per arm reporting noise. The
+original "visible" verdict rested entirely on that column, and the Stage 0
+delivery note flagged the shot-poverty limitation at the time.
+
+So the honest reading is that directness sits at the weak/none boundary and
+has done all along; it neither regressed at 1b nor recovered at 1c.
+
+**Role is untouched, as expected.** Nothing in Stage 1c addresses a role
+implemented as a constant positional offset. That is Stage 2's job.
+
+### Harness change this forced, and the new baseline
+
+The Stage 0 sweep now alternates build-up and advanced starting pictures
+(`ADVANCE_SHIFT_PERCENT`, both sides shifted together so the defensive
+structure stays coherent), because a third of the metric set was untrustworthy
+without it. Shots roughly doubled, from 0.10–0.28 per possession to 0.21–0.51.
+
+**The two sampling schemes are not comparable to each other.** The three-way
+table above is internally consistent — baseline, after 1b and after 1c all ran
+the old sampling — but nothing from it should be set beside a number measured
+after 2026-09-14. Any earlier verdict resting on `shotsSelected` or
+`meanShotDistanceYards` is void rather than merely uncertain.
+
+New baseline, advanced sampling, 80 possessions per arm:
+
+| Input | Verdict | Strongest metric | d | p |
+| --- | --- | --- | ---: | ---: |
+| `attacking.tempo` | **strong** | pass share | 0.920 | <0.0001 |
+| `attacking.style` | **visible** | longest pass | 0.560 | <0.0001 |
+| `attacking.directness` | **none** | legal passing options | -0.247 | 0.0642 |
+| role | **none** | shots selected | -0.188 | 0.1244 |
+
+Style reads lower here than under the old sampling. That is the sampling
+changing, not the engine: an advanced starting picture gives long-ball and
+possession less room to differ in longest-pass terms. It is a more honest
+number, not a worse one.
+
+**Directness is now a trustworthy `none`.** That is a genuine, newly
+well-founded finding and a candidate for its own stage: an instruction with
+five settings that a player cannot see is worth as much as one that does not
+exist.
 
 ---
 

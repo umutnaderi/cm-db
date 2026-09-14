@@ -4805,6 +4805,12 @@ function resolveDeliveryWithKeeperMotion(resolver, groups, availability, random,
 // finished.
 const FIRST_TIME_CONTACT_MS = 90;
 
+// Stage 1c -- how much of a release's score the shared tactical ranking can
+// take away. At 0.15 the worst-ranked target the system still offered stays
+// possible but unlikely; a target it did not offer at all is refused outright
+// rather than floored, which is a different statement and deliberately so.
+const FIRST_TIME_TACTICAL_FLOOR = 0.15;
+
 function maybeReleaseFirstTime({
   groups, owner, actualReceiver, contactPoint, contact, pressingOpponent,
   availability, trace, passFlightEvidence, interleaveOffBall, motionContext,
@@ -4840,17 +4846,101 @@ function maybeReleaseFirstTime({
     attackingSettings,
     shootingInstruction: shootingInstructionFor(actualReceiver, attackingSettings),
   });
-  const best = evaluation.best;
   // Only the two kinds that reuse the existing pass pipeline are wired for
   // now. flick-on needs the aerial contest and first-time-shot needs the shot
   // resolver; both are modelled in firstTimePlay.js and land in a follow-up.
-  if (!best || (best.kind !== "first-time-pass" && best.kind !== "layoff")) return null;
-  const target = groups.teammates.find((entry) => String(entry.id) === String(best.targetId));
+  const wired = evaluation.options.filter((option) =>
+    option.kind === "first-time-pass" || option.kind === "layoff");
+  if (!wired.length) return null;
+
+  // Stage 1c -- WHERE the ball goes is decided by the shared tactical system,
+  // not by a parallel one.
+  //
+  // Stage 1b chose the target from firstTimePreference01() alone, and the
+  // Stage 0 sweep caught what that cost: tempo fell strong -> visible,
+  // directness visible -> weak and role to invisible, because a forced
+  // delivery bypassed generateFreePlayCandidates() entirely and that
+  // preference function reads style, tempo, creativity and shooting and
+  // nothing else. The inputs with no path into it were exactly the ones that
+  // lost separation.
+  //
+  // So the division of labour is now explicit. The first-time model answers
+  // what only it knows -- can this contact be made, by this player, and do
+  // they want to release at all. The shared utilities answer which target is
+  // worth playing to, which is what carries every tactical instruction.
+  const releaseGroups = {
+    ...groups,
+    owner: { ...actualReceiver, ...contactPoint },
+    teammates: [
+      // The passer becomes a teammate of the receiver -- that is what makes a
+      // genuine one-two available. A goalkeeper passer is excluded because
+      // groups.teammates is an outfield list by construction.
+      ...(owner.role === "keeper" ? [] : [owner]),
+      ...groups.teammates.filter((entry) => String(entry.id) !== String(actualReceiver.id)),
+    ],
+    ballPoint: contactPoint,
+  };
+  const sharedCandidates = generateFreePlayCandidates(
+    releaseGroups,
+    state.attackingDirection[actualReceiver.team],
+    attackingSettings,
+    availability?.engagementHistory ?? null,
+    availability?.congestionTracker ?? null,
+    // No joint deps, deliberately. A joint candidate is a meeting point timed
+    // for a runner to arrive onto; a first-time release is struck now, from a
+    // contact that is already happening, so there is nothing to time. Skipping
+    // it also keeps the added cost off the hot path.
+    null,
+  );
+  // Rank, not raw utility. The utilities are retuned regularly and their
+  // absolute scale is not a contract; "did the tactical system rate this
+  // target above the alternatives" survives any retuning, which is the whole
+  // point of not having a second system.
+  const ranked = sharedCandidates
+    .filter((candidate) => candidate?.target?.id != null && Number.isFinite(candidate.utility))
+    .sort((left, right) => right.utility - left.utility
+      || String(left.target.id).localeCompare(String(right.target.id)));
+  const rankByTarget = new Map();
+  ranked.forEach((candidate, index) => {
+    const id = String(candidate.target.id);
+    if (!rankByTarget.has(id)) rankByTarget.set(id, index);
+  });
+  const span = Math.max(1, ranked.length - 1);
+
+  const weighted = wired
+    .map((option) => {
+      const rank = rankByTarget.get(String(option.targetId));
+      // A target the shared system did not put forward at all is not one it
+      // wants the ball played to. Refusing outright is the honest reading, and
+      // it is what stops a physically easy layoff into nothing from beating a
+      // pass the tactics actually asked for.
+      if (rank === undefined) return null;
+      const tactical01 = 1 - rank / span;
+      return {
+        option,
+        rank,
+        tactical01,
+        // The floor keeps a genuinely available but low-ranked option from
+        // becoming impossible rather than merely unlikely.
+        score: option.feasibility01 * option.competence01 * option.preference01
+          * (FIRST_TIME_TACTICAL_FLOOR + (1 - FIRST_TIME_TACTICAL_FLOOR) * tactical01),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score
+      || left.rank - right.rank
+      || String(left.option.targetId).localeCompare(String(right.option.targetId)));
+  const chosen = weighted[0];
+  if (!chosen) return null;
+  const best = chosen.option;
+  const target = groups.teammates.find((entry) => String(entry.id) === String(best.targetId))
+    ?? (String(owner.id) === String(best.targetId) ? owner : null);
   if (!target) return null;
-  // Exactly one draw, in exactly one place. `score` is the product of
-  // feasibility, competence and appetite, so a player who cannot, cannot do
-  // it well, or does not want to is refused on the same scale.
-  if (firstTimeRandom() > best.score) return null;
+  // Exactly one draw, in exactly one place, against the combined score -- so a
+  // player who cannot make the contact, cannot make it well, does not want to,
+  // or is being asked to play a ball the tactics do not rate is refused on one
+  // scale rather than four.
+  if (firstTimeRandom() > chosen.score) return null;
 
   trace.push(traceEvent(
     "P.RECEIVE.FIRSTTIME",
@@ -4892,6 +4982,11 @@ function maybeReleaseFirstTime({
           preference01: Number(best.preference01.toFixed(3)),
           accuracyPenalty: Number(best.accuracyPenalty.toFixed(3)),
           optionsConsidered: evaluation.options.length,
+          // Stage 1c -- where the shared tactical system ranked this target
+          // among everything it would have offered the receiver on the ball.
+          tacticalRank: chosen.rank,
+          tactical01: Number(chosen.tactical01.toFixed(3)),
+          sharedCandidates: ranked.length,
           // Diagnostics only. Nothing in the engine reads these back; they
           // exist so the Stage 1b sweep can report the release distribution
           // by pitch third and pressure band without re-deriving either.
@@ -13325,6 +13420,13 @@ function runConstructedPossession(seed, { continuation = null, maxActions = POSS
       firstTimeRandom: seededRandom(
         hashString(`match-lab:freeplay:first-time:${seed}:${actionsCount}`),
       ),
+      // Stage 1c -- threaded so the receiver's release is ranked by the SAME
+      // tactical utilities the owner's own candidate list uses, with the same
+      // engagement and congestion context. Without these the first-time
+      // ranking would be blind to the anti-pass-loop history and could
+      // rebuild the low-value loop it was designed out of.
+      engagementHistory,
+      congestionTracker,
       // Set only when THIS action is itself a first-time release, so the
       // delivery below is struck with the model's own accuracy penalty.
       firstTimeRelease: decision?.firstTime ?? null,

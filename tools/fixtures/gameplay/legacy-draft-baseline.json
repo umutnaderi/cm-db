@@ -1,0 +1,57 @@
+{
+  "fixtureVersion": 1,
+  "purpose": "Characterize the existing draft-team-v3 and draft-progress-v1 browser contracts without changing draft-setup or draft-run.",
+  "storage": {
+    "teamKey": "retroball-draft-team-v1",
+    "progressKey": "retroball-draft-progress-v1"
+  },
+  "completeTeam": {
+    "version": 3,
+    "teamName": "Baseline XI",
+    "formation": "4-4-2",
+    "style": "Balanced",
+    "captainSlotId": "slot-5",
+    "mode": "Classic",
+    "scenario": "ucl0304",
+    "players": [
+      { "slotId": "slot-0", "role": "GK", "line": "defence", "isCaptain": false, "overall": 82, "player": { "canonical_player_public_id": "baseline_gk", "database_slug": "cm0304", "source_person_id": "100", "display_name": "Baseline Goalkeeper", "current_ability": 164 } },
+      { "slotId": "slot-1", "role": "DL", "line": "defence", "isCaptain": false, "overall": 79, "player": { "canonical_player_public_id": "baseline_dl", "database_slug": "cm0304", "source_person_id": "101", "display_name": "Baseline Left Back", "current_ability": 158 } },
+      { "slotId": "slot-2", "role": "DC", "line": "defence", "isCaptain": false, "overall": 84, "player": { "canonical_player_public_id": "baseline_dc1", "database_slug": "cm0304", "source_person_id": "102", "display_name": "Baseline Centre Back One", "current_ability": 168 } },
+      { "slotId": "slot-3", "role": "DC", "line": "defence", "isCaptain": false, "overall": 81, "player": { "canonical_player_public_id": "baseline_dc2", "database_slug": "cm0304", "source_person_id": "103", "display_name": "Baseline Centre Back Two", "current_ability": 162 } },
+      { "slotId": "slot-4", "role": "DR", "line": "defence", "isCaptain": false, "overall": 78, "player": { "canonical_player_public_id": "baseline_dr", "database_slug": "cm0304", "source_person_id": "104", "display_name": "Baseline Right Back", "current_ability": 156 } },
+      { "slotId": "slot-5", "role": "ML", "line": "midfield", "isCaptain": true, "overall": 86, "player": { "canonical_player_public_id": "baseline_ml", "database_slug": "cm0304", "source_person_id": "105", "display_name": "Baseline Captain", "current_ability": 172 } },
+      { "slotId": "slot-6", "role": "MC", "line": "midfield", "isCaptain": false, "overall": 83, "player": { "canonical_player_public_id": "baseline_mc1", "database_slug": "cm0304", "source_person_id": "106", "display_name": "Baseline Midfielder One", "current_ability": 166 } },
+      { "slotId": "slot-7", "role": "MC", "line": "midfield", "isCaptain": false, "overall": 82, "player": { "canonical_player_public_id": "baseline_mc2", "database_slug": "cm0304", "source_person_id": "107", "display_name": "Baseline Midfielder Two", "current_ability": 164 } },
+      { "slotId": "slot-8", "role": "MR", "line": "midfield", "isCaptain": false, "overall": 80, "player": { "canonical_player_public_id": "baseline_mr", "database_slug": "cm0304", "source_person_id": "108", "display_name": "Baseline Right Midfielder", "current_ability": 160 } },
+      { "slotId": "slot-9", "role": "FC", "line": "attack", "isCaptain": false, "overall": 87, "player": { "canonical_player_public_id": "baseline_fc1", "database_slug": "cm0304", "source_person_id": "109", "display_name": "Baseline Forward One", "current_ability": 174 } },
+      { "slotId": "slot-10", "role": "FC", "line": "attack", "isCaptain": false, "overall": 85, "player": { "canonical_player_public_id": "baseline_fc2", "database_slug": "cm0304", "source_person_id": "110", "display_name": "Baseline Forward Two", "current_ability": 170 } }
+    ],
+    "overalls": { "attack": 86, "midfield": 83, "defence": 81, "team": 82 },
+    "boostedOveralls": { "attack": 86, "midfield": 104, "defence": 81, "team": 90 }
+  },
+  "inProgress": {
+    "version": 1,
+    "teamName": "Baseline XI",
+    "formation": "4-4-2",
+    "style": "Balanced",
+    "mode": "Classic",
+    "scenario": "ucl0304",
+    "classicScenario": "ucl0304",
+    "captainSlotId": "",
+    "rollNumber": 3,
+    "rerollsRemaining": 2,
+    "qualityDrought": 0,
+    "premiumDrought": 1,
+    "offeredPlayerIds": ["baseline_gk", "baseline_dl", "baseline_dc1"],
+    "draftedSlotIds": ["slot-0", "slot-1", "slot-2"]
+  },
+  "runSurface": {
+    "modes": ["Classic", "Titan Fight", "From memory", "Generative"],
+    "scenarios": ["ucl0203", "ucl0304", "wc2002", "titan"],
+    "requiredResultFields": [
+      "opponentKey", "opponentName", "stage", "userGoals", "rivalGoals",
+      "events", "extraTimeEvents", "timeline", "manOfMatch",
+      "regulationEndSecond", "extraTimeEndSecond"
+    ]
+  }
+}

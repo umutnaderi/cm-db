@@ -11,6 +11,168 @@ been written wrongly.
 Fill in what the clip actually shows. Write `unknown` where the camera does
 not tell you — an honest gap is usable evidence, a guess is not.
 
+## How to send a clip
+
+Attach the video and include this short note. Only **Focus** and **Engine
+difference** are required; use `unknown` for anything the footage does not
+show.
+
+```text
+Case: short unique name
+Focus: the behaviour to study
+Team/direction: who is being studied and which goal they attack
+Moment: match clock or timestamp inside the clip
+Expected football behaviour: what should normally happen
+Engine difference: what Match Lab currently does differently
+Context: score, tactics, role or instruction if known
+```
+
+Example:
+
+```text
+Case: keeper narrows central one-on-one
+Focus: goalkeeper depth and striker preparation
+Team/direction: defending team protects the left goal
+Moment: 00:07 in the clip
+Expected football behaviour: keeper advances on the shot cone while staying set
+Engine difference: keeper remains near the goal line and the striker pauses
+Context: open-play counterattack; other tactical details unknown
+```
+
+One message can contain several clips, but give every clip its own case name and
+note. If two clips are intended as a comparison, say which behaviour they are
+contrasting.
+
+## Preferred footage
+
+- **Length:** usually 10-30 seconds, with at least five seconds before and after
+  the incident when available. Longer passages are welcome when team shape is
+  the subject.
+- **Continuity:** one uninterrupted passage at normal speed. If slow motion is
+  useful, include the normal-speed version as well.
+- **Format:** MP4/H.264 is preferred; retain the original frame rate and highest
+  practical resolution. Do not add interpolated frames or artificial motion
+  smoothing.
+- **Framing:** avoid tight crops when studying positioning. Pitch markings,
+  defenders away from the ball and both goals/lines provide calibration.
+- **Clock:** retain the broadcast clock when possible. Otherwise identify the
+  relevant timestamp inside the uploaded clip.
+- **Camera:** tactical or fixed wide footage is best for coordinated movement;
+  broadcast footage is still useful; behind-goal footage is especially useful
+  for goalkeeper angles and box occupation; close views are useful for contact,
+  body orientation and restart technique.
+- **Edits:** avoid cuts, zoom changes and annotations across the decision-to-
+  outcome window. A separate marked screenshot can accompany the original clip.
+- **Audio:** optional. Keep it when a whistle, referee signal or contact sound
+  establishes when play stopped or restarted.
+
+Exact player names and tactical instructions help but are not required. The
+clip must never be filled with guesses merely to complete the form.
+
+## Footage that teaches the engine most
+
+Prefer small contrast sets over compilations of spectacular outcomes. A strong
+batch normally contains 5-12 cases and includes:
+
+1. the behaviour succeeding;
+2. the same idea being delayed, blocked or handed off;
+3. the player abandoning it and choosing a safe alternative;
+4. a mistake caused by pressure, body shape, timing or ability;
+5. a similar geometry producing a different choice because the tactics or
+   match state differ.
+
+The most valuable current subjects are:
+
+- receiving and releasing first time, including cushions, layoffs and turns;
+- pressure ownership, cover, runner handoffs and a defensive line recovering;
+- counters that succeed, slow down, recycle or fail;
+- wide attacks with overlaps, underlaps, crosses, blocks and second balls;
+- goalkeeper starting depth, narrowing, sweeping, smothering and retreating;
+- corners, free kicks, throw-ins and the phase after first contact;
+- loose balls, deflections, rebounds, collisions and changes of claimant;
+- offside interference by a player who is not the intended receiver;
+- fatigue, repeated sprints and late-match support or recovery;
+- the same team shape before and after a real tactical adjustment.
+
+Goals alone are weak evidence for decision realism because they omit most
+aborts, recoveries and defensive successes. Use goal clips when shot placement,
+keeper response, the buildup relationships or the defensive failure is the
+actual subject.
+
+## Our shared gameplay language
+
+Every case will be discussed in the same causal order:
+
+```text
+CONTEXT -> TRIGGER -> PERCEPTION -> RESPONSIBILITIES -> OPTIONS
+        -> CHOICE -> EXECUTION -> RESPONSE -> OUTCOME -> REPLAN
+```
+
+- **Context:** score, clock, phase, formations, tactics, roles and current
+  physical state.
+- **Trigger:** the new fact that makes players react: a regain, pass, bad touch,
+  run, whistle, space opening, pressure arriving or ball trajectory changing.
+- **Perception:** which players can notice the trigger, when they notice it and
+  which attributes affect that delay.
+- **Responsibilities:** temporary jobs such as ball carrier, outlet, runner,
+  presser, cover, tracker, line controller, claimant or sweeper.
+- **Options:** physically reachable and legally available actions or movements.
+- **Choice:** the selected option and the tactical, attribute and geometric
+  reasons that raised or lowered it.
+- **Execution:** the actual acceleration, turn, contact, pass, shot, tackle or
+  handling action. Intention and execution are kept separate.
+- **Response:** what teammates and opponents do while the action is happening.
+- **Outcome:** the contact or state change that actually occurs, including
+  failure, deflection, loose ball, restart or retained possession.
+- **Replan:** who continues, aborts, changes job or takes over after the picture
+  changes.
+
+Use these optional namespaces when naming a case or observation:
+
+| Namespace | Examples |
+| --- | --- |
+| `PHASE` | `BUILD_UP`, `SETTLED_ATTACK`, `TRANSITION_IN`, `TRANSITION_OUT` |
+| `BALL` | `CONTROLLED`, `ROLLING`, `AIRBORNE`, `LOOSE`, `DEAD` |
+| `ATT` | `OUTLET`, `OVERLAP`, `UNDERLAP`, `THIRD_MAN`, `RUN_BEHIND`, `REST_DEFENCE` |
+| `DEF` | `PRESSURE`, `INSIDE_COVER`, `TRACK`, `HANDOFF`, `DROP`, `STEP`, `RECOVERY_SCREEN` |
+| `GK` | `HOLD_LINE`, `NARROW`, `RUSH`, `SWEEP`, `SMOTHER`, `RETREAT` |
+| `CONTACT` | `CONTROL`, `FIRST_TIME`, `DUEL`, `BLOCK`, `DEFLECTION`, `REBOUND` |
+| `RESTART` | `THROW_IN`, `CORNER`, `FREE_KICK`, `GOAL_KICK`, `KICK_OFF` |
+| `LAW` | `OFFSIDE_POSITION`, `INTERFERENCE`, `FOUL`, `ADVANTAGE`, `BALL_OUT` |
+| `MOTION` | `ACCELERATE`, `BRAKE`, `TURN`, `CHECK`, `SPRINT`, `RECOVER` |
+| `OUTCOME` | `COMPLETE`, `FAIL`, `ABORT`, `RECYCLE`, `HANDOFF`, `SECOND_BALL` |
+
+A useful one-line observation therefore looks like:
+
+```text
+TRANSITION_IN: the inside cover arrives before the carrier can release, so the
+carrier aborts RUN_BEHIND, recycles, and the weak-side runner recovers shape.
+```
+
+These terms describe relationships rather than fixed player names or exact
+coordinates, which lets one observation apply to different teams, formations
+and ability levels.
+
+## What the review will return
+
+For each submitted case, the review will provide:
+
+1. what the clip demonstrates and what the camera cannot establish;
+2. the normalized causal description using the shared language above;
+3. the current engine behaviour and verified structural difference;
+4. whether the case is a missing behaviour, incorrect rule, tuning question,
+   renderer problem or insufficient evidence;
+5. the reusable rule, responsibility, pattern or physical invariant proposed;
+6. the attributes and tactics that should influence it;
+7. a deterministic fixture, counterfactual and acceptance measurement when the
+   evidence is sufficient;
+8. any narrowly defined comparison footage still needed.
+
+Footage does not automatically train or overwrite the engine. It becomes durable
+only after it is translated into an engine-neutral observation, implemented
+through the shared simulation path and proven through deterministic tests and
+distribution-level measurements.
+
 ---
 
 ## 1. Source

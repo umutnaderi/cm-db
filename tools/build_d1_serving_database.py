@@ -15,6 +15,9 @@ SERVING_TABLES = (
     "cm_databases",
     "player_search",
     "player_profile",
+    "player_trait_definition",
+    "player_trait_source",
+    "player_trait_import",
     "clubs",
     "nations",
     "person_history",
@@ -151,6 +154,19 @@ def build_database(
                 JOIN selected_players s
                   ON s.database_slug = p.database_slug
                  AND s.source_person_id = p.source_person_id
+            """,
+            "player_trait_definition": """
+                SELECT * FROM source.player_trait_definition
+            """,
+            "player_trait_source": """
+                SELECT traits.*
+                FROM source.player_trait_source traits
+                JOIN selected_players s
+                  ON s.database_slug = traits.database_slug
+                 AND s.source_person_id = traits.source_person_id
+            """,
+            "player_trait_import": """
+                SELECT * FROM source.player_trait_import
             """,
             "clubs": """
                 SELECT DISTINCT c.*

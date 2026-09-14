@@ -6994,6 +6994,26 @@ body.is-hall-of-fame-open {
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
 }
 
+.player-traits-section {
+  padding-top: 12px;
+}
+
+.player-trait-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.player-trait {
+  padding: 5px 9px;
+  border: 1px solid rgba(108, 166, 124, 0.34);
+  border-radius: 999px;
+  background: rgba(32, 77, 47, 0.34);
+  color: #d8e7d9;
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
 /* Restart preparation signal. The engine records whether the taker raises
    one or two arms; this draws that authored cue without changing position. */
 .match-lab-marker[data-signal-arms] .match-lab-marker-dot::before,

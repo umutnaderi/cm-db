@@ -756,7 +756,23 @@ function ratingListFromJson(value: unknown, labels: Record<string, string> = RAT
   }));
 }
 
-function playerProfileFromRow(row: Record<string, unknown> | undefined) {
+function playerTraitsFromRows(rows: QueryRow[]) {
+  return rows.map((row) => ({
+    key: row.trait_key,
+    name: row.display_name,
+    sourceTraitId: row.source_trait_id,
+    sourceName: row.source_trait_name,
+    sourceBitIndex: row.source_bit_index,
+    sourceValue: row.source_value,
+    mappingConfidence: row.mapping_confidence,
+    mappingVersion: row.mapping_version,
+  }));
+}
+
+function playerProfileFromRow(
+  row: Record<string, unknown> | undefined,
+  traits: ReturnType<typeof playerTraitsFromRows> = [],
+) {
   if (!row) {
     return null;
   }
@@ -813,6 +829,7 @@ function playerProfileFromRow(row: Record<string, unknown> | undefined) {
     attributes: ratingListFromJson(row.attributes_json),
     hiddenAttributes: ratingListFromJson(row.hidden_attributes_json),
     foot,
+    traits,
     clubColors: null as QueryRow | null,
     profile: profileData,
   };
@@ -1964,6 +1981,37 @@ export default {
         let profile = null;
 
         if (item) {
+          let traits: ReturnType<typeof playerTraitsFromRows> = [];
+          try {
+            const traitResult = await db.execute({
+              sql: `
+                SELECT
+                  traits.trait_key,
+                  definitions.display_name,
+                  traits.source_trait_id,
+                  traits.source_trait_name,
+                  traits.source_bit_index,
+                  traits.source_value,
+                  traits.mapping_confidence,
+                  traits.mapping_version
+                FROM player_trait_source traits
+                JOIN player_trait_definition definitions
+                  ON definitions.trait_key = traits.trait_key
+                WHERE traits.database_slug = ?
+                  AND traits.source_person_id = ?
+                ORDER BY traits.source_trait_id
+              `,
+              args: [database, sourcePersonId],
+            });
+            traits = playerTraitsFromRows(traitResult.rows);
+          } catch (error) {
+            if (
+              !(error instanceof Error)
+              || !/no such table: player_trait_(source|definition)/i.test(error.message)
+            ) {
+              throw error;
+            }
+          }
           const mappedLeague = leagueForClub(database, item.club_name);
           const clubResult = await db.execute({
             sql: `
@@ -2094,6 +2142,7 @@ export default {
             });
             profile = playerProfileFromRow(
               profileResult.rows[0] as Record<string, unknown> | undefined,
+              traits,
             );
           } catch (error) {
             if (
@@ -2116,6 +2165,7 @@ export default {
               });
               profile = playerProfileFromRow(
                 legacyProfileResult.rows[0] as Record<string, unknown> | undefined,
+                traits,
               );
             } catch (legacyError) {
               if (

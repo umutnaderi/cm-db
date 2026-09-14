@@ -74,6 +74,44 @@ function ratingList(value) {
   return [];
 }
 
+const playerTraitSourceAvailable = Boolean(source.prepare(`
+  SELECT 1
+  FROM sqlite_schema
+  WHERE type = 'table' AND name = 'player_trait_source'
+`).get());
+const playerTraitStatement = playerTraitSourceAvailable
+  ? source.prepare(`
+      SELECT
+        traits.trait_key,
+        definitions.display_name,
+        traits.source_trait_id,
+        traits.source_trait_name,
+        traits.source_bit_index,
+        traits.source_value,
+        traits.mapping_confidence,
+        traits.mapping_version
+      FROM player_trait_source traits
+      JOIN player_trait_definition definitions
+        ON definitions.trait_key = traits.trait_key
+      WHERE traits.database_slug = ? AND traits.source_person_id = ?
+      ORDER BY traits.source_trait_id
+    `)
+  : null;
+
+function playerTraits(database, personId) {
+  if (!playerTraitStatement) return [];
+  return playerTraitStatement.all(database, personId).map((row) => ({
+    key: row.trait_key,
+    name: row.display_name,
+    sourceTraitId: row.source_trait_id,
+    sourceName: row.source_trait_name,
+    sourceBitIndex: row.source_bit_index,
+    sourceValue: row.source_value,
+    mappingConfidence: row.mapping_confidence,
+    mappingVersion: row.mapping_version,
+  }));
+}
+
 const clubColourData = readFileSync(resolve(root, "01-02 dat", "colour.dat"));
 const clubColourOverrides = JSON.parse(
   readFileSync(
@@ -757,6 +795,7 @@ function playerDetail(database, personId) {
     attributes: ratingList(row.attributes_json),
     hiddenAttributes: ratingList(row.hidden_attributes_json),
     foot: ratingList(row.foot_json),
+    traits: playerTraits(database, personId),
     clubColors: mergedClubColors,
     profile: {}
   };

@@ -1,0 +1,40 @@
+{
+  "assignment_count": 8034,
+  "database_slug": "fm2005_vanilla_original",
+  "definition_count": 48,
+  "identity_join": {
+    "ambiguous_players": 0,
+    "mapping_confidence": 1.0,
+    "method": "binary record-offset containment",
+    "required_checks": [
+      "record boundary",
+      "date of birth",
+      "first-name index when present",
+      "second-name index when present"
+    ],
+    "unmatched_players": 0
+  },
+  "mapping_version": "fm2005-ppm-v1",
+  "player_count": 3841,
+  "player_traits_sha256": "955d964e0e8e5eb7655e22baf62588e8e825136810ba206403da107b164d89f5",
+  "schema": "retroball.player-traits-source",
+  "source_artifact_name": "FM2005_player_traits.xlsx",
+  "source_artifact_sha256": "60aef12c8297c9f27f3fb65fb88dd85d01c8d2ff983323a0895af52a6f9d9a11",
+  "source_binary_sha256": "4e1653fa0e0934d23cfe3dfc060104b6ddb69f7e3f1bca57c2cdee95eb14cd9f",
+  "source_extracted_on": "2026-09-14",
+  "source_people_core_zip_sha256": "3c0e6381137e8608283cd60981dd910124833b7f7f3dd5659ea062174ffc5baf",
+  "trait_definitions_sha256": "9fc68214ad18415de67ec7f0b53035a3fa891e0d377c9c97005df22313e149b9",
+  "verified_sentinel": {
+    "name": "Roberto Carlos",
+    "source_person_id": "4357",
+    "source_person_unique_id": "11944",
+    "source_trait_ids": [
+      9,
+      10,
+      15,
+      37,
+      46
+    ]
+  },
+  "version": 1
+}

@@ -680,6 +680,22 @@ function renderAttributes(profile) {
   `;
 }
 
+function renderTraits(profile) {
+  const traits = Array.isArray(profile?.traits) ? profile.traits : [];
+  if (!traits.length) return "";
+  return `
+    <section class="profile-section player-traits-section" aria-label="Player preferred moves">
+      <h3>Player traits</h3>
+      <div class="player-trait-list">
+        ${traits.map((trait) => `
+          <span class="player-trait" title="${escapeHtml(
+            `FM2005 PPM ${trait.sourceTraitId} · ${trait.mappingVersion}`,
+          )}">${escapeHtml(trait.name)}</span>
+        `).join("")}
+      </div>
+    </section>`;
+}
+
 function renderMoreAttributes(profile) {
   const { additionalItems } = attributeProfile(profile);
   if (!additionalItems.length) return "";
@@ -1108,6 +1124,7 @@ function renderDetailContent(player, profile) {
           : ""
       }
       ${!state.detailLoading && !state.detailError ? renderAttributes(profile) : ""}
+      ${!state.detailLoading && !state.detailError ? renderTraits(profile) : ""}
       ${!state.detailLoading && !state.detailError ? renderPositionPanel(profile) : ""}
     </div>
   `;

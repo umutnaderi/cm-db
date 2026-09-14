@@ -1,0 +1,49 @@
+trait_key,display_name,source_database_slug,source_trait_id,source_name,source_bit_index,mapping_version
+runs_with_ball_down_left,Runs With Ball Down Left,fm2005_vanilla_original,1,Runs With Ball Down Left,0,fm2005-ppm-v1
+runs_with_ball_down_right,Runs With Ball Down Right,fm2005_vanilla_original,2,Runs With Ball Down Right,1,fm2005-ppm-v1
+runs_with_ball_through_centre,Runs With Ball Through Centre,fm2005_vanilla_original,3,Runs With Ball Through Centre,2,fm2005-ppm-v1
+gets_into_opposition_area,Gets Into Opposition Area,fm2005_vanilla_original,4,Gets Into Opposition Area,3,fm2005-ppm-v1
+moves_into_channels,Moves Into Channels,fm2005_vanilla_original,5,Moves Into Channels,4,fm2005-ppm-v1
+gets_forward_whenever_possible,Gets Forward Whenever Possible,fm2005_vanilla_original,6,Gets Forward Whenever Possible,5,fm2005-ppm-v1
+plays_short_simple_passes,Plays Short Simple Passes,fm2005_vanilla_original,7,Plays Short Simple Passes,6,fm2005-ppm-v1
+tries_killer_balls_often,Tries Killer Balls Often,fm2005_vanilla_original,8,Tries Killer Balls Often,7,fm2005-ppm-v1
+shoots_long,Shoots Long,fm2005_vanilla_original,9,Shoots Long,8,fm2005-ppm-v1
+shoots_with_power,Shoots With Power,fm2005_vanilla_original,10,Shoots With Power,9,fm2005-ppm-v1
+places_shots,Places Shots,fm2005_vanilla_original,11,Places Shots,10,fm2005-ppm-v1
+curls_ball,Curls Ball,fm2005_vanilla_original,12,Curls Ball,11,fm2005-ppm-v1
+likes_to_round_keeper,Likes To Round Keeper,fm2005_vanilla_original,13,Likes To Round Keeper,12,fm2005-ppm-v1
+likes_to_try_to_beat_offside_trap,Likes To Try To Beat Offside Trap,fm2005_vanilla_original,14,Likes To Try To Beat Offside Trap,13,fm2005-ppm-v1
+uses_outside_of_foot,Uses Outside Of Foot,fm2005_vanilla_original,15,Uses Outside Of Foot,14,fm2005-ppm-v1
+marks_opponent_tightly,Marks Opponent Tightly,fm2005_vanilla_original,16,Marks Opponent Tightly,15,fm2005-ppm-v1
+winds_up_opponents,Winds Up Opponents,fm2005_vanilla_original,17,Winds Up Opponents,16,fm2005-ppm-v1
+argues_with_officials,Argues With Officials,fm2005_vanilla_original,18,Argues With Officials,17,fm2005-ppm-v1
+plays_with_back_to_goal,Plays With Back To Goal,fm2005_vanilla_original,19,Plays With Back To Goal,18,fm2005-ppm-v1
+comes_deep_to_get_ball,Comes Deep To Get Ball,fm2005_vanilla_original,20,Comes Deep To Get Ball,19,fm2005-ppm-v1
+plays_one_twos,Plays One-Twos,fm2005_vanilla_original,21,Plays One-Twos,20,fm2005-ppm-v1
+likes_to_lob_keeper,Likes To Lob Keeper,fm2005_vanilla_original,22,Likes To Lob Keeper,21,fm2005-ppm-v1
+dictates_tempo,Dictates Tempo,fm2005_vanilla_original,23,Dictates Tempo,22,fm2005-ppm-v1
+attempts_overhead_kicks,Attempts Overhead Kicks,fm2005_vanilla_original,24,Attempts Overhead Kicks,23,fm2005-ppm-v1
+looks_for_pass_rather_than_attempting_to_score,Looks For Pass Rather Than Attempting To Score,fm2005_vanilla_original,25,Looks For Pass Rather Than Attempting To Score,24,fm2005-ppm-v1
+plays_no_through_balls,Plays No Through Balls,fm2005_vanilla_original,26,Plays No Through Balls,25,fm2005-ppm-v1
+stops_play,Stops Play,fm2005_vanilla_original,27,Stops Play,26,fm2005-ppm-v1
+knocks_ball_past_opponent,Knocks Ball Past Opponent,fm2005_vanilla_original,28,Knocks Ball Past Opponent,27,fm2005-ppm-v1
+moves_ball_to_right_foot_before_dribble_attempt,Moves Ball To Right Foot Before Dribble Attempt,fm2005_vanilla_original,29,Moves Ball To Right Foot Before Dribble Attempt,28,fm2005-ppm-v1
+moves_ball_to_left_foot_before_dribble_attempt,Moves Ball To Left Foot Before Dribble Attempt,fm2005_vanilla_original,30,Moves Ball To Left Foot Before Dribble Attempt,29,fm2005-ppm-v1
+dwells_on_ball,Dwells On Ball,fm2005_vanilla_original,31,Dwells On Ball,30,fm2005-ppm-v1
+arrives_late_in_opposition_area,Arrives Late In Opposition Area,fm2005_vanilla_original,32,Arrives Late In Opposition Area,31,fm2005-ppm-v1
+tries_to_play_way_out_of_trouble,Tries To Play Way Out Of Trouble,fm2005_vanilla_original,33,Tries To Play Way Out Of Trouble,32,fm2005-ppm-v1
+stays_back_at_all_times,Stays Back At All Times,fm2005_vanilla_original,34,Stays Back At All Times,33,fm2005-ppm-v1
+avoids_using_weaker_foot,Avoids Using Weaker Foot,fm2005_vanilla_original,35,Avoids Using Weaker Foot,34,fm2005-ppm-v1
+tries_tricks,Tries Tricks,fm2005_vanilla_original,36,Tries Tricks,35,fm2005-ppm-v1
+tries_long_range_freekicks,Tries Long Range Freekicks,fm2005_vanilla_original,37,Tries Long Range Freekicks,36,fm2005-ppm-v1
+dives_into_tackles,Dives Into Tackles,fm2005_vanilla_original,38,Dives Into Tackles,37,fm2005-ppm-v1
+does_not_dive_into_tackles,Does Not Dive Into Tackles,fm2005_vanilla_original,39,Does Not Dive Into Tackles,38,fm2005-ppm-v1
+cuts_inside,Cuts Inside,fm2005_vanilla_original,40,Cuts Inside,39,fm2005-ppm-v1
+hugs_line,Hugs Line,fm2005_vanilla_original,41,Hugs Line,40,fm2005-ppm-v1
+gets_crowd_going,Gets Crowd Going,fm2005_vanilla_original,42,Gets Crowd Going,41,fm2005-ppm-v1
+tries_first_time_shots,Tries First Time Shots,fm2005_vanilla_original,43,Tries First Time Shots,42,fm2005-ppm-v1
+tries_long_range_passes,Tries Long Range Passes,fm2005_vanilla_original,44,Tries Long Range Passes,43,fm2005-ppm-v1
+likes_ball_played_into_feet,Likes Ball Played Into Feet,fm2005_vanilla_original,45,Likes Ball Played Into Feet,44,fm2005-ppm-v1
+hits_free_kicks_with_power,Hits Free Kicks With Power,fm2005_vanilla_original,46,Hits Free Kicks With Power,45,fm2005-ppm-v1
+likes_to_beat_man_repeatedly,Likes To Beat Man Repeatedly,fm2005_vanilla_original,47,Likes To Beat Man Repeatedly,46,fm2005-ppm-v1
+likes_to_switch_ball_to_other_flank,Likes To Switch Ball To Other Flank,fm2005_vanilla_original,48,Likes To Switch Ball To Other Flank,47,fm2005-ppm-v1

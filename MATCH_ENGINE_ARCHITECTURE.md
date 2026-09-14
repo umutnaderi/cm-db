@@ -19,6 +19,55 @@ tactics and roles
 Each stage may only read backwards and write forwards. The rules that
 follow are the specific consequences of that.
 
+## Product match boundary
+
+`src/lib/productMatchContract.js` is the versioned boundary between a game
+mode and this pipeline. Match Lab, the engine-backed draft game and a future
+career save must all describe a match through the same renderer-neutral
+contracts:
+
+- `retroball.match-input` v1 owns the explicit engine version and seed, both
+  teams, player identities and profiles, lineup and substitutes, formation,
+  tactical roles/duties/instructions and the opening restart.
+- `retroball.match-continuation` v1 owns the resumable clock, score,
+  possession, authoritative player/ball state, tactics, stamina-bearing world
+  data, discipline, injuries, substitutions, decision memory and RNG state.
+- `retroball.match-output` v1 owns the timeline, commentary, player/team
+  statistics, heat maps, match events and final continuation.
+
+The envelopes are JSON-safe and deterministically fingerprinted. Continuation
+and output state carry the originating input fingerprint so a paused state
+cannot silently resume under another lineup, tactic set, seed or engine
+version. Fingerprints are deterministic integrity markers rather than
+cryptographic signatures.
+
+Adapters may translate an older product save into the current input contract.
+They may not infer tactical meaning the old save never stored: the legacy
+draft-team-v3 adapter therefore preserves its formation positions while
+leaving tactical roles and duties null. The current `matchSetup` adapter can
+carry those richer fields because they are authored explicitly.
+
+This contract does not yet make the Match Lab simulator reusable by itself.
+The current chunk simulator remains inside `match-lab.js`; extracting that
+orchestration into a DOM-free module and proving Match Lab/product trace parity
+is the next integration boundary.
+
+## Player trait data boundary
+
+FM 2005 Player Preferred Moves are stored outside the ability attributes in
+`player_trait_definition`, `player_trait_source` and `player_trait_import`.
+`tools/import_fm2005_player_traits.py` resolves decoded binary record offsets to
+source player identities and refuses ambiguous, missing or mismatched joins. The
+player-detail API exposes the resulting records as `profile.traits`, including
+the stable key, source ID and mapping version.
+
+Traits are personal action tendencies. They enter the engine as bounded,
+observable candidate-utility contributions after laws, geometry and physical
+reachability establish that an option is valid. Presence in the database or API
+does not by itself make a trait influential. Match-engine adoption requires
+deterministic counterfactual fixtures and trace evidence for each implemented
+trait family.
+
 ## World state ownership
 
 There is exactly one authoritative world state per possession: the

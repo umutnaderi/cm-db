@@ -112,6 +112,16 @@ function waitWithSignal(promise, signal) {
  * @property {PlayerRating[]} attributes
  * @property {PlayerRating[]} hiddenAttributes
  * @property {PlayerRating[]} foot
+ * @property {Array<{
+ *   key: string,
+ *   name: string,
+ *   sourceTraitId: number,
+ *   sourceName: string,
+ *   sourceBitIndex: number,
+ *   sourceValue: number,
+ *   mappingConfidence: number,
+ *   mappingVersion: string
+ * }>} traits
  * @property {Record<string, string | number | null> | null} clubColors
  * @property {Record<string, unknown>} profile
  */

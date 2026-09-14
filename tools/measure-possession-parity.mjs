@@ -21,7 +21,10 @@ const {
   state, runConstructedPossession, applySetup, setupDraft, reassignSetupTeam, pointOf,
 } = await import("../match-lab.js");
 
-const OUT = process.argv[2] || "";
+// Positional, but never a flag: invoking with --compare alone used to be read
+// as "write the report to a file called --compare", which silently created one.
+const positional = process.argv[2];
+const OUT = positional && !positional.startsWith("--") ? positional : "";
 const compareIndex = process.argv.indexOf("--compare");
 const COMPARE = compareIndex >= 0 ? process.argv[compareIndex + 1] : "";
 const POSSESSIONS = 40;

@@ -69,6 +69,12 @@ ABILITIES = [
     "current_ability", "potential_ability",
     "home_reputation", "current_reputation", "world_reputation",
 ]
+# Confirmed from anchors: Lucescu (Manager) and Mourinho (Coach) sit in the
+# same 98-99 file and differ here, and Ferguson is a Manager too. The rest are
+# named by their share of the population and are marked unknown rather than
+# guessed at.
+JOB_LABELS = {5: "Manager", 8: "Coach", 11: "Player"}
+
 # The editor's Traits tab, alphabetical like everything else in this format.
 TRAITS = [
     "adaptability", "ambition", "determination", "loyalty",
@@ -84,6 +90,7 @@ PERSON_DOB_YEAR = 17      # year inside a full date of birth (1900 when unset)
 PERSON_BIRTH_YEAR = 23    # the separate "year of birth" field (0 when a DOB is set)
 PERSON_NATION = 25
 PERSON_CLUB = 56          # int32; -1 when the person holds no club contract
+PERSON_JOB = 60           # uint8; 5 Manager, 8 Coach, 11 Player (see JOB_LABELS)
 PERSON_TRAITS = 85        # uint8 x8, alphabetical
 PERSON_NONPLAYING = 152
 
@@ -160,13 +167,63 @@ def solve_person_count(blob: bytes) -> int:
     return best[0]
 
 
-def extract(folder: Path, slug: str, people: int | None = None):
+def solve_nonplaying_base(blob: bytes, people: int, anchor, names) -> int:
+    """Where the non-playing array starts, solved exactly from one known person.
+
+    It is not reliably derivable. The array is NOT always flush against the end
+    of the person array -- 99-00 has them adjacent, 98-99 leaves a 120-byte gap
+    -- and it does not always run to the end of the file either, so neither
+    adjacency nor EOF gives it. Scoring candidate bases on how many referenced
+    indices "look like" records does not discriminate: for 98-99 the true base
+    came 51st, because a file full of 0xff and small integers produces
+    plausible-looking records almost anywhere.
+
+    So one anchor per database is taken as input -- a named person plus the five
+    abilities the in-game editor shows for them. Those five as consecutive
+    little-endian uint16 have been a UNIQUE hit in every file tried, which fixes
+    the record's offset; the person's own record gives the index; and the base
+    is then simple arithmetic with no search and no ambiguity.
+    """
+    first_name, second_name, abilities = anchor
+    first_names, second_names, _ = names
+    pattern = struct.pack("<5H", *abilities)
+    hits = []
+    cursor = blob.find(pattern)
+    while cursor >= 0:
+        hits.append(cursor)
+        cursor = blob.find(pattern, cursor + 1)
+    if not hits:
+        raise SystemExit(f"Anchor abilities {abilities} appear nowhere in this staff.dat")
+
+    wanted = None
+    for person in range(people):
+        offset = PERSON_BASE + person * PERSON_STRIDE
+        if offset + PERSON_STRIDE > len(blob):
+            break
+        first = struct.unpack_from("<i", blob, offset + PERSON_FIRST_NAME)[0]
+        second = struct.unpack_from("<i", blob, offset + PERSON_SECOND_NAME)[0]
+        if (0 <= first < len(first_names) and 0 <= second < len(second_names)
+                and first_names[first] == first_name and second_names[second] == second_name):
+            index = struct.unpack_from("<i", blob, offset + PERSON_NONPLAYING)[0]
+            if index >= 0:
+                wanted = index
+                break
+    if wanted is None:
+        raise SystemExit(f"Anchor {first_name} {second_name} not found among {people:,} people")
+
+    for hit in hits:
+        base = hit - NONPLAYING_ABILITIES - wanted * NONPLAYING_STRIDE
+        if base > PERSON_BASE + people * PERSON_STRIDE - NONPLAYING_STRIDE:
+            return base
+    raise SystemExit("Anchor abilities found, but no hit yields a base past the person array")
+
+
+def extract(folder: Path, slug: str, people: int, anchor):
     blob = (folder / "staff.dat").read_bytes()
     first = load_names(folder / "first_names.dat")
     second = load_names(folder / "second_names.dat")
     common = load_names(folder / "common_names.dat")
-    people = people or solve_person_count(blob)
-    base = PERSON_BASE + people * PERSON_STRIDE
+    base = solve_nonplaying_base(blob, people, anchor, (first, second, common))
 
     def name_at(table, index):
         return table[index] if 0 <= index < len(table) else ""
@@ -202,6 +259,8 @@ def extract(folder: Path, slug: str, people: int | None = None):
             ),
             "nation_id": struct.unpack_from("<H", blob, offset + PERSON_NATION)[0],
             "club_id": struct.unpack_from("<i", blob, offset + PERSON_CLUB)[0],
+            "job_code": blob[offset + PERSON_JOB],
+            "job": JOB_LABELS.get(blob[offset + PERSON_JOB], ""),
         }
         row.update(zip(TRAITS, blob[offset + PERSON_TRAITS:offset + PERSON_TRAITS + len(TRAITS)]))
         row.update(zip(ABILITIES, values))
@@ -214,7 +273,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Extract CM coach/manager attributes")
     parser.add_argument("--dat", required=True, help="folder holding staff.dat and the name files")
     parser.add_argument("--slug", default="", help="database_slug to stamp on every row")
-    parser.add_argument("--people", type=int, help=(
+    parser.add_argument("--anchor", required=True, help=(
+        "one known person and their five editor abilities, as "
+        "\"First,Second,CA,PA,Home,Current,World\" -- e.g. "
+        "\"Alex,Ferguson,200,200,200,200,180\". This fixes the non-playing "
+        "array base exactly; see solve_nonplaying_base for why it cannot be "
+        "derived."))
+    parser.add_argument("--people", type=int, required=True, help=(
         "number of person records, which the editor shows in its status bar "
         "(\"1 of 54254 selected\"). Auto-detection is unreliable -- it is a "
         "search for an array boundary that several wrong answers also satisfy "
@@ -224,9 +289,13 @@ def main() -> None:
     args = parser.parse_args()
 
     folder = Path(args.dat)
-    people, rows = extract(folder, args.slug or folder.name, args.people)
+    parts = [piece.strip() for piece in args.anchor.split(",")]
+    if len(parts) != 7:
+        raise SystemExit('--anchor must be "First,Second,CA,PA,Home,Current,World"')
+    anchor = (parts[0], parts[1], tuple(int(value) for value in parts[2:]))
+    people, rows = extract(folder, args.slug or folder.name, args.people, anchor)
     print(f"{folder}")
-    print(f"  people: {people:,}   non-playing records decoded: {len(rows):,}")
+    print(f"  people: {people:,}   decoded: {len(rows):,}")
     if rows:
         best = sorted(rows, key=lambda row: -row["current_ability"])[:args.top]
         print(f"  highest-rated:")

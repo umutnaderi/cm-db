@@ -69,14 +69,22 @@ ABILITIES = [
     "current_ability", "potential_ability",
     "home_reputation", "current_reputation", "world_reputation",
 ]
+# The editor's Traits tab, alphabetical like everything else in this format.
+TRAITS = [
+    "adaptability", "ambition", "determination", "loyalty",
+    "pressure", "professionalism", "sportsmanship", "temperament",
+]
 
 PERSON_BASE = 1
 PERSON_STRIDE = 157
 PERSON_FIRST_NAME = 3
 PERSON_SECOND_NAME = 7
 PERSON_COMMON_NAME = 11
-PERSON_BIRTH_YEAR = 23
+PERSON_DOB_YEAR = 17      # year inside a full date of birth (1900 when unset)
+PERSON_BIRTH_YEAR = 23    # the separate "year of birth" field (0 when a DOB is set)
 PERSON_NATION = 25
+PERSON_CLUB = 56          # int32; -1 when the person holds no club contract
+PERSON_TRAITS = 85        # uint8 x8, alphabetical
 PERSON_NONPLAYING = 152
 
 NONPLAYING_STRIDE = 68
@@ -184,9 +192,18 @@ def extract(folder: Path, slug: str, people: int | None = None):
             "first_name": name_at(first, struct.unpack_from("<i", blob, offset + PERSON_FIRST_NAME)[0]),
             "second_name": name_at(second, struct.unpack_from("<i", blob, offset + PERSON_SECOND_NAME)[0]),
             "common_name": name_at(common, struct.unpack_from("<i", blob, offset + PERSON_COMMON_NAME)[0]),
-            "year_of_birth": struct.unpack_from("<H", blob, offset + PERSON_BIRTH_YEAR)[0],
+            # Two different fields, and which one carries the truth depends on
+            # whether the person has a full date of birth. Ferguson has a blank
+            # DOB and 1947 in the year field; Hiddink has a 1946 DOB and 0 in
+            # the year field. Prefer whichever is actually populated.
+            "year_of_birth": (
+                struct.unpack_from("<H", blob, offset + PERSON_BIRTH_YEAR)[0]
+                or struct.unpack_from("<H", blob, offset + PERSON_DOB_YEAR)[0]
+            ),
             "nation_id": struct.unpack_from("<H", blob, offset + PERSON_NATION)[0],
+            "club_id": struct.unpack_from("<i", blob, offset + PERSON_CLUB)[0],
         }
+        row.update(zip(TRAITS, blob[offset + PERSON_TRAITS:offset + PERSON_TRAITS + len(TRAITS)]))
         row.update(zip(ABILITIES, values))
         row.update(zip(ATTRIBUTES, attrs))
         rows.append(row)

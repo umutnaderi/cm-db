@@ -31,18 +31,30 @@ staff.dat for his five abilities as consecutive little-endian uint16
 following it matched every attribute in the editor, in order, with no
 adjustment.
 
-WHAT IS NOT SOLVED: how `non_player_id` from the exported staff.csv locates a
-record. Records do sit at a 68-byte stride inside the non-playing region
-(observed spacings are all multiples of 68), but the id is NOT a linear index
-into it -- every plausible stride from 68 to 157, against every base anchored
-on the confirmed Capello record, was swept and none placed more than 20% of
-the 14,756 ids on a valid record.
+FILE LAYOUT, also recovered (CM 00/01, staff.dat, 19,498,141 bytes):
 
-So this tool SCANS. It recovers every non-playing record in the file, which is
-correct and complete, but it cannot yet say whose each one is. Joining names
-needs the id mapping, and the cheapest way to solve that is two or three more
-known records: with several (person, offset) anchors whose non_player_id the
-CSV already gives, the mapping falls out. Until then `--identity` refuses
+    +1                      person array begins (1-byte header)
+    person record           157 bytes; non_player_id is an int32 at +152,
+                            confirmed 307/307 consistent across sampled staff
+    +1 + 85859*157          = 13,479,864, where the person array ends and the
+                            non-playing block begins
+    non-playing record      68-byte stride, abilities start at +3
+
+Capello lands exactly on index 8352 of that block, which is what ties the two
+halves together.
+
+WHAT IS NOT SOLVED: reading a named person's attributes. Applying
+`non_player_id` as a dense index into the block validates only 41% of Managers
+(19% of Chairmen, 21% of Physios), and spot-checking the ones that do validate
+shows names paired with attributes that do not belong to them -- Angolan
+forwards managing Norwegian clubs. So either the block is not a dense array of
+non_player_id, or the id recovered by the original export is itself unreliable.
+
+Settling it needs ONE more confirmed pair: a named manager with their coach-tab
+values, from which the true index follows immediately.
+
+So this tool SCANS. It recovers non-playing records and decodes them
+correctly, but it cannot yet say whose each one is, and `--identity` refuses
 rather than emitting a confident-looking but misaligned join.
 """
 

@@ -1,74 +1,64 @@
-"""Extract non-playing (coach/manager) attributes from a CM staff.dat.
+"""Extract non-playing (coach/manager) attributes straight from a CM staff.dat.
 
-    python tools/extract_cm_staff_attributes.py \
-        --dat "C:/Program Files (x86)/Championship Manager 00-01/Data/staff.dat" \
-        --identity data/converted/cm0001_vanilla_app_core.zip \
-        --member cm0001_export/staff.csv \
-        --slug cm0001_vanilla_original \
-        --out data/staff/cm0001_staff_attributes.csv
+    python tools/extract_cm_staff_attributes.py --dat "99-00 dat - vanilla"
+    python tools/extract_cm_staff_attributes.py --dat "01-02 dat - vanilla" \
+        --slug cm0102_vanilla_original --out data/staff/cm0102_staff.csv
 
-These are the attributes an opponent AI manager needs, and most of them map
-straight onto team instructions the match engine already has: Directness,
-Pressing, Marking, Offside, Free roles, Discipline, Patience, Tactics.
+These are the attributes an opponent AI manager needs, and most map straight
+onto team instructions the match engine already has: Directness, Pressing,
+Marking, Offside, Free roles, Discipline, Patience, Tactics.
 
-RECORD LAYOUT, recovered by known-plaintext and verified exactly.
+This reads the game's own binaries. It deliberately does NOT use the existing
+staff.csv exports, which are wrong: for Alex Ferguson in 99-00 that export has
+`second_name_id` equal to his own person id (yielding "Alex Giaretta"), club
+"AC Horsens" instead of Man Utd, a 1900 date of birth, and a non_player_id of
+2654 where the binary says 2757 -- and 2757 is the one that lands on the coach
+record whose every value matches the in-game editor.
 
-The existing staff.csv export carries identity, personality and a
-`non_player_id`, but never followed that pointer -- the coach block was simply
-never read. It lives in staff.dat as a fixed 68-byte record:
+FILE LAYOUT -- recovered by known-plaintext and verified on three databases.
 
-    +0   uint16   current ability
-    +2   uint16   potential ability
-    +4   uint16   home reputation
-    +6   uint16   current reputation
-    +8   uint16   world reputation
-    +10  uint8[21] the attributes below, in ALPHABETICAL order by editor label
-    +31  ...      references and padding (0xff)
+  staff.dat
+    person array   base 1, stride 157
+      +3    int32   first_name_id    -> first_names.dat
+      +7    int32   second_name_id   -> second_names.dat
+      +11   int32   common_name_id   -> common_names.dat (0 when unused)
+      +23   uint16  year of birth
+      +25   uint16  nation id
+      +152  int32   non-playing index, or -1
 
-Confirmed against a CM 00/01 editor screenshot of Fabio Capello: searching
-staff.dat for his five abilities as consecutive little-endian uint16
-(190/200/194/192/193) produced exactly ONE hit in 19.5 MB, and the 21 bytes
-following it matched every attribute in the editor, in order, with no
-adjustment.
+    non-playing array   base 1 + people*157, stride 68
+      +3    uint16 x5   current ability, potential ability,
+                        home / current / world reputation
+      +13   uint8 x21   the attributes below, in ALPHABETICAL order by the
+                        editor's own labels -- which is how the game stores them
 
-FILE LAYOUT, also recovered (CM 00/01, staff.dat, 19,498,141 bytes):
+  first_names.dat / second_names.dat / common_names.dat
+    stride 60; a 55-byte NUL-padded latin-1 string, then 5 bytes of housekeeping
 
-    +1                      person array begins (1-byte header)
-    person record           157 bytes; non_player_id is an int32 at +152,
-                            confirmed 307/307 consistent across sampled staff
-    +1 + 85859*157          = 13,479,864, where the person array ends and the
-                            non-playing block begins
-    non-playing record      68-byte stride, abilities start at +3
+VERIFICATION. Each anchor's five abilities were searched for as consecutive
+little-endian uint16 and produced exactly ONE hit in a multi-megabyte file,
+with all 21 following bytes matching the editor screenshot exactly:
 
-Capello lands exactly on index 8352 of that block, which is what ties the two
-halves together.
+  Fabio Capello   00-01   190/200/194/192/193   index  8352
+  Alex Ferguson   99-00   200/200/200/200/180   index  2757
+  Guus Hiddink    01-02   165/180/180/170/150   index 16430
 
-WHAT IS NOT SOLVED: reading a named person's attributes. Applying
-`non_player_id` as a dense index into the block validates only 41% of Managers
-(19% of Chairmen, 21% of Physios), and spot-checking the ones that do validate
-shows names paired with attributes that do not belong to them -- Angolan
-forwards managing Norwegian clubs. So either the block is not a dense array of
-non_player_id, or the id recovered by the original export is itself unreliable.
+Each index is an exact integer from (offset - 3 - base) / 68, which is what
+ties the person array and the non-playing array together.
 
-Settling it needs ONE more confirmed pair: a named manager with their coach-tab
-values, from which the true index follows immediately.
-
-So this tool SCANS. It recovers non-playing records and decodes them
-correctly, but it cannot yet say whose each one is, and `--identity` refuses
-rather than emitting a confident-looking but misaligned join.
+STILL TO DO: club and job. club.dat is not a fixed-stride array of the names
+it contains, so linking a manager to the club he manages is its own decode.
+Until then `non_playing_index >= 0` identifies non-playing staff, and current
+ability plus the attributes rank them.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import io
-import json
 import struct
-import zipfile
 from pathlib import Path
 
-# Alphabetical by the editor's own labels -- which is how the game stores them.
 ATTRIBUTES = [
     "attacking", "business", "coaching", "coaching_goalie", "coaching_technique",
     "directness", "discipline", "free_roles", "interference", "judging_ability",
@@ -76,134 +66,158 @@ ATTRIBUTES = [
     "patience", "physiotherapy", "pressing", "resources", "tactics", "youngsters",
 ]
 ABILITIES = [
-    "non_playing_current_ability", "non_playing_potential_ability",
-    "non_playing_home_reputation", "non_playing_current_reputation",
-    "non_playing_world_reputation",
+    "current_ability", "potential_ability",
+    "home_reputation", "current_reputation", "world_reputation",
 ]
-RECORD_STRIDE = 68
-HEADER_BYTES = 10
+
+PERSON_BASE = 1
+PERSON_STRIDE = 157
+PERSON_FIRST_NAME = 3
+PERSON_SECOND_NAME = 7
+PERSON_COMMON_NAME = 11
+PERSON_BIRTH_YEAR = 23
+PERSON_NATION = 25
+PERSON_NONPLAYING = 152
+
+NONPLAYING_STRIDE = 68
+NONPLAYING_ABILITIES = 3
+NONPLAYING_ATTRIBUTES = 13
+
+NAME_STRIDE = 60
+NAME_LENGTH = 55
 MAX_ATTRIBUTE = 20
 MAX_ABILITY = 200
 
 
-def looks_like_record(blob: bytes, offset: int) -> bool:
-    """A record is only plausible if every field is in its real range."""
-    if offset < 0 or offset + HEADER_BYTES + len(ATTRIBUTES) > len(blob):
-        return False
-    ca, pa, home, current, world = struct.unpack_from("<5H", blob, offset)
-    if not (1 <= ca <= MAX_ABILITY and ca <= pa <= MAX_ABILITY):
-        return False
-    if any(value > MAX_ABILITY for value in (home, current, world)):
-        return False
-    attrs = blob[offset + HEADER_BYTES:offset + HEADER_BYTES + len(ATTRIBUTES)]
-    return not any(value > MAX_ATTRIBUTE for value in attrs)
+def load_names(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    blob = path.read_bytes()
+    return [
+        blob[index:index + NAME_LENGTH].split(b"\x00")[0].decode("latin-1")
+        for index in range(0, len(blob) - NAME_LENGTH, NAME_STRIDE)
+    ]
 
 
-def find_base(blob: bytes) -> int:
-    """First plausible record, which is index 0 of the non-playing block.
+def plausible_nonplaying(blob: bytes, offset: int) -> bool:
+    if offset < 0 or offset + NONPLAYING_ATTRIBUTES + len(ATTRIBUTES) > len(blob):
+        return False
+    values = struct.unpack_from("<5H", blob, offset + NONPLAYING_ABILITIES)
+    current, potential = values[0], values[1]
+    if not (1 <= current <= MAX_ABILITY and current <= potential <= MAX_ABILITY):
+        return False
+    if any(value > MAX_ABILITY for value in values[2:]):
+        return False
+    start = offset + NONPLAYING_ATTRIBUTES
+    return not any(value > MAX_ATTRIBUTE for value in blob[start:start + len(ATTRIBUTES)])
 
-    Derived rather than hard-coded so the same tool can face a different build
-    of the same game without being re-tuned. Verified on CM 00/01: the base
-    found this way puts `non_player_id` 3 and 5 exactly on valid records.
+
+def solve_person_count(blob: bytes) -> int:
+    """How many people precede the non-playing array.
+
+    The two arrays are adjacent and neither length is stored anywhere this tool
+    reads, so the boundary is solved rather than assumed: the right count is the
+    one whose non-playing base makes the most referenced indices land on a
+    record that is actually shaped like one.
     """
-    for offset in range(len(blob) - RECORD_STRIDE):
-        if looks_like_record(blob, offset) and looks_like_record(blob, offset + RECORD_STRIDE):
-            return offset
-    raise SystemExit("No non-playing record block found in this file.")
+    best = (0, -1.0)
+    ceiling = (len(blob) - PERSON_BASE) // PERSON_STRIDE
+    for people in range(ceiling, max(0, ceiling - 120_000), -1):
+        base = PERSON_BASE + people * PERSON_STRIDE
+        if base + NONPLAYING_STRIDE > len(blob) or not plausible_nonplaying(blob, base):
+            continue
+        # Score on what the boundary is actually FOR: how often an index taken
+        # from a person record lands on a record shaped like one. Scoring the
+        # first N slots instead only asks whether the array starts here, which
+        # several wrong boundaries also satisfy -- it picked 56,702 for a file
+        # the editor says holds 54,254, and halved the yield.
+        referenced = decoded = 0
+        for person in range(0, people, max(1, people // 3000)):
+            offset = PERSON_BASE + person * PERSON_STRIDE
+            if offset + PERSON_STRIDE > len(blob):
+                break
+            index = struct.unpack_from("<i", blob, offset + PERSON_NONPLAYING)[0]
+            if index < 0:
+                continue
+            referenced += 1
+            if plausible_nonplaying(blob, base + index * NONPLAYING_STRIDE):
+                decoded += 1
+        if referenced < 20:
+            continue
+        score = decoded / referenced
+        if score > best[1]:
+            best = (people, score)
+    if not best[0]:
+        raise SystemExit("Could not locate the non-playing array in this staff.dat")
+    return best[0]
 
 
-def read_record(blob: bytes, base: int, non_player_id: int) -> dict | None:
-    offset = base + non_player_id * RECORD_STRIDE
-    if not looks_like_record(blob, offset):
-        return None
-    values = struct.unpack_from("<5H", blob, offset)
-    attrs = blob[offset + HEADER_BYTES:offset + HEADER_BYTES + len(ATTRIBUTES)]
-    record = dict(zip(ABILITIES, values))
-    record.update(zip(ATTRIBUTES, attrs))
-    record["record_offset"] = offset
-    return record
+def extract(folder: Path, slug: str, people: int | None = None):
+    blob = (folder / "staff.dat").read_bytes()
+    first = load_names(folder / "first_names.dat")
+    second = load_names(folder / "second_names.dat")
+    common = load_names(folder / "common_names.dat")
+    people = people or solve_person_count(blob)
+    base = PERSON_BASE + people * PERSON_STRIDE
 
+    def name_at(table, index):
+        return table[index] if 0 <= index < len(table) else ""
 
-def read_identity(archive: Path, member: str):
-    with zipfile.ZipFile(archive) as bundle:
-        with bundle.open(member) as handle:
-            text = io.TextIOWrapper(handle, encoding="utf-8-sig", errors="replace")
-            for row in csv.DictReader(text):
-                yield row
+    rows = []
+    for person in range(people):
+        offset = PERSON_BASE + person * PERSON_STRIDE
+        if offset + PERSON_STRIDE > len(blob):
+            break
+        index = struct.unpack_from("<i", blob, offset + PERSON_NONPLAYING)[0]
+        if index < 0:
+            continue
+        record = base + index * NONPLAYING_STRIDE
+        if not plausible_nonplaying(blob, record):
+            continue
+        values = struct.unpack_from("<5H", blob, record + NONPLAYING_ABILITIES)
+        start = record + NONPLAYING_ATTRIBUTES
+        attrs = blob[start:start + len(ATTRIBUTES)]
+        row = {
+            "database_slug": slug,
+            "source_person_id": person,
+            "non_playing_index": index,
+            "first_name": name_at(first, struct.unpack_from("<i", blob, offset + PERSON_FIRST_NAME)[0]),
+            "second_name": name_at(second, struct.unpack_from("<i", blob, offset + PERSON_SECOND_NAME)[0]),
+            "common_name": name_at(common, struct.unpack_from("<i", blob, offset + PERSON_COMMON_NAME)[0]),
+            "year_of_birth": struct.unpack_from("<H", blob, offset + PERSON_BIRTH_YEAR)[0],
+            "nation_id": struct.unpack_from("<H", blob, offset + PERSON_NATION)[0],
+        }
+        row.update(zip(ABILITIES, values))
+        row.update(zip(ATTRIBUTES, attrs))
+        rows.append(row)
+    return people, rows
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dat", required=True, help="staff.dat from the game's Data folder")
-    parser.add_argument("--identity", help="zip archive holding the exported staff.csv")
-    parser.add_argument("--member", default="staff.csv", help="path of staff.csv inside the archive")
+    parser = argparse.ArgumentParser(description="Extract CM coach/manager attributes")
+    parser.add_argument("--dat", required=True, help="folder holding staff.dat and the name files")
     parser.add_argument("--slug", default="", help="database_slug to stamp on every row")
-    parser.add_argument("--out", help="CSV to write; omit to only report")
-    parser.add_argument("--base", type=int, help="override the detected record base")
-    parser.add_argument("--allow-unverified-join", action="store_true",
-                        help="join identities anyway; only for a mapping you have confirmed yourself")
+    parser.add_argument("--people", type=int, help=(
+        "number of person records, which the editor shows in its status bar "
+        "(\"1 of 54254 selected\"). Auto-detection is unreliable -- it is a "
+        "search for an array boundary that several wrong answers also satisfy "
+        "-- so prefer passing the real figure."))
+    parser.add_argument("--out", help="CSV to write")
+    parser.add_argument("--top", type=int, default=8, help="how many top-rated staff to print")
     args = parser.parse_args()
 
-    blob = Path(args.dat).read_bytes()
-    base = args.base if args.base is not None else find_base(blob)
-    print(f"staff.dat: {len(blob):,} bytes")
-    print(f"record base: {base}  stride: {RECORD_STRIDE}")
-
-    rows = []
-    if args.identity and not args.allow_unverified_join:
-        raise SystemExit(
-            "Refusing to join identities: the non_player_id -> offset mapping is "
-            "not solved (see this file's header). A join would silently attach the "
-            "wrong attributes to the wrong person, which is worse than no data. "
-            "Run without --identity to scan, or pass --allow-unverified-join if "
-            "you have independently confirmed the mapping."
-        )
-    if args.identity:
-        seen = missing = 0
-        for person in read_identity(Path(args.identity), args.member):
-            raw = (person.get("non_player_id") or "").strip()
-            if raw in ("", "-1"):
-                continue
-            seen += 1
-            record = read_record(blob, base, int(raw))
-            if record is None:
-                missing += 1
-                continue
-            rows.append({
-                "database_slug": args.slug or person.get("database_slug", ""),
-                "source_person_id": person.get("id", ""),
-                "non_player_id": raw,
-                "display_name": person.get("display_name", ""),
-                "job_for_club_label": person.get("job_for_club_label", ""),
-                "club_name": person.get("club_name", ""),
-                "nation_name": person.get("nation_name", ""),
-                **record,
-            })
-        print(f"staff with a non_player_id: {seen:,}")
-        print(f"  decoded: {len(rows):,}   unreadable: {missing:,}")
-    else:
-        # Walk the whole region rather than stopping at the first gap: the
-        # non-playing block is sparse -- plenty of slots are unused or hold
-        # staff with no coaching data at all -- so an early break finds two
-        # records and declares victory.
-        index = 0
-        while base + index * RECORD_STRIDE + HEADER_BYTES + len(ATTRIBUTES) <= len(blob):
-            record = read_record(blob, base, index)
-            if record:
-                rows.append({"slot": index, **record})
-            index += 1
-        print(f"scanned {index:,} slots, decoded {len(rows):,} records")
-
-    managers = [r for r in rows if "manager" in str(r.get("job_for_club_label", "")).lower()]
-    if managers:
-        print(f"  of which managers: {len(managers):,}")
-        best = sorted(managers, key=lambda r: -r["non_playing_current_ability"])[:5]
-        print("\n  highest-rated managers found:")
+    folder = Path(args.dat)
+    people, rows = extract(folder, args.slug or folder.name, args.people)
+    print(f"{folder}")
+    print(f"  people: {people:,}   non-playing records decoded: {len(rows):,}")
+    if rows:
+        best = sorted(rows, key=lambda row: -row["current_ability"])[:args.top]
+        print(f"  highest-rated:")
         for row in best:
-            print(f"    {row['display_name'][:26]:28s} CA {row['non_playing_current_ability']:3d}"
-                  f"  tactics {row['tactics']:2d}  directness {row['directness']:2d}"
-                  f"  pressing {row['pressing']:2d}  motivating {row['motivating']:2d}")
-
+            label = (f"{row['first_name']} {row['second_name']}").strip() or row["common_name"]
+            print(f"    {label[:26]:28s} CA{row['current_ability']:4d}"
+                  f"  tac{row['tactics']:3d} dir{row['directness']:3d} prs{row['pressing']:3d}"
+                  f"  mot{row['motivating']:3d} jdg{row['judging_ability']:3d}")
     if args.out and rows:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -211,12 +225,7 @@ def main() -> None:
             writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
             writer.writeheader()
             writer.writerows(rows)
-        print(f"\nWrote {out} ({len(rows):,} rows)")
-        summary = out.with_suffix(".summary.json")
-        summary.write_text(json.dumps({
-            "rows": len(rows), "base": base, "stride": RECORD_STRIDE,
-            "attributes": ATTRIBUTES, "abilities": ABILITIES,
-        }, indent=2), encoding="utf-8")
+        print(f"  wrote {out} ({len(rows):,} rows)")
 
 
 if __name__ == "__main__":

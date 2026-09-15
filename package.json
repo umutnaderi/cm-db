@@ -36,7 +36,9 @@
     "test:pass-run-candidates": "node tools/test-pass-run-candidates.mjs",
     "test:match-setup": "node tools/test-match-setup.mjs",
     "test:product-match-contract": "node tools/test-product-match-contract.mjs",
-    "test:fm2005-traits": "python tools/test_fm2005_player_traits.py && node tools/test-fm2005-player-traits-api.mjs",
+    "test:fm2005-traits": "python tools/test_fm2005_player_traits.py && node tools/test-fm2005-player-traits-api.mjs && node tools/test-player-traits-choice.mjs && node tools/test-player-traits-movement.mjs",
+    "test:player-traits-choice": "node tools/test-player-traits-choice.mjs",
+    "test:player-traits-movement": "node tools/test-player-traits-movement.mjs",
     "fm2005:traits": "python tools/import_fm2005_player_traits.py",
     "test:match-highlights": "node tools/test-match-highlights.mjs",
     "test:match-telemetry": "node tools/test-match-telemetry.mjs",
@@ -84,6 +86,7 @@
     "audit:tactical-influence": "node tools/measure-tactical-influence.mjs",
     "test:coordination": "node tools/test-coordination-coordinator.mjs",
     "test:keeper-angle": "node tools/test-keeper-angle.mjs",
-    "test:restart-preparation": "node tools/test-restart-preparation.mjs"
+    "test:restart-preparation": "node tools/test-restart-preparation.mjs",
+    "test:page-imports": "node tools/test-page-module-imports.mjs"
   }
 }

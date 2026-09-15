@@ -16,11 +16,12 @@ import {
 } from "./src/lib/formationTemplates.js?v=20260904-01";
 // Position-fit scoring, shared with Match Lab's lineup assignment.
 import {
+  generatedSidePreference,
   isSupportedPitchFit,
   positionAbilityMultiplier,
   positionFit,
   squadLine,
-} from "./src/lib/positionFit.js?v=20260904-01";
+} from "./src/lib/positionFit.js?v=20260915-01";
 
 const FRIEND_SESSION_KEY = "retroball-friend-session-v1";
 

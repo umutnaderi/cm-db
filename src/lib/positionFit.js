@@ -126,7 +126,15 @@ const SIDE_PREFERENCES = [
   { letter: "R", labels: ["right side", "right sided"] },
 ];
 
-function generatedSidePreference(candidate, ratings = ratingMap(candidate)) {
+/**
+ * The side (L/R/C) implied by a generated candidate's own position ratings.
+ *
+ * Exported because draft-setup.js's own player summary needs it; it was called
+ * there while still module-private, which is a ReferenceError the moment the
+ * roll renders a candidate with a position_text -- "generatedSidePreference is
+ * not defined", and the whole roll fails.
+ */
+export function generatedSidePreference(candidate, ratings = ratingMap(candidate)) {
   const values = [...ratings.values()];
   if (!values.length || values.some((value) => value > 2)) return null;
   const hasPositionRating = [
